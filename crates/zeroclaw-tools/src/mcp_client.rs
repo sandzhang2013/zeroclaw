@@ -732,13 +732,16 @@ impl McpServer {
                 .min(MAX_TOOL_TIMEOUT_SECS)
         };
         let operation = format!("tool call `{tool_name}`");
+        let mut params = json!({ "name": tool_name, "arguments": arguments });
+        match zeroclaw_api::mcp_identity() {
+            Err(msg) => bail!("{msg}"),
+            Ok(None) => {}
+            Ok(Some(attrs)) => {
+                params["_zeroclaw_user"] = attrs.transport_json();
+            }
+        }
         let resp = self
-            .dispatch_rpc(
-                "tools/call",
-                json!({ "name": tool_name, "arguments": arguments }),
-                tool_timeout,
-                &operation,
-            )
+            .dispatch_rpc("tools/call", params, tool_timeout, &operation)
             .await?;
 
         if let Some(err) = resp.error {

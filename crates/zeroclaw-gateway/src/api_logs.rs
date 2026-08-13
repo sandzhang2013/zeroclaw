@@ -14,7 +14,7 @@ use zeroclaw_log::{
 };
 
 use super::AppState;
-use super::api::require_auth;
+use super::trusted_proxy::require_ops_auth as require_auth;
 
 const TOP_LEVEL_PARAMS: &[&str] = &[
     "since_ts",

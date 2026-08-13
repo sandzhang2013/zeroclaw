@@ -14,7 +14,7 @@ use zeroclaw_config::traits::MaskSecrets;
 
 use super::AppState;
 use super::ConfigWriteGuard;
-use super::api::require_auth;
+use super::trusted_proxy::require_ops_auth as require_auth;
 use std::sync::Arc;
 
 // ── Request / response shapes ───────────────────────────────────────
@@ -3908,7 +3908,7 @@ mod tests {
 
     #[test]
     fn every_gateway_secret_is_classified() {
-        const OPERATOR_EDITED_GATEWAY_SECRETS: &[&str] = &[];
+        const OPERATOR_EDITED_GATEWAY_SECRETS: &[&str] = &["gateway.trusted_proxy_secret"];
 
         let cfg = zeroclaw_config::schema::Config::default();
         let unclassified: Vec<String> = cfg

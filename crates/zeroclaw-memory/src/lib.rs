@@ -40,6 +40,7 @@ pub mod retrieval;
 pub mod scanned;
 pub mod snapshot;
 pub mod sqlite;
+pub mod tenant_scoped;
 pub mod threat;
 pub mod traits;
 pub mod vector;
@@ -69,6 +70,7 @@ pub use response_cache::ResponseCache;
 pub use retrieval::{RetrievalConfig, RetrievalPipeline};
 pub use scanned::ScannedMemory;
 pub use sqlite::SqliteMemory;
+pub use tenant_scoped::TenantScopedMemory;
 pub use traits::Memory;
 #[allow(unused_imports)]
 pub use traits::{
@@ -1051,7 +1053,11 @@ pub async fn create_memory_for_agent(
     }
 
     let scoped = AgentScopedMemory::new(inner_arc, bound_id, allowlist_ids);
-    Ok(wrap_in_retrieval_pipeline(Arc::new(scoped), &config.memory))
+    let tenanted = TenantScopedMemory::new(Arc::new(scoped));
+    Ok(wrap_in_retrieval_pipeline(
+        Arc::new(tenanted),
+        &config.memory,
+    ))
 }
 
 /// Factory: create an optional response cache from config.

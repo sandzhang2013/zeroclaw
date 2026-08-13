@@ -434,6 +434,7 @@ pub fn filter_by_allowed_tools(
 // Re-export from zeroclaw-types for backwards compatibility.
 pub use zeroclaw_api::TOOL_LOOP_SESSION_KEY;
 pub use zeroclaw_api::TOOL_LOOP_THREAD_ID;
+pub use zeroclaw_api::TOOL_LOOP_USER_ATTRS;
 
 // Re-export tool call parsing from the standalone parser crate.
 pub use zeroclaw_tool_call_parser::{
@@ -464,6 +465,16 @@ where
     F: std::future::Future,
 {
     TOOL_LOOP_SESSION_KEY.scope(session_key, future).await
+}
+
+/// Run a future with frozen BFF user attributes in task-local storage.
+/// Unscoped (`None`) keeps the legacy pairing path; MCP/memory treat that as
+/// pass-through. `Some(attrs)` stamps identity for the turn.
+pub async fn scope_user_attrs<F>(attrs: Option<zeroclaw_api::UserAttrs>, future: F) -> F::Output
+where
+    F: std::future::Future,
+{
+    TOOL_LOOP_USER_ATTRS.scope(attrs, future).await
 }
 
 pub(crate) fn compute_excluded_mcp_tools(

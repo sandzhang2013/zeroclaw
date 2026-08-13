@@ -17,6 +17,26 @@ use tokio_stream::StreamExt;
 use crate::mcp_protocol::{JsonRpcRequest, JsonRpcResponse};
 use zeroclaw_config::schema::{McpServerConfig, McpTransport};
 
+fn apply_frozen_user_headers(mut req: reqwest::RequestBuilder) -> Result<reqwest::RequestBuilder> {
+    match zeroclaw_api::mcp_identity() {
+        Err(msg) => bail!("{msg}"),
+        Ok(None) => Ok(req),
+        Ok(Some(attrs)) => {
+            req = req.header("X-User-Id", attrs.user_id.as_str());
+            if let Some(role) = attrs.role.as_deref() {
+                req = req.header("X-User-Role", role);
+            }
+            if let Some(region) = attrs.region.as_deref() {
+                req = req.header("X-User-Region", region);
+            }
+            if let Some(org) = attrs.organization.as_deref() {
+                req = req.header("X-User-Org", org);
+            }
+            Ok(req)
+        }
+    }
+}
+
 /// Maximum bytes for a single JSON-RPC response.
 const MAX_LINE_BYTES: usize = 4 * 1024 * 1024; // 4 MB
 
@@ -1009,6 +1029,7 @@ impl SharedMcpTransportConn for HttpTransport {
         if !has_content_type {
             req = req.header("Content-Type", MCP_JSON_CONTENT_TYPE);
         }
+        req = apply_frozen_user_headers(req)?;
         for (key, value) in &self.headers {
             req = req.header(key, value);
         }
@@ -1663,6 +1684,7 @@ impl SharedMcpTransportConn for SseTransport {
         if !has_content_type {
             req = req.header("Content-Type", MCP_JSON_CONTENT_TYPE);
         }
+        req = apply_frozen_user_headers(req)?;
         for (key, value) in &self.headers {
             req = req.header(key, value);
         }
@@ -2821,5 +2843,43 @@ mod tests {
         drop(shared);
         assert!(transport.pending.lock().is_empty());
         assert!(rx.await.is_err(), "pending receiver must be released");
+    }
+
+    #[tokio::test]
+    async fn frozen_user_headers_stamp_utf8_identity() {
+        zeroclaw_api::TOOL_LOOP_USER_ATTRS
+            .scope(
+                Some(
+                    zeroclaw_api::UserAttrs::new("alice")
+                        .with_role("普通用户")
+                        .with_region("武汉")
+                        .with_organization("疾控"),
+                ),
+                async {
+                    let req = reqwest::Client::new().get("http://example.invalid/mcp");
+                    let req = apply_frozen_user_headers(req).unwrap();
+                    let built = req.build().unwrap();
+                    let utf8 = |name: &str| {
+                        std::str::from_utf8(built.headers().get(name).unwrap().as_bytes())
+                            .unwrap()
+                            .to_string()
+                    };
+                    assert_eq!(utf8("X-User-Id"), "alice");
+                    assert_eq!(utf8("X-User-Role"), "普通用户");
+                    assert_eq!(utf8("X-User-Region"), "武汉");
+                    assert_eq!(utf8("X-User-Org"), "疾控");
+                },
+            )
+            .await;
+    }
+
+    #[tokio::test]
+    async fn frozen_user_headers_fail_closed_when_scoped_empty() {
+        zeroclaw_api::TOOL_LOOP_USER_ATTRS
+            .scope(None, async {
+                let req = reqwest::Client::new().get("http://example.invalid/mcp");
+                assert!(apply_frozen_user_headers(req).is_err());
+            })
+            .await;
     }
 }

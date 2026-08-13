@@ -4434,6 +4434,23 @@ impl Config {
         self.install_root_dir().join("shared")
     }
 
+    /// Per-user session cwd / file sandbox (not the shared agent workspace).
+    ///
+    /// `<install>/users/<user_id>/agents/<alias>/workspace/`
+    ///
+    /// `user_id` must already be normalized ([`zeroclaw_api::normalize_user_id`]).
+    /// SQLite memory and sessions stay in `data_dir` and isolate by row, not
+    /// by this directory.
+    #[must_use]
+    pub fn user_workspace_dir(&self, user_id: &str, agent_alias: &str) -> std::path::PathBuf {
+        self.install_root_dir()
+            .join("users")
+            .join(user_id)
+            .join("agents")
+            .join(agent_alias)
+            .join("workspace")
+    }
+
     /// Install root: `<install>/` derived from `config_path`'s parent. Used
     /// to compute `<install>/shared/`, `<install>/agents/`, and the
     /// skill-bundle directory defaults. Public so consumers (gateway, CLI,
@@ -6907,6 +6924,21 @@ pub struct GatewayConfig {
     #[credential_class = "public_value"]
     pub trust_forwarded_headers: bool,
 
+    /// Accept BFF-asserted identity (`X-User-Id` + `X-Auth-Secret`) on the
+    /// business chat / session APIs. Pairing remains for the ops dashboard.
+    /// When true, `trusted_proxy_secret` must be set or validation fails.
+    #[serde(default)]
+    #[credential_class = "public_value"]
+    pub trusted_proxy: bool,
+
+    /// Shared secret the platform BFF sends as `X-Auth-Secret`. Prefer
+    /// `ZEROCLAW_gateway__trusted_proxy_secret` over committing plaintext.
+    #[serde(default)]
+    #[secret]
+    #[credential_class = "encrypted_secret"]
+    #[cfg_attr(feature = "schema-export", schemars(extend("x-secret" = true)))]
+    pub trusted_proxy_secret: Option<String>,
+
     /// Optional URL path prefix for reverse-proxy deployments.
     /// When set, all gateway routes are served under this prefix.
     /// Must start with `/` and must not end with `/`.
@@ -7053,6 +7085,8 @@ impl Default for GatewayConfig {
             pair_rate_limit_per_minute: default_pair_rate_limit(),
             webhook_rate_limit_per_minute: default_webhook_rate_limit(),
             trust_forwarded_headers: false,
+            trusted_proxy: false,
+            trusted_proxy_secret: None,
             path_prefix: None,
             rate_limit_max_keys: default_gateway_rate_limit_max_keys(),
             idempotency_ttl_secs: default_idempotency_ttl_secs(),
@@ -19865,6 +19899,22 @@ impl Config {
             );
         }
 
+        if self.gateway.trusted_proxy {
+            let secret = self
+                .gateway
+                .trusted_proxy_secret
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or("");
+            if secret.is_empty() {
+                validation_bail!(
+                    RequiredFieldEmpty,
+                    "gateway.trusted_proxy_secret",
+                    "gateway.trusted_proxy = true requires gateway.trusted_proxy_secret (or ZEROCLAW_gateway__trusted_proxy_secret)"
+                );
+            }
+        }
+
         // Tunnel — OpenVPN
         if self.tunnel.tunnel_provider.trim() == "openvpn" {
             let openvpn = self.tunnel.openvpn.as_ref().ok_or_else(|| {
@@ -28426,6 +28476,8 @@ allowed_numbers = ["+1", "+2"]
             pair_rate_limit_per_minute: 12,
             webhook_rate_limit_per_minute: 80,
             trust_forwarded_headers: true,
+            trusted_proxy: false,
+            trusted_proxy_secret: None,
             path_prefix: Some("/zeroclaw".into()),
             rate_limit_max_keys: 2048,
             idempotency_ttl_secs: 600,
@@ -38828,5 +38880,29 @@ model_provider = \"ollama.default\"
             ..Default::default()
         };
         assert!(agent.is_dispatchable());
+    }
+
+    #[test]
+    async fn user_workspace_dir_is_under_install_users() {
+        let config = Config {
+            config_path: std::path::PathBuf::from("/opt/zeroclaw/config.toml"),
+            ..Config::default()
+        };
+        let alice = config.user_workspace_dir("alice", "default");
+        let bob = config.user_workspace_dir("bob", "default");
+        assert!(alice.ends_with("users/alice/agents/default/workspace"));
+        assert!(bob.ends_with("users/bob/agents/default/workspace"));
+        assert_ne!(alice, bob);
+    }
+
+    #[test]
+    async fn trusted_proxy_without_secret_fails_validation() {
+        let mut config = Config::default();
+        config.gateway.trusted_proxy = true;
+        config.gateway.trusted_proxy_secret = None;
+        let err = config
+            .validate()
+            .expect_err("empty secret must fail closed");
+        assert!(err.to_string().contains("trusted_proxy_secret"));
     }
 }

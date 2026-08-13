@@ -3,6 +3,9 @@ import { getToken } from './auth';
 import { apiOrigin, basePath } from './basePath';
 import { isTauri } from './tauri';
 import { generateUUID } from './uuid';
+import { SESSION_ID_KEY_PREFIX, getOrCreateSessionId } from './sessionId';
+
+export { getOrCreateSessionId };
 
 export type WsMessageHandler = (msg: WsMessage) => void;
 export type WsOpenHandler = () => void;
@@ -12,6 +15,8 @@ export type WsErrorHandler = (ev: Event) => void;
 export interface WebSocketClientOptions {
   /** Agent alias to bind this socket to (required by the gateway). */
   agentAlias: string;
+  /** Explicit session ID. When omitted the default per-agent session is used. */
+  sessionId?: string;
   /** Base URL override. Defaults to current host with ws(s) protocol. */
   baseUrl?: string;
   /** Delay in ms before attempting reconnect. Doubles on each failure up to maxReconnectDelay. */
@@ -25,19 +30,82 @@ export interface WebSocketClientOptions {
 const DEFAULT_RECONNECT_DELAY = 1000;
 const MAX_RECONNECT_DELAY = 30000;
 
-const SESSION_ID_KEY_PREFIX = 'zeroclaw_session_id';
+// ── Multi-task session management ──────────────────────────────────────
 
-/** Return a stable session ID for the given agent alias, persisted in
- * localStorage. Each agent gets its own session so parallel conversations
- * don't collide. */
-export function getOrCreateSessionId(agentAlias: string): string {
-  const key = `${SESSION_ID_KEY_PREFIX}.${agentAlias}`;
-  let id = localStorage.getItem(key);
-  if (!id) {
-    id = generateUUID();
-    localStorage.setItem(key, id);
+const TASK_SESSION_PREFIX = `${SESSION_ID_KEY_PREFIX}.task`;
+const TASK_INDEX_PREFIX = `${SESSION_ID_KEY_PREFIX}.tasks`;
+
+interface TaskSessionEntry {
+  taskId: string;
+  sessionId: string;
+  agentAlias: string;
+  createdAt: string;
+}
+
+/** Create a new independent task session for the given agent. Returns the
+ * short taskId (first 8 chars of a UUID) usable as a UI label. The
+ * underlying session_id is a full UUID stored in localStorage. */
+export function createTaskSessionId(agentAlias: string): string {
+  const taskId = generateUUID().slice(0, 8);
+  const sessionId = generateUUID();
+  const key = `${TASK_SESSION_PREFIX}.${agentAlias}.${taskId}`;
+  localStorage.setItem(key, sessionId);
+
+  // Register in the per-agent task index.
+  const index = listTaskSessions(agentAlias);
+  const entry: TaskSessionEntry = {
+    taskId,
+    sessionId,
+    agentAlias,
+    createdAt: new Date().toISOString(),
+  };
+  index.push(entry);
+  localStorage.setItem(`${TASK_INDEX_PREFIX}.${agentAlias}`, JSON.stringify(index));
+
+  return taskId;
+}
+
+/** Resolve the session_id for a given task, or null if the task doesn't
+ * exist. */
+export function resolveTaskSessionId(agentAlias: string, taskId: string): string | null {
+  const key = `${TASK_SESSION_PREFIX}.${agentAlias}.${taskId}`;
+  return localStorage.getItem(key);
+}
+
+/** List all task sessions for an agent. Returns entries sorted oldest-first. */
+export function listTaskSessions(agentAlias: string): TaskSessionEntry[] {
+  const raw = localStorage.getItem(`${TASK_INDEX_PREFIX}.${agentAlias}`);
+  if (!raw) return [];
+  try {
+    const entries = JSON.parse(raw) as TaskSessionEntry[];
+    // Filter out entries whose session key no longer exists (cleaned up).
+    return entries.filter((e) => {
+      const key = `${TASK_SESSION_PREFIX}.${agentAlias}.${e.taskId}`;
+      return localStorage.getItem(key) !== null;
+    });
+  } catch {
+    return [];
   }
-  return id;
+}
+
+/** Remove a task session and its associated chat history from localStorage. */
+export function removeTaskSession(agentAlias: string, taskId: string): void {
+  const sessionKey = `${TASK_SESSION_PREFIX}.${agentAlias}.${taskId}`;
+  const sessionId = localStorage.getItem(sessionKey);
+  localStorage.removeItem(sessionKey);
+
+  // Clean up chat history for this session.
+  if (sessionId) {
+    localStorage.removeItem(`zeroclaw_chat_history_v1:${sessionId}`);
+  }
+
+  // Remove from the index.
+  const index = listTaskSessions(agentAlias).filter((e) => e.taskId !== taskId);
+  if (index.length > 0) {
+    localStorage.setItem(`${TASK_INDEX_PREFIX}.${agentAlias}`, JSON.stringify(index));
+  } else {
+    localStorage.removeItem(`${TASK_INDEX_PREFIX}.${agentAlias}`);
+  }
 }
 
 export class WebSocketClient {
@@ -52,6 +120,7 @@ export class WebSocketClient {
   public onError: WsErrorHandler | null = null;
 
   private readonly agentAlias: string;
+  private readonly sessionId: string;
   private readonly baseUrl: string;
   private readonly reconnectDelay: number;
   private readonly maxReconnectDelay: number;
@@ -59,6 +128,7 @@ export class WebSocketClient {
 
   constructor(options: WebSocketClientOptions) {
     this.agentAlias = options.agentAlias;
+    this.sessionId = options.sessionId ?? getOrCreateSessionId(this.agentAlias);
     let defaultBase: string;
     if (isTauri() && apiOrigin) {
       // In Tauri, derive ws URL from the gateway origin.
@@ -80,10 +150,9 @@ export class WebSocketClient {
     this.clearReconnectTimer();
 
     const token = getToken();
-    const sessionId = getOrCreateSessionId(this.agentAlias);
     const params = new URLSearchParams();
     if (token) params.set('token', token);
-    params.set('session_id', sessionId);
+    params.set('session_id', this.sessionId);
     params.set('agent', this.agentAlias);
     const url = `${this.baseUrl}${basePath}/ws/chat?${params.toString()}`;
 

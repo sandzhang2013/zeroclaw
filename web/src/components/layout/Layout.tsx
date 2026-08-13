@@ -74,7 +74,7 @@ export default function Layout() {
             changes within a page (e.g. /config/providers → /config/browser).
             Keying on the full pathname remounted the entire route tree
             on every section click and reset scroll/state. */}
-        <main className="flex-1 overflow-y-auto min-h-0">
+        <main className={`flex-1 min-h-0 flex flex-col ${/^\/agent\/[^/]+$/.test(pathname) ? 'overflow-hidden' : 'overflow-y-auto'}`}>
           <ErrorBoundary key={pathname.split('/')[1] ?? ''}>
             <Outlet />
           </ErrorBoundary>

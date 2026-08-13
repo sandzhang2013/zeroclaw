@@ -37,6 +37,17 @@ impl SessionStore {
             .join(format!("{}.jsonl", sanitize_session_key(session_key)))
     }
 
+    fn user_id_path(&self, session_key: &str) -> PathBuf {
+        self.sessions_dir
+            .join(format!("{}.user_id", sanitize_session_key(session_key)))
+    }
+
+    fn read_session_user_id(&self, session_key: &str) -> Option<String> {
+        let raw = std::fs::read_to_string(self.user_id_path(session_key)).ok()?;
+        let trimmed = raw.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    }
+
     /// Load all messages for a session from its JSONL file.
     /// Returns an empty vec if the file does not exist or is unreadable.
     pub fn load(&self, session_key: &str) -> Vec<ChatMessage> {
@@ -176,6 +187,7 @@ impl SessionStore {
             return Ok(false);
         }
         std::fs::remove_file(&path)?;
+        let _ = std::fs::remove_file(self.user_id_path(session_key));
         Ok(true)
     }
 
@@ -253,6 +265,7 @@ impl SessionBackend for SessionStore {
                     created_at: last_activity,
                     last_activity,
                     message_count: 0,
+                    user_id: self.read_session_user_id(&key),
                     key,
                     agent_alias: None,
                     channel_id: None,
@@ -273,6 +286,12 @@ impl SessionBackend for SessionStore {
 
     fn delete_session(&self, session_key: &str) -> std::io::Result<bool> {
         self.delete_session(session_key)
+    }
+
+    fn set_session_user_id(&self, session_key: &str, user_id: &str) -> std::io::Result<()> {
+        let _guard = self.mutation_lock.lock();
+        std::fs::write(self.user_id_path(session_key), user_id.trim())?;
+        Ok(())
     }
 
     /// Quick existence probe mirroring how `delete_session` decides whether

@@ -20,7 +20,13 @@ pub mod runtime_traits;
 pub mod schema;
 pub mod session_keys;
 pub mod tool;
+pub mod user_attrs;
 pub mod vad;
+
+pub use user_attrs::{
+    ROLE_ADVANCED, ROLE_NORMAL, ROLE_OPS, UserAttrs, UserIdError, current_user_attrs, mcp_identity,
+    normalize_user_id,
+};
 
 tokio::task_local! {
     /// Current thread/sender ID for per-sender rate limiting.
@@ -34,6 +40,10 @@ tokio::task_local! {
     /// Session key for the currently active session.
     /// Scoped by gateway and channel turns, read by SessionsCurrentTool.
     pub static TOOL_LOOP_SESSION_KEY: Option<String>;
+
+    /// Frozen BFF user attributes for the current turn. Scoped by the gateway
+    /// from the connection Principal; read by MCP, memory, and skills.
+    pub static TOOL_LOOP_USER_ATTRS: Option<crate::user_attrs::UserAttrs>;
 
     /// Native extended thinking parameters, set by the outer orchestration
     /// functions and read by `run_tool_call_loop` when building `ChatRequest`.

@@ -142,6 +142,20 @@ const translations: Record<Locale, Record<string, string>> = {
     'agent.cmd_help_escape': '提示：如需发送以 / 开头的消息，请改用 //（例如 //foo 将发送 /foo）。',
     'agent.cmd_hint_title': '命令',
 
+    // Workbench
+    'workbench.sidebar_label': '会话',
+    'workbench.new_session': '新建会话',
+    'workbench.folders': '工作区',
+    'workbench.new_folder': '新建工作区',
+    'workbench.folder_default': '默认',
+    'workbench.folder_name_placeholder': '工作区名称',
+    'workbench.session_list': '会话列表',
+    'workbench.close_session': '关闭会话',
+    'workbench.default_session': '新会话',
+    'workbench.results': '结果',
+    'workbench.results_empty': '本会话还没有工具或脚本产出。',
+    'workbench.results_running': '执行中…',
+
     // Tools
     'tools.title': '可用工具',
     'tools.name': '名称',
@@ -1366,14 +1380,19 @@ const translations: Record<Locale, Record<string, string>> = {
     'cfg.field.validation.mustBeWholeNumber': 'Must be a whole number.',
     'cfg.field.validation.noDecimals': 'Must be a whole number (no decimals).',
 
-    // Chat workspace (multi-agent tabs / split)
-    'workspace.tablist_label': 'Open chats',
-    'workspace.close_chat': 'Close chat',
-    'workspace.open_chat': 'Open chat',
-    'workspace.layout_split': 'Split view',
-    'workspace.layout_tabs': 'Tabs view',
-    'workspace.picker_error': "Couldn't load agents",
-    'workspace.no_more_agents': 'All agents are open',
+    // Workbench (left sidebar + conversation + results)
+    'workbench.sidebar_label': 'Sessions',
+    'workbench.new_session': 'New session',
+    'workbench.folders': 'Workspaces',
+    'workbench.new_folder': 'New workspace',
+    'workbench.folder_default': 'Default',
+    'workbench.folder_name_placeholder': 'Workspace name',
+    'workbench.session_list': 'Sessions',
+    'workbench.close_session': 'Close session',
+    'workbench.default_session': 'New session',
+    'workbench.results': 'Results',
+    'workbench.results_empty': 'No tool or script output in this session yet.',
+    'workbench.results_running': 'Running…',
 
     // ACP Console
     'acp.title': 'ACP Console',

@@ -31,6 +31,9 @@ pub struct SessionMetadata {
     /// Inbound sender id verbatim (Discord username, phone number, ...).
     /// Not an FK — sessions can survive deletion of the upstream user.
     pub sender_id: Option<String>,
+    /// BFF-frozen `user_id` for gateway chat sessions. `None` for channel
+    /// sessions or rows persisted before trusted-proxy isolation.
+    pub user_id: Option<String>,
 }
 
 /// Structured routing context recorded alongside a session. Mirrors the
@@ -119,6 +122,7 @@ pub trait SessionBackend: Send + Sync {
                     channel_id: None,
                     room_id: None,
                     sender_id: None,
+                    user_id: None,
                 }
             })
             .collect()
@@ -194,6 +198,19 @@ pub trait SessionBackend: Send + Sync {
         Ok(None)
     }
 
+    /// Stamp the BFF-frozen user id on a session. Default is a no-op.
+    fn set_session_user_id(&self, _session_key: &str, _user_id: &str) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    /// List sessions belonging to `user_id`. Default filters `list_sessions_with_metadata`.
+    fn list_sessions_for_user(&self, user_id: &str) -> Vec<SessionMetadata> {
+        self.list_sessions_with_metadata()
+            .into_iter()
+            .filter(|m| m.user_id.as_deref() == Some(user_id))
+            .collect()
+    }
+
     fn set_session_context(
         &self,
         _session_key: &str,
@@ -217,6 +234,7 @@ pub trait SessionBackend: Send + Sync {
             channel_id: None,
             room_id: None,
             sender_id: None,
+            user_id: None,
         })
     }
 
@@ -274,6 +292,7 @@ mod tests {
             channel_id: None,
             room_id: None,
             sender_id: None,
+            user_id: None,
         };
         assert_eq!(meta.key, "test");
         assert_eq!(meta.message_count, 5);

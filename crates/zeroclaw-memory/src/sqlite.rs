@@ -337,6 +337,11 @@ impl SqliteMemory {
         )?;
         execute_batch_retry(
             conn,
+            "CREATE INDEX IF NOT EXISTS idx_memories_tenant ON memories(tenant_id);",
+        )
+        .with_context(|| "SQLite init_schema failed: CREATE INDEX idx_memories_tenant")?;
+        execute_batch_retry(
+            conn,
             "CREATE INDEX IF NOT EXISTS idx_memories_namespace_category ON memories(namespace, category);",
         )
         .with_context(|| "SQLite init_schema failed: CREATE INDEX idx_memories_namespace_category")?;

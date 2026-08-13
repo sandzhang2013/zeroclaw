@@ -40,6 +40,7 @@ pub mod session_queue;
 pub mod sse;
 pub mod static_files;
 pub mod tls;
+pub mod trusted_proxy;
 pub mod version;
 #[cfg(feature = "gateway-voice-duplex")]
 pub mod voice_duplex;
@@ -1807,6 +1808,7 @@ pub async fn run_gateway(
                 .put(api_skills::handle_write_skill)
                 .delete(api_skills::handle_delete_skill),
         )
+        .route("/api/user/skills", post(api_skills::handle_save_personal_skill))
         .route("/api/config/init", post(api_config::handle_init))
         .route("/api/config/migrate", post(api_config::handle_migrate))
         .route("/api/openapi.json", get(openapi::handle_openapi_json))

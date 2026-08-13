@@ -1,265 +1,310 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AgentProvider } from '@/contexts/AgentContext';
 import { AgentChatInner, type AgentChatStatus } from '@/pages/AgentChat';
-import { ChatTabBar, type TabIndicator, type WorkspaceLayout } from '@/components/ChatTabBar';
+import { WorkbenchSidebar, type SessionIndicator } from '@/components/WorkbenchSidebar';
+import { ResultsPanel } from '@/components/ResultsPanel';
+import {
+  createTaskSessionId,
+  removeTaskSession,
+} from '@/lib/ws';
+import { generateUUID } from '@/lib/uuid';
 import { basePath } from '@/lib/basePath';
 
-const STORAGE_KEY = 'zeroclaw-chat-workspace';
+const STORAGE_KEY = 'zeroclaw-chat-workspace-v3';
+export const DEFAULT_FOLDER_ID = 'default';
 
-interface PersistedState {
-  openChats: string[];
-  activeAlias: string;
-  layout: WorkspaceLayout;
-  splitAliases: [string, string | null];
+export interface WorkbenchFolder {
+  id: string;
+  name: string;
+}
+
+/** One conversation = one agent + one independent session, filed under a folder. */
+export interface WorkbenchSession {
+  id: string;
+  agentAlias: string;
+  taskId: string;
+  folderId: string;
+  title?: string;
+}
+
+interface PersistedStateV1 {
+  openChats?: string[];
+  activeAlias?: string;
+}
+
+interface PersistedStateV2 {
+  tasks: Array<{ id: string; agentAlias: string; taskId: string }>;
+  activeTabId: string;
+}
+
+interface PersistedStateV3 {
+  folders: WorkbenchFolder[];
+  sessions: WorkbenchSession[];
+  activeSessionId: string;
 }
 
 interface PaneStatus {
-  /** Last message count the workspace has "seen" while this alias was visible. */
   lastSeenCount: number;
-  /** Most recent message count the pane reported (visible or not). */
   liveCount: number;
-  /** Agent is currently mid-turn. */
   streaming: boolean;
-  /** New messages arrived while this alias was hidden. */
   unread: boolean;
 }
 
-function loadPersisted(): Partial<PersistedState> {
+function makeSessionId(agentAlias: string, taskId: string): string {
+  return `${agentAlias}::${taskId}`;
+}
+
+function makeDefaultSession(agentAlias: string, folderId = DEFAULT_FOLDER_ID): WorkbenchSession {
+  const taskId = '__default__';
+  return { id: makeSessionId(agentAlias, taskId), agentAlias, taskId, folderId };
+}
+
+function defaultFolders(): WorkbenchFolder[] {
+  return [{ id: DEFAULT_FOLDER_ID, name: '' }];
+}
+
+function dedupeSessions(sessions: WorkbenchSession[]): WorkbenchSession[] {
+  const seen = new Set<string>();
+  return sessions.filter((s) => {
+    if (seen.has(s.id)) return false;
+    seen.add(s.id);
+    return true;
+  });
+}
+
+function findSessionByAgent(sessions: WorkbenchSession[], agentAlias: string): WorkbenchSession | undefined {
+  const def = sessions.find((s) => s.agentAlias === agentAlias && s.taskId === '__default__');
+  if (def) return def;
+  return sessions.find((s) => s.agentAlias === agentAlias);
+}
+
+function loadPersisted(): Partial<PersistedStateV3> {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(STORAGE_KEY) ?? localStorage.getItem('zeroclaw-chat-workspace-v2');
     if (!raw) return {};
-    const parsed = JSON.parse(raw) as Partial<PersistedState>;
-    return parsed && typeof parsed === 'object' ? parsed : {};
+    const parsed = JSON.parse(raw);
+
+    if (Array.isArray(parsed.openChats) && !Array.isArray(parsed.tasks) && !Array.isArray(parsed.sessions)) {
+      const v1 = parsed as PersistedStateV1;
+      const aliases = (v1.openChats ?? []).filter(Boolean);
+      const sessions = Array.from(new Set(aliases)).map((a) => makeDefaultSession(a));
+      const activeAlias = v1.activeAlias ?? aliases[0];
+      const activeSessionId = activeAlias ? makeSessionId(activeAlias, '__default__') : sessions[0]?.id ?? '';
+      return { folders: defaultFolders(), sessions, activeSessionId };
+    }
+
+    if (Array.isArray(parsed.tasks) && !Array.isArray(parsed.sessions)) {
+      const v2 = parsed as PersistedStateV2;
+      const sessions = v2.tasks.map((t) => ({
+        id: t.id,
+        agentAlias: t.agentAlias,
+        taskId: t.taskId,
+        folderId: DEFAULT_FOLDER_ID,
+      }));
+      return { folders: defaultFolders(), sessions, activeSessionId: v2.activeTabId };
+    }
+
+    return parsed as Partial<PersistedStateV3>;
   } catch {
     return {};
   }
 }
 
-function dedupe(aliases: string[]): string[] {
-  return Array.from(new Set(aliases.filter(Boolean)));
-}
-
 export interface ChatWorkspaceProps {
-  /** Alias from the `/agent/:alias` route — opened + activated on mount and
-   * whenever it changes (deep links / "Open chat"), without remounting the
-   * workspace. */
   initialAlias: string;
 }
 
 /**
- * Multi-agent chat workspace.
- *
- * Renders several agent chats as tabs. EVERY open chat is mounted at all times
- * inside its own `<AgentProvider>` (one provider = one live WebSocket). Tab and
- * layout switches change only CSS visibility (`hidden`), never the mounted set,
- * so background chats stay connected and keep streaming. A pane only unmounts —
- * and its socket only closes — when its tab is explicitly closed.
+ * Workbench: left session sidebar, middle transcript, right results.
+ * Each open session stays mounted (CSS hidden) so background turns keep streaming.
  */
 export default function ChatWorkspace({ initialAlias }: ChatWorkspaceProps) {
-  const persisted = useRef<Partial<PersistedState>>(loadPersisted());
+  const persisted = useRef<Partial<PersistedStateV3>>(loadPersisted());
 
-  const [openChats, setOpenChats] = useState<string[]>(() => {
-    const fromStorage = persisted.current.openChats ?? [];
-    return dedupe([...fromStorage, initialAlias]);
+  const [folders, setFolders] = useState<WorkbenchFolder[]>(() => {
+    const stored = persisted.current.folders;
+    return stored && stored.length > 0 ? stored : defaultFolders();
   });
-  const [activeAlias, setActiveAlias] = useState<string>(initialAlias);
-  const [layout, setLayout] = useState<WorkspaceLayout>(persisted.current.layout ?? 'tabs');
-  const [splitAliases, setSplitAliases] = useState<[string, string | null]>(
-    persisted.current.splitAliases ?? [initialAlias, null],
+  const [sessions, setSessions] = useState<WorkbenchSession[]>(() => {
+    const stored = persisted.current.sessions ?? [];
+    const existing = findSessionByAgent(stored, initialAlias);
+    const seed: WorkbenchSession[] = existing ? stored : [...stored, makeDefaultSession(initialAlias)];
+    return dedupeSessions(seed);
+  });
+  const [activeSessionId, setActiveSessionId] = useState<string>(() => {
+    const stored = persisted.current.activeSessionId;
+    if (stored) return stored;
+    return findSessionByAgent(sessions, initialAlias)?.id ?? makeSessionId(initialAlias, '__default__');
+  });
+  const [activeFolderId, setActiveFolderId] = useState<string>(DEFAULT_FOLDER_ID);
+
+  const activeSession = useMemo(
+    () => sessions.find((s) => s.id === activeSessionId),
+    [sessions, activeSessionId],
   );
+  const activeAlias = activeSession?.agentAlias ?? initialAlias;
 
-  // Per-alias streaming / unread bookkeeping. Kept in a ref (source of truth,
-  // mutated synchronously from onStatus) plus mirrored to state for rendering.
   const statusRef = useRef<Record<string, PaneStatus>>({});
-  const [indicators, setIndicators] = useState<Record<string, TabIndicator>>({});
+  const [indicators, setIndicators] = useState<Record<string, SessionIndicator>>({});
 
-  // Effective layout. Split works on mobile too — the panes stack vertically
-  // there (top/bottom) instead of side-by-side; see the split container below.
-  const effectiveLayout: WorkspaceLayout = layout;
+  const visibleSessionIds = useMemo(() => new Set([activeSessionId]), [activeSessionId]);
 
-  // The two aliases shown in split. Default the second to the next open chat
-  // after the active one (or the active itself if it's the only chat).
-  const resolvedSplit = useMemo<[string, string | null]>(() => {
-    const left = openChats.includes(splitAliases[0]) ? splitAliases[0] : activeAlias;
-    let right = splitAliases[1];
-    if (!right || !openChats.includes(right) || right === left) {
-      right = openChats.find((a) => a !== left) ?? null;
-    }
-    return [left, right];
-  }, [splitAliases, openChats, activeAlias]);
-
-  // Set of aliases currently visible (so background panes can be `hidden`).
-  const visibleAliases = useMemo<Set<string>>(() => {
-    if (effectiveLayout === 'split') {
-      return new Set([resolvedSplit[0], resolvedSplit[1]].filter(Boolean) as string[]);
-    }
-    return new Set([activeAlias]);
-  }, [effectiveLayout, resolvedSplit, activeAlias]);
-
-  // Recompute the rendered indicator map from the status ref. An alias that is
-  // currently visible is never shown as unread.
   const syncIndicators = useCallback(() => {
-    const next: Record<string, TabIndicator> = {};
-    for (const [alias, s] of Object.entries(statusRef.current)) {
-      next[alias] = {
+    const next: Record<string, SessionIndicator> = {};
+    for (const [id, s] of Object.entries(statusRef.current)) {
+      next[id] = {
         streaming: s.streaming,
-        unread: s.unread && !visibleAliases.has(alias),
+        unread: s.unread && !visibleSessionIds.has(id),
       };
     }
     setIndicators(next);
-  }, [visibleAliases]);
+  }, [visibleSessionIds]);
 
-  // Stable ref to the latest syncIndicators so the per-alias onStatus closures
-  // (cached for identity stability) always run against current visibility.
   const syncIndicatorsRef = useRef(syncIndicators);
   useEffect(() => { syncIndicatorsRef.current = syncIndicators; }, [syncIndicators]);
 
-  // Status callback handed to each pane. Marks a hidden tab unread when its
-  // message count grows; tracks streaming from `typing`. Cached per alias so
-  // each pane receives a STABLE function identity — otherwise AgentChatInner's
-  // onStatus effect would re-run on every workspace render.
   const onStatusCacheRef = useRef<Record<string, (s: AgentChatStatus) => void>>({});
-  const onStatusFor = useCallback((alias: string) => {
-    const cached = onStatusCacheRef.current[alias];
+  const onStatusFor = useCallback((sessionId: string) => {
+    const cached = onStatusCacheRef.current[sessionId];
     if (cached) return cached;
     const fn = (s: AgentChatStatus) => {
-      const prev = statusRef.current[alias] ?? {
+      const prev = statusRef.current[sessionId] ?? {
         lastSeenCount: s.messageCount, liveCount: s.messageCount, streaming: false, unread: false,
       };
-      const visible = visibleAliasesRef.current.has(alias);
+      const visible = visibleSessionIdsRef.current.has(sessionId);
       const grew = s.messageCount > prev.lastSeenCount;
-      statusRef.current[alias] = {
+      statusRef.current[sessionId] = {
         lastSeenCount: visible ? s.messageCount : prev.lastSeenCount,
         liveCount: s.messageCount,
         streaming: s.typing,
         unread: visible ? false : prev.unread || grew,
       };
+      if (s.preview?.trim()) {
+        const preview = s.preview.trim();
+        setSessions((list) => {
+          const current = list.find((sess) => sess.id === sessionId);
+          if (!current || current.title) return list;
+          return list.map((sess) => (sess.id === sessionId ? { ...sess, title: preview } : sess));
+        });
+      }
       syncIndicatorsRef.current();
     };
-    onStatusCacheRef.current[alias] = fn;
+    onStatusCacheRef.current[sessionId] = fn;
     return fn;
   }, []);
 
-  // Keep a ref mirror of visibleAliases so the stable onStatus closure reads
-  // the latest visibility without being re-created on every visibility change.
-  const visibleAliasesRef = useRef(visibleAliases);
+  const visibleSessionIdsRef = useRef(visibleSessionIds);
   useEffect(() => {
-    visibleAliasesRef.current = visibleAliases;
-    // When visibility changes, clear unread for newly-visible aliases and
-    // snapshot their seen-count to the latest reported live count.
-    for (const alias of visibleAliases) {
-      const s = statusRef.current[alias];
+    visibleSessionIdsRef.current = visibleSessionIds;
+    for (const id of visibleSessionIds) {
+      const s = statusRef.current[id];
       if (s) { s.unread = false; s.lastSeenCount = s.liveCount; }
     }
     syncIndicators();
-  }, [visibleAliases, syncIndicators]);
+  }, [visibleSessionIds, syncIndicators]);
 
-  // Open + activate the route alias on mount and on every change, without
-  // remounting the workspace (the workspace is keyed by nothing volatile).
   useEffect(() => {
-    setOpenChats((prev) => (prev.includes(initialAlias) ? prev : [...prev, initialAlias]));
-    setActiveAlias(initialAlias);
+    setSessions((prev) => {
+      if (findSessionByAgent(prev, initialAlias)) return prev;
+      return [...prev, makeDefaultSession(initialAlias, activeFolderId)];
+    });
+    const session = findSessionByAgent(sessions, initialAlias);
+    if (session) setActiveSessionId(session.id);
   }, [initialAlias]);
 
-  // Persist workspace shape on any structural change.
   useEffect(() => {
-    const snapshot: PersistedState = { openChats, activeAlias, layout, splitAliases: resolvedSplit };
+    const snapshot: PersistedStateV3 = { folders, sessions, activeSessionId };
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot)); } catch { /* noop */ }
-  }, [openChats, activeAlias, layout, resolvedSplit]);
+  }, [folders, sessions, activeSessionId]);
 
-  // Mirror the active alias to the URL via history.replaceState only — never a
-  // React Router navigate, which would remount AgentChat and kill connections.
   useEffect(() => {
-    // Include the reverse-proxy prefix so `target` matches the real
-    // `window.location.pathname` under a gateway base path (e.g. "/zeroclaw").
-    // Without it the comparison would never match, firing replaceState every
-    // render and rewriting the bar to a prefix-less path that breaks
-    // reload/deep-link (Router's basename no longer matches). basePath is
-    // already normalized to "" (root) or a no-trailing-slash prefix, so plain
-    // concatenation can't produce a double slash.
     const target = `${basePath}/agent/${activeAlias}`;
     if (window.location.pathname !== target) {
       try { window.history.replaceState(window.history.state, '', target); } catch { /* noop */ }
     }
   }, [activeAlias]);
 
-  // ── Tab bar handlers ──────────────────────────────────────────────────
-  const selectTab = useCallback((alias: string) => {
-    setActiveAlias(alias);
-  }, []);
+  const selectSession = useCallback((sessionId: string) => {
+    setActiveSessionId(sessionId);
+    const session = sessions.find((s) => s.id === sessionId);
+    if (session) setActiveFolderId(session.folderId);
+  }, [sessions]);
 
-  const openChat = useCallback((alias: string) => {
-    setOpenChats((prev) => (prev.includes(alias) ? prev : [...prev, alias]));
-    setActiveAlias(alias);
-  }, []);
+  const newSession = useCallback(() => {
+    const folderId = folders.some((f) => f.id === activeFolderId) ? activeFolderId : DEFAULT_FOLDER_ID;
+    const taskId = createTaskSessionId(activeAlias);
+    const session: WorkbenchSession = {
+      id: makeSessionId(activeAlias, taskId),
+      agentAlias: activeAlias,
+      taskId,
+      folderId,
+    };
+    setSessions((prev) => [...prev, session]);
+    setActiveSessionId(session.id);
+  }, [activeAlias, activeFolderId, folders]);
 
-  const closeChat = useCallback((alias: string) => {
-    setOpenChats((prev) => {
-      if (prev.length <= 1) return prev; // never close the last chat
-      const next = prev.filter((a) => a !== alias);
-      // If we closed the active tab, move activation to a neighbour.
-      setActiveAlias((cur) => {
-        if (cur !== alias) return cur;
-        const idx = prev.indexOf(alias);
-        return next[Math.min(idx, next.length - 1)] ?? next[0] ?? cur;
+  const closeSession = useCallback((sessionId: string) => {
+    setSessions((prev) => {
+      if (prev.length <= 1) return prev;
+      const next = prev.filter((s) => s.id !== sessionId);
+      setActiveSessionId((cur) => {
+        if (cur !== sessionId) return cur;
+        const idx = prev.findIndex((s) => s.id === sessionId);
+        return next[Math.min(idx, next.length - 1)]?.id ?? next[0]?.id ?? cur;
       });
       return next;
     });
-    delete statusRef.current[alias];
-    delete onStatusCacheRef.current[alias];
+    const closed = sessions.find((s) => s.id === sessionId);
+    if (closed && closed.taskId !== '__default__') {
+      removeTaskSession(closed.agentAlias, closed.taskId);
+    }
+    delete statusRef.current[sessionId];
+    delete onStatusCacheRef.current[sessionId];
     syncIndicators();
-  }, [syncIndicators]);
+  }, [sessions, syncIndicators]);
 
-  const toggleLayout = useCallback(() => {
-    setLayout((l) => (l === 'split' ? 'tabs' : 'split'));
-    // Seed split with the active alias + next open chat when entering split.
-    setSplitAliases((prev) => {
-      const left = activeAlias;
-      const right = openChats.find((a) => a !== left) ?? null;
-      return prev[0] === left && prev[1] && openChats.includes(prev[1]) ? prev : [left, right];
-    });
-  }, [activeAlias, openChats]);
-
-  // Split is only offered when there are >= 2 chats and the viewport is wide.
-  const splitDisabled = openChats.length < 2;
+  const newFolder = useCallback((name: string) => {
+    const folder: WorkbenchFolder = { id: generateUUID().slice(0, 8), name };
+    setFolders((prev) => [...prev, folder]);
+    setActiveFolderId(folder.id);
+  }, []);
 
   return (
-    <div translate="no" className="notranslate flex flex-col h-full min-h-0">
-      <ChatTabBar
-        openChats={openChats}
-        activeAlias={activeAlias}
+    <div translate="no" className="notranslate flex flex-1 h-full min-h-0 overflow-hidden">
+      <WorkbenchSidebar
+        folders={folders}
+        sessions={sessions}
+        activeSessionId={activeSessionId}
         indicators={indicators}
-        layout={effectiveLayout}
-        splitDisabled={splitDisabled}
-        onSelect={selectTab}
-        onClose={closeChat}
-        onOpen={openChat}
-        onToggleLayout={toggleLayout}
+        onNewSession={newSession}
+        onSelect={selectSession}
+        onClose={closeSession}
+        onNewFolder={newFolder}
+        onSelectFolder={setActiveFolderId}
       />
 
-      {/* Content area. Every open chat is mounted here at all times; only CSS
-          visibility changes between tab/layout switches, so background sockets
-          stay alive. In split layout the two visible panes share the width. */}
-      <div className={effectiveLayout === 'split' ? 'flex flex-col md:flex-row flex-1 min-h-0 divide-y md:divide-y-0 md:divide-x divide-pc-border' : 'flex-1 min-h-0'}>
-        {openChats.map((alias) => {
-          const visible = visibleAliases.has(alias);
-          // In split, each visible pane takes an equal share of the row.
-          const paneClass = visible
-            ? effectiveLayout === 'split'
-              ? 'flex flex-col flex-1 min-w-0 min-h-0'
-              : 'flex flex-col h-full'
-            : 'hidden';
+      <div className="flex flex-1 min-w-0 min-h-0">
+        {sessions.map((session) => {
+          const visible = session.id === activeSessionId;
           return (
             <div
-              key={alias}
+              key={session.id}
               role="tabpanel"
-              id={`chat-panel-${alias}`}
-              aria-labelledby={`chat-tab-${alias}`}
+              id={`chat-panel-${session.id}`}
               aria-hidden={!visible}
-              className={paneClass}
+              className={visible ? 'flex flex-1 min-w-0 min-h-0' : 'hidden'}
             >
-              <AgentProvider key={alias} agentAlias={alias}>
-                <AgentChatInner agentAlias={alias} onStatus={onStatusFor(alias)} />
+              <AgentProvider
+                key={session.id}
+                agentAlias={session.agentAlias}
+                taskId={session.taskId === '__default__' ? undefined : session.taskId}
+              >
+                <div className="flex flex-1 min-w-0 min-h-0">
+                  <div className="flex flex-col flex-1 min-w-0 min-h-0">
+                    <AgentChatInner agentAlias={session.agentAlias} onStatus={onStatusFor(session.id)} />
+                  </div>
+                  <ResultsPanel />
+                </div>
               </AgentProvider>
             </div>
           );

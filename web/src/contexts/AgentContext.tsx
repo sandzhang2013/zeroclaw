@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState, useCallback } from 'react';
 import type { ApprovalDecision, PendingApproval, WsMessage } from '@/types/api';
-import { WebSocketClient, getOrCreateSessionId } from '@/lib/ws';
+import { WebSocketClient, getOrCreateSessionId, resolveTaskSessionId } from '@/lib/ws';
 import { generateUUID } from '@/lib/uuid';
 import { t } from '@/lib/i18n';
 import { getProp, putProp, listProps, getStatus, getSessionMessages, abortSession, deleteSession } from '@/lib/api';
@@ -111,11 +111,18 @@ export interface AgentProviderProps {
   /** Configured agent alias this provider is bound to. The WebSocket
    * connection, session ID, and chat history are all scoped to this alias. */
   agentAlias: string;
+  /** Optional task identifier for multi-task support. When set, resolves to a
+   * task-specific session ID; otherwise falls back to the default per-agent
+   * session. */
+  taskId?: string;
   children: React.ReactNode;
 }
 
-export function AgentProvider({ agentAlias, children }: AgentProviderProps) {
-  const sessionIdRef = useRef(getOrCreateSessionId(agentAlias));
+export function AgentProvider({ agentAlias, taskId, children }: AgentProviderProps) {
+  const sessionIdRef = useRef(
+    taskId ? resolveTaskSessionId(agentAlias, taskId) ?? getOrCreateSessionId(agentAlias)
+            : getOrCreateSessionId(agentAlias),
+  );
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
     const persisted = loadChatHistory(sessionIdRef.current);
     return persisted.length > 0 ? persistedToUiMessages(persisted) : [];
@@ -549,7 +556,7 @@ export function AgentProvider({ agentAlias, children }: AgentProviderProps) {
   // WebSocket bound to the configured agent. Re-keys (via the outer
   // <AgentProvider key={alias}>) when the alias changes.
   useEffect(() => {
-    const ws = new WebSocketClient({ agentAlias });
+    const ws = new WebSocketClient({ agentAlias, sessionId: sessionIdRef.current });
     attachSocketCallbacks(ws);
     ws.connect();
     wsRef.current = ws;
@@ -735,7 +742,7 @@ export function AgentProvider({ agentAlias, children }: AgentProviderProps) {
         oldWs.disconnect();
       }
 
-      const ws = new WebSocketClient({ agentAlias });
+      const ws = new WebSocketClient({ agentAlias, sessionId: sessionIdRef.current });
       // Point wsRef at the NEW client before connect(), so a synchronous
       // connect() throw (e.g. an invalid WebSocket URL/protocol token) still
       // leaves a live, reconnect-capable socket in the ref instead of the old
@@ -811,7 +818,7 @@ export function AgentProvider({ agentAlias, children }: AgentProviderProps) {
         oldWs.onMessage = null;
         oldWs.disconnect();
 
-        const ws = new WebSocketClient({ agentAlias });
+        const ws = new WebSocketClient({ agentAlias, sessionId: sessionIdRef.current });
         // Assign wsRef before connect() so a synchronous throw can't strand the
         // page on the old intentionally-closed socket (see switchModel).
         wsRef.current = ws;

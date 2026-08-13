@@ -65,11 +65,11 @@ function ContextBar({ contextMaxTokens, contextInputTokens }: {
 
 /**
  * Route entry point for `/agent/:alias`. Reads the alias from the URL and
- * hands it to the multi-agent ChatWorkspace as the initial chat to open and
- * activate. The workspace itself owns the set of open chats and never
- * remounts on tab/layout switches, so the alias is passed as a prop (not used
- * as a React `key`) — that keeps every chat's AgentProvider WebSocket alive
- * across tab switches. Missing alias → redirect to the agents list.
+ * hands it to the workbench as the initial session to open and
+ * activate. The workspace itself owns the set of open sessions and never
+ * remounts on switches, so the alias is passed as a prop (not used
+ * as a React `key`) — that keeps every session's AgentProvider WebSocket alive
+ * across sidebar switches. Missing alias → redirect to the agents list.
  */
 export default function AgentChat() {
   const { alias } = useParams<{ alias: string }>();
@@ -79,10 +79,12 @@ export default function AgentChat() {
   return <ChatWorkspace initialAlias={alias} />;
 }
 
-/** Status snapshot a chat pane pushes up to the workspace tab bar. */
+/** Status snapshot a chat pane pushes up to the workbench sidebar. */
 export interface AgentChatStatus {
   typing: boolean;
   messageCount: number;
+  /** First user-message preview, used as the session label. */
+  preview?: string;
 }
 
 /**
@@ -91,9 +93,9 @@ export interface AgentChatStatus {
  * multi-agent `ChatWorkspace` can mount one instance per open chat and keep
  * them all alive simultaneously.
  *
- * `onStatus` lets the host (the workspace) observe live typing / message-count
+ * `onStatus` lets the host (the workbench) observe live typing / message-count
  * changes per pane without itself subscribing to the agent context — used to
- * drive the streaming and unread indicators in the tab bar.
+ * drive the streaming and unread indicators in the left sidebar.
  */
 export function AgentChatInner({
   agentAlias,
@@ -153,13 +155,12 @@ export function AgentChatInner({
     saveDraft(input);
   }, [input, saveDraft]);
 
-  // Report live status (typing + message count) up to the host workspace so it
-  // can render streaming / unread indicators in the tab bar. Fires on every
-  // typing flip or message-count change; the workspace decides what to do with
-  // it (e.g. mark a hidden tab unread when its count grows).
+  // Report live status up to the workbench (sidebar indicators + session title).
   useEffect(() => {
-    onStatus?.({ typing, messageCount: messages.length });
-  }, [typing, messages.length, onStatus]);
+    const first = messages.find((m) => m.role === 'user' && !m.ephemeral && !m.notice);
+    const preview = first?.content.trim().split('\n')[0]?.slice(0, 48);
+    onStatus?.({ typing, messageCount: messages.length, preview });
+  }, [typing, messages, onStatus]);
 
   // Scroll to bottom on new messages / streaming.
   // Note: WebSocket lifecycle, hydration, and tool_call/tool_result handling

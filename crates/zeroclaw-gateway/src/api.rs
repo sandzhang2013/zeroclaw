@@ -1632,6 +1632,45 @@ pub async fn handle_api_health(
 
 // ── Helpers ─────────────────────────────────────────────────────
 
+fn gateway_session_key(id: &str) -> String {
+    if id.starts_with("gw_") || id.contains('_') {
+        id.to_string()
+    } else {
+        format!("gw_{id}")
+    }
+}
+
+fn session_visible_to(
+    attrs: &Option<zeroclaw_api::UserAttrs>,
+    meta: &zeroclaw_infra::session_backend::SessionMetadata,
+) -> bool {
+    match attrs {
+        None => true,
+        Some(a) if a.is_ops() => true,
+        Some(a) => meta.user_id.as_deref() == Some(a.user_id.as_str()),
+    }
+}
+
+fn require_session_access(
+    backend: &dyn zeroclaw_infra::session_backend::SessionBackend,
+    session_key: &str,
+    attrs: &Option<zeroclaw_api::UserAttrs>,
+) -> Result<(), crate::trusted_proxy::AuthError> {
+    let Some(attrs) = attrs else {
+        return Ok(());
+    };
+    if attrs.is_ops() {
+        return Ok(());
+    }
+    match backend.get_session_metadata(session_key) {
+        Some(meta) if meta.user_id.as_deref() == Some(attrs.user_id.as_str()) => Ok(()),
+        _ => Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Session not found"})),
+        )),
+    }
+}
+
 // ── Session API handlers ─────────────────────────────────────────
 
 /// GET /api/sessions — list gateway sessions
@@ -1639,9 +1678,10 @@ pub async fn handle_api_sessions_list(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    if let Err(e) = require_auth(&state, &headers) {
-        return e.into_response();
-    }
+    let attrs = match crate::trusted_proxy::require_user_principal(&state, &headers) {
+        Ok((_, attrs)) => attrs,
+        Err(e) => return e.into_response(),
+    };
 
     let Some(ref backend) = state.session_backend else {
         return Json(serde_json::json!({
@@ -1655,10 +1695,14 @@ pub async fn handle_api_sessions_list(
     // or a channel_id that resolves to an owning agent).
     // Pre-migration rows with neither set are skipped as orphans.
     let config = state.config.read().clone();
-    let all_metadata = backend.list_sessions_with_metadata();
+    let all_metadata = match &attrs {
+        Some(a) if !a.is_ops() => backend.list_sessions_for_user(&a.user_id),
+        _ => backend.list_sessions_with_metadata(),
+    };
     let sessions: Vec<serde_json::Value> = all_metadata
         .into_iter()
         .filter(|meta| meta.agent_alias.is_some() || meta.channel_id.is_some())
+        .filter(|meta| session_visible_to(&attrs, meta))
         .map(|meta| {
             // Resolve owning agent: prefer the stamped alias, otherwise
             // reverse-look-up via channel_id (= `<type>.<alias>`) against
@@ -1704,9 +1748,10 @@ pub async fn handle_api_session_messages(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    if let Err(e) = require_auth(&state, &headers) {
-        return e.into_response();
-    }
+    let attrs = match crate::trusted_proxy::require_user_principal(&state, &headers) {
+        Ok((_, attrs)) => attrs,
+        Err(e) => return e.into_response(),
+    };
 
     let Some(ref backend) = state.session_backend else {
         return Json(serde_json::json!({
@@ -1720,11 +1765,10 @@ pub async fn handle_api_session_messages(
     // Accept either the full DB key (channel-driven sessions like
     // `discord.clamps_…`) or the stripped form (legacy callers that pass
     // just the UUID for gateway sessions).
-    let session_key = if id.starts_with("gw_") || id.contains('_') {
-        id.clone()
-    } else {
-        format!("gw_{id}")
-    };
+    let session_key = gateway_session_key(&id);
+    if let Err(e) = require_session_access(backend.as_ref(), &session_key, &attrs) {
+        return e.into_response();
+    }
     let msgs = backend.load_with_timestamps(&session_key);
     let messages: Vec<serde_json::Value> = msgs
         .into_iter()
@@ -1752,9 +1796,10 @@ pub async fn handle_api_session_message_post(
     Path(id): Path<String>,
     Json(body): Json<SessionMessagePostBody>,
 ) -> impl IntoResponse {
-    if let Err(e) = require_auth(&state, &headers) {
-        return e.into_response();
-    }
+    let attrs = match crate::trusted_proxy::require_user_principal(&state, &headers) {
+        Ok((_, attrs)) => attrs,
+        Err(e) => return e.into_response(),
+    };
 
     if body.content.trim().is_empty() {
         return (
@@ -1773,6 +1818,9 @@ pub async fn handle_api_session_message_post(
     };
 
     let session_key = format!("gw_{id}");
+    if let Err(e) = require_session_access(backend.as_ref(), &session_key, &attrs) {
+        return e.into_response();
+    }
     if !backend
         .list_sessions()
         .iter()
@@ -1842,9 +1890,10 @@ pub async fn handle_api_session_delete(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    if let Err(e) = require_auth(&state, &headers) {
-        return e.into_response();
-    }
+    let attrs = match crate::trusted_proxy::require_user_principal(&state, &headers) {
+        Ok((_, attrs)) => attrs,
+        Err(e) => return e.into_response(),
+    };
 
     let Some(ref backend) = state.session_backend else {
         return (
@@ -1854,11 +1903,10 @@ pub async fn handle_api_session_delete(
             .into_response();
     };
 
-    let session_key = if id.starts_with("gw_") || id.contains('_') {
-        id.clone()
-    } else {
-        format!("gw_{id}")
-    };
+    let session_key = gateway_session_key(&id);
+    if let Err(e) = require_session_access(backend.as_ref(), &session_key, &attrs) {
+        return e.into_response();
+    }
 
     let token = state
         .cancel_tokens
@@ -1897,9 +1945,10 @@ pub async fn handle_api_session_rename(
     Path(id): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    if let Err(e) = require_auth(&state, &headers) {
-        return e.into_response();
-    }
+    let attrs = match crate::trusted_proxy::require_user_principal(&state, &headers) {
+        Ok((_, attrs)) => attrs,
+        Err(e) => return e.into_response(),
+    };
 
     let Some(ref backend) = state.session_backend else {
         return (
@@ -1919,6 +1968,9 @@ pub async fn handle_api_session_rename(
     }
 
     let session_key = format!("gw_{id}");
+    if let Err(e) = require_session_access(backend.as_ref(), &session_key, &attrs) {
+        return e.into_response();
+    }
 
     // Verify the session exists before renaming
     let sessions = backend.list_sessions();
@@ -1945,9 +1997,10 @@ pub async fn handle_api_sessions_running(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    if let Err(e) = require_auth(&state, &headers) {
-        return e.into_response();
-    }
+    let attrs = match crate::trusted_proxy::require_user_principal(&state, &headers) {
+        Ok((_, attrs)) => attrs,
+        Err(e) => return e.into_response(),
+    };
 
     let Some(ref backend) = state.session_backend else {
         return Json(serde_json::json!({
@@ -1960,6 +2013,7 @@ pub async fn handle_api_sessions_running(
     let running = backend.list_running_sessions();
     let sessions: Vec<serde_json::Value> = running
         .into_iter()
+        .filter(|meta| session_visible_to(&attrs, meta))
         .filter_map(|meta| {
             let session_id = meta.key.strip_prefix("gw_")?;
             Some(serde_json::json!({
@@ -1980,9 +2034,10 @@ pub async fn handle_api_session_state(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    if let Err(e) = require_auth(&state, &headers) {
-        return e.into_response();
-    }
+    let attrs = match crate::trusted_proxy::require_user_principal(&state, &headers) {
+        Ok((_, attrs)) => attrs,
+        Err(e) => return e.into_response(),
+    };
 
     let Some(ref backend) = state.session_backend else {
         return (
@@ -1993,6 +2048,9 @@ pub async fn handle_api_session_state(
     };
 
     let session_key = format!("gw_{id}");
+    if let Err(e) = require_session_access(backend.as_ref(), &session_key, &attrs) {
+        return e.into_response();
+    }
     match backend.get_session_state(&session_key) {
         Ok(Some(ss)) => {
             let mut resp = serde_json::json!({
@@ -2027,11 +2085,17 @@ pub async fn handle_api_session_abort(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    if let Err(e) = require_auth(&state, &headers) {
-        return e.into_response();
-    }
+    let attrs = match crate::trusted_proxy::require_user_principal(&state, &headers) {
+        Ok((_, attrs)) => attrs,
+        Err(e) => return e.into_response(),
+    };
 
     let session_key = format!("gw_{id}");
+    if let Some(ref backend) = state.session_backend
+        && let Err(e) = require_session_access(backend.as_ref(), &session_key, &attrs)
+    {
+        return e.into_response();
+    }
 
     // Look up and cancel the token. Hold the lock only long enough to
     // clone the token — cancellation itself does not need the lock.
@@ -3295,6 +3359,118 @@ pub(crate) mod tests {
             history.is_empty(),
             "session-scoped chat messages stay out of global event history"
         );
+    }
+
+    fn bff_headers(user: &str, role: &str) -> HeaderMap {
+        use axum::http::HeaderValue;
+        let mut h = HeaderMap::new();
+        h.insert("x-auth-secret", HeaderValue::from_static("s3cret"));
+        h.insert("x-user-id", HeaderValue::from_str(user).unwrap());
+        h.insert("x-user-role", HeaderValue::from_str(role).unwrap());
+        h
+    }
+
+    fn trusted_proxy_config(tmp: &tempfile::TempDir) -> zeroclaw_config::schema::Config {
+        let mut config = zeroclaw_config::schema::Config {
+            data_dir: tmp.path().join("data"),
+            config_path: tmp.path().join("config.toml"),
+            ..zeroclaw_config::schema::Config::default()
+        };
+        config.gateway.trusted_proxy = true;
+        config.gateway.trusted_proxy_secret = Some("s3cret".into());
+        config
+    }
+
+    #[tokio::test]
+    async fn session_list_requires_bff_secret_when_trusted_proxy() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = trusted_proxy_config(&tmp);
+        let backend: Arc<dyn SessionBackend> = Arc::new(
+            zeroclaw_infra::session_sqlite::SqliteSessionBackend::new(tmp.path()).unwrap(),
+        );
+        let state = test_state_with_session_backend(config, backend);
+        let response = handle_api_sessions_list(State(state), HeaderMap::new())
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn session_list_only_returns_frozen_user() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = trusted_proxy_config(&tmp);
+        let backend = Arc::new(
+            zeroclaw_infra::session_sqlite::SqliteSessionBackend::new(tmp.path()).unwrap(),
+        );
+        backend
+            .append("gw_alice-s", &zeroclaw_providers::ChatMessage::user("hi"))
+            .unwrap();
+        backend
+            .append("gw_bob-s", &zeroclaw_providers::ChatMessage::user("yo"))
+            .unwrap();
+        backend
+            .set_session_agent_alias("gw_alice-s", "web")
+            .unwrap();
+        backend.set_session_agent_alias("gw_bob-s", "web").unwrap();
+        backend.set_session_user_id("gw_alice-s", "alice").unwrap();
+        backend.set_session_user_id("gw_bob-s", "bob").unwrap();
+        let state = test_state_with_session_backend(config, backend);
+
+        let response = handle_api_sessions_list(State(state), bff_headers("alice", "普通用户"))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = response_json(response).await;
+        let sessions = json["sessions"].as_array().unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0]["session_id"], "alice-s");
+    }
+
+    #[tokio::test]
+    async fn user_cannot_delete_another_users_session() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = trusted_proxy_config(&tmp);
+        let backend = Arc::new(
+            zeroclaw_infra::session_sqlite::SqliteSessionBackend::new(tmp.path()).unwrap(),
+        );
+        backend
+            .append("gw_bob-s", &zeroclaw_providers::ChatMessage::user("yo"))
+            .unwrap();
+        backend.set_session_user_id("gw_bob-s", "bob").unwrap();
+        let state = test_state_with_session_backend(config, backend.clone());
+
+        let response = handle_api_session_delete(
+            State(state),
+            bff_headers("alice", "普通用户"),
+            Path("bob-s".to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert!(backend.session_exists("gw_bob-s"));
+    }
+
+    #[tokio::test]
+    async fn user_cannot_read_another_users_session() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = trusted_proxy_config(&tmp);
+        let backend = Arc::new(
+            zeroclaw_infra::session_sqlite::SqliteSessionBackend::new(tmp.path()).unwrap(),
+        );
+        backend
+            .append("gw_bob-s", &zeroclaw_providers::ChatMessage::user("secret"))
+            .unwrap();
+        backend.set_session_user_id("gw_bob-s", "bob").unwrap();
+        let state = test_state_with_session_backend(config, backend);
+
+        let response = handle_api_session_messages(
+            State(state),
+            bff_headers("alice", "普通用户"),
+            Path("bob-s".to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

@@ -17,7 +17,7 @@ use zeroclaw_runtime::skills::{
 };
 
 use super::AppState;
-use super::api::require_auth;
+use super::trusted_proxy::require_ops_auth as require_auth;
 
 // ── HTTP-specific request shapes (not shared) ───────────────────────
 
@@ -331,6 +331,110 @@ pub async fn handle_delete_skill(
     }
 }
 
+#[derive(Deserialize)]
+pub struct PersonalSkillBody {
+    pub agent: String,
+    pub name: String,
+    #[serde(default)]
+    pub frontmatter: SkillFrontmatter,
+    #[serde(default)]
+    pub body: String,
+}
+
+/// `POST /api/user/skills` — 高级用户 only; writes the caller's user workspace.
+pub async fn handle_save_personal_skill(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<PersonalSkillBody>,
+) -> Response {
+    let attrs = match crate::trusted_proxy::require_user_principal(&state, &headers) {
+        Ok((_, Some(attrs))) => attrs,
+        Ok((_, None)) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({
+                    "error": "Forbidden — personal skill save requires a BFF user identity"
+                })),
+            )
+                .into_response();
+        }
+        Err(e) => return e.into_response(),
+    };
+    if !attrs.is_advanced() {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "Forbidden — saving a personal skill requires X-User-Role: 高级用户"
+            })),
+        )
+            .into_response();
+    }
+    let name = match zeroclaw_api::normalize_user_id(body.name.trim()) {
+        Ok(n) => n,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "invalid skill name"})),
+            )
+                .into_response();
+        }
+    };
+    let agent = body.agent.trim();
+    if agent.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "agent is required"})),
+        )
+            .into_response();
+    }
+    let config = state.config.read().clone();
+    let dir = config
+        .user_workspace_dir(&attrs.user_id, agent)
+        .join("skills")
+        .join(&name);
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to create skill directory: {e}")})),
+        )
+            .into_response();
+    }
+    let mut fm = body.frontmatter;
+    if fm.name.trim().is_empty() {
+        fm.name = name.clone();
+    }
+    let description = if fm.description.trim().is_empty() {
+        fm.name.clone()
+    } else {
+        fm.description.replace('\n', " ")
+    };
+    let body_md = if body.body.trim().is_empty() {
+        format!("# {}\n", fm.name)
+    } else {
+        body.body
+    };
+    let markdown = format!(
+        "---\nname: {}\ndescription: {}\n---\n\n{body_md}",
+        fm.name, description
+    );
+    let path = dir.join("SKILL.md");
+    if let Err(e) = std::fs::write(&path, markdown) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to write SKILL.md: {e}")})),
+        )
+            .into_response();
+    }
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "name": fm.name,
+            "directory": dir.display().to_string(),
+        })),
+    )
+        .into_response()
+}
+
 // ── Error mapping ───────────────────────────────────────────────────
 
 fn service_error_response(err: ServiceError) -> Response {
@@ -423,5 +527,88 @@ mod tests {
         assert_eq!(mpe.reason_kind, "manifest_parse_error");
         assert_eq!(mpe.reason, "c");
         assert_eq!(mpe.directory.as_deref(), Some("/x/n"));
+    }
+
+    #[tokio::test]
+    async fn save_personal_skill_requires_advanced_user() {
+        use crate::api::test_state;
+        use axum::http::HeaderValue;
+        use zeroclaw_config::schema::AliasedAgentConfig;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut config = zeroclaw_config::schema::Config {
+            data_dir: tmp.path().join("data"),
+            config_path: tmp.path().join("config.toml"),
+            ..zeroclaw_config::schema::Config::default()
+        };
+        config.gateway.trusted_proxy = true;
+        config.gateway.trusted_proxy_secret = Some("s3cret".into());
+        config
+            .agents
+            .insert("web".into(), AliasedAgentConfig::default());
+        let state = test_state(config);
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-auth-secret", HeaderValue::from_static("s3cret"));
+        headers.insert("x-user-id", HeaderValue::from_static("alice"));
+        headers.insert(
+            "x-user-role",
+            HeaderValue::from_bytes("普通用户".as_bytes()).unwrap(),
+        );
+
+        let response = handle_save_personal_skill(
+            State(state.clone()),
+            headers,
+            Json(PersonalSkillBody {
+                agent: "web".into(),
+                name: "flu-weekly".into(),
+                frontmatter: SkillFrontmatter {
+                    name: "flu-weekly".into(),
+                    description: "weekly flu".into(),
+                    ..Default::default()
+                },
+                body: String::new(),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-auth-secret", HeaderValue::from_static("s3cret"));
+        headers.insert("x-user-id", HeaderValue::from_static("alice"));
+        headers.insert(
+            "x-user-role",
+            HeaderValue::from_bytes("高级用户".as_bytes()).unwrap(),
+        );
+        let response = handle_save_personal_skill(
+            State(state.clone()),
+            headers,
+            Json(PersonalSkillBody {
+                agent: "web".into(),
+                name: "flu-weekly".into(),
+                frontmatter: SkillFrontmatter {
+                    name: "flu-weekly".into(),
+                    description: "weekly flu".into(),
+                    ..Default::default()
+                },
+                body: "# flu".into(),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let expected = state
+            .config
+            .read()
+            .user_workspace_dir("alice", "web")
+            .join("skills")
+            .join("flu-weekly")
+            .join("SKILL.md");
+        assert!(expected.exists(), "{}", expected.display());
+        let org = state
+            .config
+            .read()
+            .agent_workspace_dir("web")
+            .join("skills");
+        assert!(!org.join("flu-weekly").join("SKILL.md").exists());
     }
 }

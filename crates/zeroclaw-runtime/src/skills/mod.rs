@@ -612,6 +612,38 @@ fn origin_hint_of(skill: &Skill) -> &'static str {
     }
 }
 
+fn append_user_skills(
+    config: &zeroclaw_config::schema::Config,
+    agent_alias: &str,
+    skills: &mut Vec<Skill>,
+    dropped: &mut Vec<DroppedSkill>,
+    shadows: &mut Vec<ShadowedSkill>,
+    seen: &mut std::collections::HashMap<String, &'static str>,
+) {
+    let Some(Some(attrs)) = zeroclaw_api::current_user_attrs() else {
+        return;
+    };
+    let user_dir = config
+        .user_workspace_dir(&attrs.user_id, agent_alias)
+        .join("skills");
+    let (user_skills, user_dropped) = load_skills_from_directory(&user_dir, false);
+    dropped.extend(user_dropped.into_iter().map(|mut d| {
+        d.origin_hint = "user".into();
+        d
+    }));
+    for skill in user_skills {
+        if seen.contains_key(&skill.name) {
+            shadows.push(ShadowedSkill {
+                name: skill.name.clone(),
+                origin_hint: "user".into(),
+            });
+        } else {
+            seen.insert(skill.name.clone(), "user");
+            skills.push(skill);
+        }
+    }
+}
+
 /// [`load_skills_for_agent`] plus the audit-dropped and shadowed candidates the
 /// resolver skipped, so the dashboard can surface them without re-auditing or
 /// re-walking
@@ -622,65 +654,66 @@ pub fn load_skills_for_agent_audited(
 ) -> (Vec<Skill>, Vec<DroppedSkill>, Vec<ShadowedSkill>) {
     let (mut skills, mut dropped) = load_skills_with_config_audited(workspace_dir, config);
     let mut shadows: Vec<ShadowedSkill> = Vec::new();
-    let Some(agent) = config.agent(agent_alias) else {
-        return (skills, dropped, shadows);
-    };
-    if agent.skill_bundles.is_empty() {
-        return (skills, dropped, shadows);
-    }
-    let install_root = config.install_root_dir();
-    let allow_scripts = config.skills.allow_scripts;
-    // name → origin_hint of the winner already in `skills`, so a shadowed
-    // bundle skill can be attributed to the source that beat it.
     let mut seen: std::collections::HashMap<String, &'static str> = skills
         .iter()
         .map(|s| (s.name.clone(), origin_hint_of(s)))
         .collect();
-    for bundle_alias in &agent.skill_bundles {
-        let bundle = match config.skill_bundles.get(bundle_alias) {
-            Some(b) => b,
-            None => {
-                ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"agent": agent_alias, "bundle": bundle_alias, "bundle_alias": bundle_alias})), "skipping skill bundle: [skill_bundles.] is not configured");
-                continue;
-            }
-        };
-        let dir = match zeroclaw_config::skill_bundles::resolve_directory(
-            config,
-            &install_root,
-            bundle_alias,
-        ) {
-            Ok(d) => d,
-            Err(e) => {
-                ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"agent": agent_alias, "bundle": bundle_alias, "e": e.to_string()})), "skipping skill bundle: ");
-                continue;
-            }
-        };
-        let (bundle_skills, bundle_dropped) = load_skills_from_directory(&dir, allow_scripts);
-        dropped.extend(bundle_dropped.into_iter().map(|mut d| {
-            d.origin_hint = "bundle".into();
-            d
-        }));
-        for skill in bundle_skills {
-            if !bundle.admits_skill(&skill.name) {
-                continue;
-            }
-            // First-write wins so workspace skills override bundle skills
-            // with the same name (legacy agents who edited a workspace
-            // copy keep their override after a bundle is assigned).
-            if seen.contains_key(&skill.name) {
-                // This bundle skill lost the name to an earlier source.
-                // Record the loser keyed to the winner's name so the
-                // dashboard can badge the winning skill.
-                shadows.push(ShadowedSkill {
-                    name: skill.name.clone(),
-                    origin_hint: "bundle".into(),
-                });
-            } else {
-                seen.insert(skill.name.clone(), "bundle");
-                skills.push(skill);
+    if let Some(agent) = config.agent(agent_alias)
+        && !agent.skill_bundles.is_empty()
+    {
+        let install_root = config.install_root_dir();
+        let allow_scripts = config.skills.allow_scripts;
+        for bundle_alias in &agent.skill_bundles {
+            let bundle = match config.skill_bundles.get(bundle_alias) {
+                Some(b) => b,
+                None => {
+                    ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"agent": agent_alias, "bundle": bundle_alias, "bundle_alias": bundle_alias})), "skipping skill bundle: [skill_bundles.] is not configured");
+                    continue;
+                }
+            };
+            let dir = match zeroclaw_config::skill_bundles::resolve_directory(
+                config,
+                &install_root,
+                bundle_alias,
+            ) {
+                Ok(d) => d,
+                Err(e) => {
+                    ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"agent": agent_alias, "bundle": bundle_alias, "e": e.to_string()})), "skipping skill bundle: ");
+                    continue;
+                }
+            };
+            let (bundle_skills, bundle_dropped) = load_skills_from_directory(&dir, allow_scripts);
+            dropped.extend(bundle_dropped.into_iter().map(|mut d| {
+                d.origin_hint = "bundle".into();
+                d
+            }));
+            for skill in bundle_skills {
+                if !bundle.admits_skill(&skill.name) {
+                    continue;
+                }
+                // First-write wins so workspace skills override bundle skills
+                // with the same name (legacy agents who edited a workspace
+                // copy keep their override after a bundle is assigned).
+                if seen.contains_key(&skill.name) {
+                    shadows.push(ShadowedSkill {
+                        name: skill.name.clone(),
+                        origin_hint: "bundle".into(),
+                    });
+                } else {
+                    seen.insert(skill.name.clone(), "bundle");
+                    skills.push(skill);
+                }
             }
         }
     }
+    append_user_skills(
+        config,
+        agent_alias,
+        &mut skills,
+        &mut dropped,
+        &mut shadows,
+        &mut seen,
+    );
     (skills, dropped, shadows)
 }
 
@@ -4481,5 +4514,119 @@ version = "0.1.0"
             names.contains(&skill_name),
             "with empty skill_bundles, workspace skills must still load; got: {names:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn user_skill_loaded_only_for_owner() {
+        let install_root = TempDir::new().unwrap();
+        let data_dir = TempDir::new().unwrap();
+        let agent_workspace = TempDir::new().unwrap();
+        let agent_alias = "web";
+        write_test_skill(agent_workspace.path(), "org-skill");
+
+        let config = make_config_with_agent_workspace(
+            install_root.path(),
+            data_dir.path(),
+            agent_alias,
+            agent_workspace.path().to_path_buf(),
+        );
+        let alice_skill_root = config.user_workspace_dir("alice", agent_alias);
+        write_test_skill(&alice_skill_root, "flu-weekly");
+
+        let alice_names = zeroclaw_api::TOOL_LOOP_USER_ATTRS
+            .scope(Some(zeroclaw_api::UserAttrs::new("alice")), async {
+                load_skills_for_agent_from_config(&config, agent_alias)
+                    .into_iter()
+                    .map(|s| s.name)
+                    .collect::<Vec<_>>()
+            })
+            .await;
+        assert!(alice_names.iter().any(|n| n == "flu-weekly"));
+        assert!(alice_names.iter().any(|n| n == "org-skill"));
+
+        let bob_names = zeroclaw_api::TOOL_LOOP_USER_ATTRS
+            .scope(Some(zeroclaw_api::UserAttrs::new("bob")), async {
+                load_skills_for_agent_from_config(&config, agent_alias)
+                    .into_iter()
+                    .map(|s| s.name)
+                    .collect::<Vec<_>>()
+            })
+            .await;
+        assert!(!bob_names.iter().any(|n| n == "flu-weekly"));
+        assert!(bob_names.iter().any(|n| n == "org-skill"));
+    }
+
+    #[tokio::test]
+    async fn org_skill_wins_on_name_collision_with_user_skill() {
+        let install_root = TempDir::new().unwrap();
+        let data_dir = TempDir::new().unwrap();
+        let agent_workspace = TempDir::new().unwrap();
+        let agent_alias = "web";
+        write_test_skill(agent_workspace.path(), "flu-forecast");
+
+        let config = make_config_with_agent_workspace(
+            install_root.path(),
+            data_dir.path(),
+            agent_alias,
+            agent_workspace.path().to_path_buf(),
+        );
+        write_test_skill(
+            &config.user_workspace_dir("alice", agent_alias),
+            "flu-forecast",
+        );
+
+        let (skills, _, shadows) = zeroclaw_api::TOOL_LOOP_USER_ATTRS
+            .scope(Some(zeroclaw_api::UserAttrs::new("alice")), async {
+                load_skills_for_agent_from_config_audited(&config, agent_alias)
+            })
+            .await;
+        let hits: Vec<_> = skills.iter().filter(|s| s.name == "flu-forecast").collect();
+        assert_eq!(hits.len(), 1);
+        assert!(
+            shadows
+                .iter()
+                .any(|s| s.name == "flu-forecast" && s.origin_hint == "user")
+        );
+    }
+
+    #[tokio::test]
+    async fn user_skill_scripts_not_auto_enabled() {
+        let install_root = TempDir::new().unwrap();
+        let data_dir = TempDir::new().unwrap();
+        let agent_workspace = TempDir::new().unwrap();
+        let agent_alias = "web";
+        let config = make_config_with_agent_workspace(
+            install_root.path(),
+            data_dir.path(),
+            agent_alias,
+            agent_workspace.path().to_path_buf(),
+        );
+        let user_skill = config
+            .user_workspace_dir("alice", agent_alias)
+            .join("skills")
+            .join("script-skill");
+        std::fs::create_dir_all(&user_skill).unwrap();
+        std::fs::write(
+            user_skill.join("SKILL.md"),
+            "---\nname: script-skill\ndescription: user script skill\n---\n# Script\n",
+        )
+        .unwrap();
+        std::fs::write(user_skill.join("helper.sh"), "echo hi\n").unwrap();
+
+        let (skills, dropped, _) = zeroclaw_api::TOOL_LOOP_USER_ATTRS
+            .scope(Some(zeroclaw_api::UserAttrs::new("alice")), async {
+                load_skills_for_agent_from_config_audited(&config, agent_alias)
+            })
+            .await;
+        assert!(!skills.iter().any(|s| s.name == "script-skill"));
+        assert!(dropped.iter().any(|d| d.name == "script-skill"
+            && d.origin_hint == "user"
+            && matches!(
+                d.reason,
+                SkillDropReason::AuditFindings {
+                    scripts_blocked: true,
+                    ..
+                }
+            )));
     }
 }

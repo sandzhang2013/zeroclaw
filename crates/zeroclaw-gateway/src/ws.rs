@@ -81,6 +81,9 @@ pub struct WsQuery {
     pub cwd: Option<String>,
     #[serde(default, alias = "workspaceDir", alias = "workspace_dir")]
     pub workspace_dir: Option<String>,
+    /// Ignored. Identity comes only from `X-User-Id` after secret verification.
+    #[serde(default)]
+    pub user_id: Option<String>,
 }
 
 fn extract_ws_token<'a>(headers: &'a HeaderMap, query_token: Option<&'a str>) -> Option<&'a str> {
@@ -119,6 +122,35 @@ fn extract_ws_token<'a>(headers: &'a HeaderMap, query_token: Option<&'a str>) ->
     None
 }
 
+/// Resolve chat identity. Query `user_id` is ignored; only BFF headers or pairing count.
+fn authenticate_ws_chat(
+    state: &crate::AppState,
+    headers: &HeaderMap,
+    params: &WsQuery,
+) -> Result<(Option<String>, Option<zeroclaw_api::UserAttrs>), Box<axum::response::Response>> {
+    let _ = params.user_id.as_ref();
+    if crate::trusted_proxy::trusted_proxy_enabled(state) {
+        match crate::trusted_proxy::require_trusted_proxy(state, headers) {
+            Ok((principal, attrs)) => Ok((Some(principal.user_id.clone()), Some(attrs))),
+            Err(err) => Err(Box::new(err.into_response())),
+        }
+    } else if state.pairing.require_pairing() {
+        let token = extract_ws_token(headers, params.token.as_deref()).unwrap_or("");
+        match state.pairing.authenticate_and_hash(token) {
+            Some(hash) => Ok((Some(hash), None)),
+            None => Err(Box::new(
+                (
+                    axum::http::StatusCode::UNAUTHORIZED,
+                    "Unauthorized: provide Authorization header, Sec-WebSocket-Protocol bearer, or ?token= query param",
+                )
+                    .into_response(),
+            )),
+        }
+    } else {
+        Ok((None, None))
+    }
+}
+
 /// GET /ws/chat — WebSocket upgrade for agent chat
 pub async fn handle_ws_chat(
     State(state): State<AppState>,
@@ -126,25 +158,9 @@ pub async fn handle_ws_chat(
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
-    // Auth: check header, subprotocol, then query param (precedence order). On
-    // success derive a STABLE transport-authenticated subject (the paired-token
-    // hash) so a required-group approval policy can be satisfied over WS; an
-    // operator grants approval rights to this paired device via a `ws:<token-hash>`
-    // group member. `None` when pairing is not required (no auth identity).
-    let auth_subject = if state.pairing.require_pairing() {
-        let token = extract_ws_token(&headers, params.token.as_deref()).unwrap_or("");
-        match state.pairing.authenticate_and_hash(token) {
-            Some(hash) => Some(hash),
-            None => {
-                return (
-                    axum::http::StatusCode::UNAUTHORIZED,
-                    "Unauthorized: provide Authorization header, Sec-WebSocket-Protocol bearer, or ?token= query param",
-                )
-                    .into_response();
-            }
-        }
-    } else {
-        None
+    let (auth_subject, frozen_user) = match authenticate_ws_chat(&state, &headers, &params) {
+        Ok(identity) => identity,
+        Err(response) => return *response,
     };
 
     // Echo Sec-WebSocket-Protocol if the client requests our sub-protocol.
@@ -192,6 +208,7 @@ pub async fn handle_ws_chat(
             session_name,
             session_cwd,
             auth_subject,
+            frozen_user,
         )
     })
     .into_response()
@@ -344,6 +361,7 @@ async fn handle_socket(
     // connection was authenticated. Threaded to SOP approval frames so a policied
     // gate can be satisfied by an identified WS caller.
     auth_subject: Option<String>,
+    frozen_user: Option<zeroclaw_api::UserAttrs>,
 ) {
     let (mut sender, mut receiver) = socket.split();
 
@@ -398,6 +416,22 @@ async fn handle_socket(
         // Stamp the agent alias so future /api/sessions queries and
         // per-agent filters can attribute this session to its agent.
         let _ = backend.set_session_agent_alias(&session_key, &agent_alias);
+        if let Some(ref attrs) = frozen_user {
+            if let Some(meta) = backend.get_session_metadata(&session_key)
+                && let Some(owner) = meta.user_id.as_deref()
+                && owner != attrs.user_id
+                && !attrs.is_ops()
+            {
+                let err = serde_json::json!({
+                    "type": "error",
+                    "message": "Session not found",
+                    "code": "SESSION_FORBIDDEN"
+                });
+                let _ = sender.send(Message::Text(err.to_string().into())).await;
+                return;
+            }
+            let _ = backend.set_session_user_id(&session_key, &attrs.user_id);
+        }
     }
 
     // Send session_start message to client
@@ -476,8 +510,12 @@ async fn handle_socket(
         }
     }
 
-    let session_cwd = match resolve_ws_session_cwd(requested_cwd.as_deref(), &config, &agent_alias)
-    {
+    let session_cwd = match resolve_ws_session_cwd(
+        requested_cwd.as_deref(),
+        &config,
+        &agent_alias,
+        frozen_user.as_ref().map(|a| a.user_id.as_str()),
+    ) {
         Ok(cwd) => cwd,
         Err(e) => {
             let err = serde_json::json!({
@@ -623,6 +661,7 @@ async fn handle_socket(
                         &session_key,
                         &session_id,
                         auth_subject.as_deref(),
+                        frozen_user.clone(),
                     )
                     .await;
                 }
@@ -795,6 +834,7 @@ async fn handle_socket(
                     &session_key,
                     &session_id,
                         auth_subject.as_deref(),
+                    frozen_user.clone(),
                 )
                 .await;
             }
@@ -866,28 +906,52 @@ fn resolve_ws_session_cwd(
     requested_cwd: Option<&str>,
     config: &zeroclaw_config::schema::Config,
     agent_alias: &str,
+    user_id: Option<&str>,
 ) -> anyhow::Result<PathBuf> {
-    let agent_workspace = config.agent_workspace_dir(agent_alias);
-    if requested_cwd.is_none() {
-        std::fs::create_dir_all(&agent_workspace).map_err(|e| {
+    let default_workspace = if let Some(uid) = user_id {
+        let user_ws = config.user_workspace_dir(uid, agent_alias);
+        std::fs::create_dir_all(&user_ws).map_err(|e| {
+            anyhow::Error::msg(format!(
+                "cwd is not a usable directory ({}): {e}",
+                user_ws.display()
+            ))
+        })?;
+        let skills = user_ws.join("skills");
+        let _ = std::fs::create_dir_all(&skills);
+        user_ws
+    } else {
+        config.agent_workspace_dir(agent_alias)
+    };
+    if requested_cwd.is_none() && user_id.is_none() {
+        std::fs::create_dir_all(&default_workspace).map_err(|e| {
             ::zeroclaw_log::record!(
                 WARN,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
                     .with_outcome(::zeroclaw_log::EventOutcome::Failure)
                     .with_attrs(::serde_json::json!({
                         "agent": agent_alias,
-                        "cwd": agent_workspace.display().to_string(),
+                        "cwd": default_workspace.display().to_string(),
                         "error": format!("{}", e),
                     })),
                 "ws agent workspace cwd rejected"
             );
             anyhow::Error::msg(format!(
                 "cwd is not a usable directory ({}): {e}",
-                agent_workspace.display()
+                default_workspace.display()
             ))
         })?;
     }
-    resolve_session_cwd(requested_cwd, &agent_workspace)
+    let resolved = resolve_session_cwd(requested_cwd, &default_workspace)?;
+    if let Some(uid) = user_id {
+        let allowed = config
+            .user_workspace_dir(uid, agent_alias)
+            .canonicalize()
+            .unwrap_or_else(|_| config.user_workspace_dir(uid, agent_alias));
+        if !resolved.starts_with(&allowed) {
+            anyhow::bail!("cwd is outside the user workspace ({})", allowed.display());
+        }
+    }
+    Ok(resolved)
 }
 
 fn session_queue_ws_error_code(error: &crate::session_queue::SessionQueueError) -> &'static str {
@@ -1001,6 +1065,7 @@ async fn process_chat_message(
     // Transport-authenticated approval subject (paired-token hash), threaded so a
     // mid-turn SOP approval frame carries the same identity as the top-level path.
     auth_subject: Option<&str>,
+    frozen_user: Option<zeroclaw_api::UserAttrs>,
 ) {
     use futures_util::StreamExt as _;
     use zeroclaw_runtime::agent::TurnEvent;
@@ -1076,18 +1141,21 @@ async fn process_chat_message(
         );
         zeroclaw_runtime::agent::loop_::scope_session_key(
             Some(session_key_owned.clone()),
-            zeroclaw_runtime::agent::cost::TOOL_LOOP_TURN_USAGE.scope(
-                turn_usage.clone(),
-                zeroclaw_runtime::agent::cost::TOOL_LOOP_COST_TRACKING_CONTEXT.scope(
-                    cost_tracking_context.clone(),
-                    agent
-                        .turn_streamed_with_steering_state(
-                            &content_owned,
-                            event_tx,
-                            Some(cancel_token.clone()),
-                            Some(&mut steering_rx),
-                        )
-                        .instrument(span),
+            zeroclaw_runtime::agent::loop_::scope_user_attrs(
+                frozen_user.clone(),
+                zeroclaw_runtime::agent::cost::TOOL_LOOP_TURN_USAGE.scope(
+                    turn_usage.clone(),
+                    zeroclaw_runtime::agent::cost::TOOL_LOOP_COST_TRACKING_CONTEXT.scope(
+                        cost_tracking_context.clone(),
+                        agent
+                            .turn_streamed_with_steering_state(
+                                &content_owned,
+                                event_tx,
+                                Some(cancel_token.clone()),
+                                Some(&mut steering_rx),
+                            )
+                            .instrument(span),
+                    ),
                 ),
             ),
         )
@@ -2073,7 +2141,7 @@ mod tests {
         let agent_workspace = config.agent_workspace_dir("web");
         assert!(!agent_workspace.exists());
 
-        let resolved = resolve_ws_session_cwd(None, &config, "web").unwrap();
+        let resolved = resolve_ws_session_cwd(None, &config, "web", None).unwrap();
 
         assert!(agent_workspace.exists());
         assert_eq!(resolved, agent_workspace.canonicalize().unwrap());
@@ -2097,11 +2165,64 @@ mod tests {
         let agent_workspace = config.agent_workspace_dir("web");
         let missing_requested = tmp.path().join("missing");
 
-        let err = resolve_ws_session_cwd(Some(missing_requested.to_str().unwrap()), &config, "web")
-            .expect_err("explicit missing cwd should be rejected");
+        let err = resolve_ws_session_cwd(
+            Some(missing_requested.to_str().unwrap()),
+            &config,
+            "web",
+            None,
+        )
+        .expect_err("explicit missing cwd should be rejected");
 
         assert!(!agent_workspace.exists());
         assert!(err.to_string().contains("cwd is not a usable directory"));
+    }
+
+    #[test]
+    fn resolve_ws_session_cwd_defaults_to_user_workspace_when_frozen() {
+        use tempfile::TempDir;
+        use zeroclaw_config::schema::{AliasedAgentConfig, Config};
+
+        let tmp = TempDir::new().unwrap();
+        let mut config = Config {
+            data_dir: tmp.path().join("data"),
+            config_path: tmp.path().join("config.toml"),
+            ..Config::default()
+        };
+        config
+            .agents
+            .insert("web".to_string(), AliasedAgentConfig::default());
+
+        let resolved = resolve_ws_session_cwd(None, &config, "web", Some("alice")).unwrap();
+        let expected = config
+            .user_workspace_dir("alice", "web")
+            .canonicalize()
+            .unwrap();
+        assert_eq!(resolved, expected);
+        assert!(expected.join("skills").is_dir());
+        assert_ne!(resolved, config.agent_workspace_dir("web"));
+    }
+
+    #[test]
+    fn resolve_ws_session_cwd_rejects_path_outside_user_workspace() {
+        use tempfile::TempDir;
+        use zeroclaw_config::schema::{AliasedAgentConfig, Config};
+
+        let tmp = TempDir::new().unwrap();
+        let mut config = Config {
+            data_dir: tmp.path().join("data"),
+            config_path: tmp.path().join("config.toml"),
+            ..Config::default()
+        };
+        config
+            .agents
+            .insert("web".to_string(), AliasedAgentConfig::default());
+        let bob = config.user_workspace_dir("bob", "web");
+        std::fs::create_dir_all(&bob).unwrap();
+
+        let err =
+            resolve_ws_session_cwd(Some(bob.to_str().unwrap()), &config, "web", Some("alice"))
+                .expect_err("alice must not use bob's workspace");
+        assert!(err.to_string().contains("outside the user workspace"));
     }
 
     #[test]
@@ -2368,5 +2489,60 @@ mod tests {
             Some("WaitingApproval"),
             "the gate is cleared once an authorized WS member approves"
         );
+    }
+
+    fn trusted_proxy_ws_state() -> crate::AppState {
+        let mut config = zeroclaw_config::schema::Config::default();
+        config.gateway.trusted_proxy = true;
+        config.gateway.trusted_proxy_secret = Some("s3cret".into());
+        crate::api::test_state(config)
+    }
+
+    fn ws_query_with_spoofed_user() -> WsQuery {
+        WsQuery {
+            token: None,
+            session_id: None,
+            name: None,
+            agent_alias: Some("web".into()),
+            cwd: None,
+            workspace_dir: None,
+            user_id: Some("alice".into()),
+        }
+    }
+
+    #[test]
+    fn ws_rejects_missing_secret_when_trusted_proxy() {
+        use axum::http::{HeaderValue, StatusCode};
+        let state = trusted_proxy_ws_state();
+        let mut headers = HeaderMap::new();
+        headers.insert("x-user-id", HeaderValue::from_static("alice"));
+        let err =
+            authenticate_ws_chat(&state, &headers, &ws_query_with_spoofed_user()).unwrap_err();
+        assert_eq!(err.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn ws_rejects_query_user_id_without_identity_header() {
+        use axum::http::{HeaderValue, StatusCode};
+        let state = trusted_proxy_ws_state();
+        let mut headers = HeaderMap::new();
+        headers.insert("x-auth-secret", HeaderValue::from_static("s3cret"));
+        let err =
+            authenticate_ws_chat(&state, &headers, &ws_query_with_spoofed_user()).unwrap_err();
+        assert_eq!(err.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn ws_freezes_header_user_id_and_ignores_query() {
+        use axum::http::HeaderValue;
+        let state = trusted_proxy_ws_state();
+        let mut headers = HeaderMap::new();
+        headers.insert("x-auth-secret", HeaderValue::from_static("s3cret"));
+        headers.insert("x-user-id", HeaderValue::from_static("alice"));
+        let mut params = ws_query_with_spoofed_user();
+        params.user_id = Some("bob".into());
+        let (subject, attrs) = authenticate_ws_chat(&state, &headers, &params).unwrap();
+        assert_eq!(subject.as_deref(), Some("alice"));
+        assert_eq!(attrs.expect("frozen").user_id, "alice");
     }
 }

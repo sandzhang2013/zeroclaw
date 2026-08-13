@@ -72,13 +72,21 @@ impl Tool for McpToolWrapper {
     }
 
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
-        let args = match args {
+        let mut args = match args {
             serde_json::Value::Object(mut map) => {
                 map.remove("approved");
                 serde_json::Value::Object(map)
             }
             other => other,
         };
+        zeroclaw_api::UserAttrs::strip_identity_args(&mut args);
+        if let Err(msg) = zeroclaw_api::mcp_identity() {
+            return Ok(ToolResult {
+                success: false,
+                output: ToolOutput::default(),
+                error: Some(msg.to_string()),
+            });
+        }
         match self.registry.call_tool(&self.prefixed_name, args).await {
             Ok(output) => Ok(ToolResult {
                 success: true,
@@ -265,5 +273,26 @@ mod tests {
                 .expect("non-object args must not propagate Err");
             assert!(!result.success, "expected non-fatal failure for {non_obj}");
         }
+    }
+
+    #[tokio::test]
+    async fn execute_fails_closed_when_user_attrs_scoped_empty() {
+        let registry = empty_registry().await;
+        let def = make_def("ghost", Some("Ghost tool"), json!({}));
+        let wrapper = McpToolWrapper::new("nowhere__ghost".to_string(), def, registry);
+        zeroclaw_api::TOOL_LOOP_USER_ATTRS
+            .scope(None, async {
+                let result = wrapper
+                    .execute(json!({"user_id": "bob", "region": "北京", "q": "flu"}))
+                    .await
+                    .expect("execute should be non-fatal");
+                assert!(!result.success);
+                let err = result.error.expect("fail-closed error");
+                assert!(
+                    err.contains("missing frozen user identity"),
+                    "unexpected error: {err}"
+                );
+            })
+            .await;
     }
 }

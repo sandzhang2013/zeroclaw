@@ -2083,4 +2083,122 @@ mod tests {
             "SSH_AUTH_SOCK from tui_env must reach subprocess"
         );
     }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shell_python3_runs_in_user_cwd() {
+        if std::process::Command::new("python3")
+            .arg("-c")
+            .arg("print(1)")
+            .output()
+            .map(|o| !o.status.success())
+            .unwrap_or(true)
+        {
+            return;
+        }
+        let workspace = tempfile::TempDir::new().unwrap();
+        let security = Arc::new(SecurityPolicy {
+            autonomy: AutonomyLevel::Full,
+            workspace_dir: workspace.path().to_path_buf(),
+            allowed_commands: vec!["python3".into()],
+            block_high_risk_commands: false,
+            ..SecurityPolicy::default()
+        });
+        let tool = ShellTool::new(security, test_runtime());
+        std::fs::write(
+            workspace.path().join("cwd.py"),
+            "import os\nprint(os.getcwd())\n",
+        )
+        .unwrap();
+        let result = tool
+            .execute(json!({
+                "command": "python3 cwd.py"
+            }))
+            .await
+            .expect("python3 should return a tool result");
+        assert!(result.success, "{:?}", result.error);
+        let reported = result.output.trim();
+        assert_eq!(
+            std::fs::canonicalize(reported).unwrap(),
+            workspace.path().canonicalize().unwrap()
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shell_python3_writes_stay_in_user_cwd() {
+        if std::process::Command::new("python3")
+            .arg("-c")
+            .arg("print(1)")
+            .output()
+            .map(|o| !o.status.success())
+            .unwrap_or(true)
+        {
+            return;
+        }
+        let alice = tempfile::TempDir::new().unwrap();
+        let bob = tempfile::TempDir::new().unwrap();
+        std::fs::write(bob.path().join("secret.txt"), "bob-only").unwrap();
+        let security = Arc::new(SecurityPolicy {
+            autonomy: AutonomyLevel::Full,
+            workspace_dir: alice.path().to_path_buf(),
+            allowed_commands: vec!["python3".into()],
+            block_high_risk_commands: false,
+            ..SecurityPolicy::default()
+        });
+        let tool = ShellTool::new(security, test_runtime());
+        std::fs::write(
+            alice.path().join("write.py"),
+            "open('out.txt','w').write('alice')\n",
+        )
+        .unwrap();
+        let result = tool
+            .execute(json!({
+                "command": "python3 write.py"
+            }))
+            .await
+            .expect("python3 write should return a tool result");
+        assert!(result.success, "{:?}", result.error);
+        assert_eq!(
+            std::fs::read_to_string(alice.path().join("out.txt")).unwrap(),
+            "alice"
+        );
+        assert!(!bob.path().join("out.txt").exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shell_rscript_runs_in_user_cwd() {
+        if std::process::Command::new("Rscript")
+            .arg("-e")
+            .arg("cat(1)")
+            .output()
+            .map(|o| !o.status.success())
+            .unwrap_or(true)
+        {
+            return;
+        }
+        let workspace = tempfile::TempDir::new().unwrap();
+        let security = Arc::new(SecurityPolicy {
+            autonomy: AutonomyLevel::Full,
+            workspace_dir: workspace.path().to_path_buf(),
+            allowed_commands: vec!["Rscript".into()],
+            block_high_risk_commands: false,
+            ..SecurityPolicy::default()
+        });
+        let tool = ShellTool::new(security, test_runtime());
+        std::fs::write(workspace.path().join("cwd.R"), "cat(getwd())\n").unwrap();
+        let result = tool
+            .execute(json!({
+                "command": "Rscript cwd.R"
+            }))
+            .await
+            .expect("Rscript should return a tool result");
+        assert!(result.success, "{:?}", result.error);
+        let reported = result.output.trim();
+        assert_eq!(
+            std::fs::canonicalize(reported).unwrap(),
+            workspace.path().canonicalize().unwrap()
+        );
+    }
 }

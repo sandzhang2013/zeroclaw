@@ -55,6 +55,7 @@ fn migration_adds_routing_columns_and_set_session_context_persists() {
         columns.contains(&"sender_id".to_string()),
         "sender_id missing"
     );
+    assert!(columns.contains(&"user_id".to_string()), "user_id missing");
 
     let session_key = "proof_session_42";
     backend
@@ -126,6 +127,7 @@ fn migration_adds_routing_columns_and_set_session_context_persists() {
         "idx_session_metadata_channel_id",
         "idx_session_metadata_room_id",
         "idx_session_metadata_sender_id",
+        "idx_session_metadata_user_id",
     ] {
         assert!(
             idx_names.iter().any(|n| n == required),

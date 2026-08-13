@@ -650,3 +650,25 @@ fn config_empty_parses_with_all_defaults() {
             < f64::EPSILON
     );
 }
+
+#[test]
+fn user_workspace_dir_is_under_install_users() {
+    let config = Config {
+        config_path: std::path::PathBuf::from("/opt/zeroclaw/config.toml"),
+        ..Config::default()
+    };
+    let alice = config.user_workspace_dir("alice", "default");
+    let bob = config.user_workspace_dir("bob", "default");
+    assert!(alice.ends_with("users/alice/agents/default/workspace"));
+    assert!(bob.ends_with("users/bob/agents/default/workspace"));
+    assert_ne!(alice, bob);
+}
+
+#[test]
+fn trusted_proxy_without_secret_fails_validation() {
+    let mut config = Config::default();
+    config.gateway.trusted_proxy = true;
+    config.gateway.trusted_proxy_secret = None;
+    let err = config.validate().expect_err("empty secret must fail closed");
+    assert!(err.to_string().contains("trusted_proxy_secret"));
+}
