@@ -1,6 +1,6 @@
 import { memo, useState, useEffect, useRef, useCallback } from 'react';
 import { Link, Navigate, useParams } from 'react-router-dom';
-import { Send, Square, Bot, User, AlertCircle, Copy, Check, X, Trash2, Minimize2, Maximize2, ChevronDown, Wrench, BarChart2, FolderOpen } from 'lucide-react';
+import { ArrowUp, Square, Bot, User, AlertCircle, Copy, Check, X, Trash2, Minimize2, Maximize2, ChevronDown, Wrench, BarChart2, FolderOpen, PanelRightClose, PanelRightOpen } from 'lucide-react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useAgent, type ChatMessage } from '@/contexts/AgentContext';
@@ -14,7 +14,6 @@ import {
   parseCommand,
   type CommandSpec,
 } from '@/lib/slashCommands';
-import { Button } from '@/components/ui';
 import ChatWorkspace from '@/pages/ChatWorkspace';
 
 import ToolCallCard from '@/components/ToolCallCard';
@@ -100,9 +99,15 @@ export interface AgentChatStatus {
 export function AgentChatInner({
   agentAlias,
   onStatus,
+  sessionTitle,
+  rightPanelCollapsed,
+  onToggleRightPanel,
 }: {
   agentAlias: string;
   onStatus?: (s: AgentChatStatus) => void;
+  sessionTitle?: string;
+  rightPanelCollapsed?: boolean;
+  onToggleRightPanel?: () => void;
 }) {
   const {
     messages,
@@ -407,100 +412,115 @@ export function AgentChatInner({
        Hoisting the opt-out to the outermost container covers all of them
        with a single ancestor. Static UI chrome here localizes through
        t() i18n, so losing browser translation on it is intentional. */
-    <div translate="no" className="notranslate flex flex-col h-full min-h-0">
-      {/* Header with model selector */}
-      <div className="flex items-center justify-between px-4 py-2 border-b border-pc-border bg-pc-surface">
-        <div className="flex items-center gap-2">
-          <Bot className="h-4 w-4 text-pc-accent" />
-          <span className="text-sm font-medium text-pc-text">{agentAlias}</span>
+    <div translate="no" className="notranslate flex flex-col h-full min-h-0 bg-pc-surface">
+      <div className="flex w-full min-w-0 items-center justify-between border-b border-pc-border px-4 py-3 overflow-hidden shrink-0">
+        <div className="flex items-center gap-3 flex-1 min-w-0 overflow-hidden">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--pc-hover)] shrink-0">
+            <Bot className="h-5 w-5 text-pc-text" />
+          </div>
+          <div className="flex flex-col min-w-0 flex-1 overflow-hidden">
+            <h2 className="text-sm font-semibold min-w-0 truncate text-pc-text" title={sessionTitle?.trim() || agentAlias}>
+              {sessionTitle?.trim() || agentAlias}
+            </h2>
+            {sessionTitle?.trim() && sessionTitle.trim() !== agentAlias && (
+              <p className="text-xs text-pc-text-muted truncate">{agentAlias}</p>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center shrink-0 ml-2 gap-0.5">
+          <div className="relative" ref={modelDropdownRef}>
+            <button
+              type="button"
+              onClick={() => setShowModelDropdown((v) => !v)}
+              disabled={modelLoading || typing || (availableModels.length === 0 && currentModel === null)}
+              className="flex items-center gap-2 px-2 h-8 max-w-[220px] rounded-md text-xs font-medium text-pc-text-secondary transition-colors hover:bg-[var(--pc-hover)] hover:text-pc-text disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--pc-focus)]"
+            >
+              <span className="truncate">
+                {modelLoading
+                  ? t('agent.model_switching')
+                  : (currentModel ?? (availableModels.length === 0 ? t('agent.model_loading') : t('agent.select_model')))}
+              </span>
+              <ChevronDown className="h-3 w-3" />
+            </button>
+            {showModelDropdown && availableModels.length > 0 && (
+              <div className="absolute right-0 mt-1.5 rounded-[var(--radius-md)] border border-pc-border bg-pc-elevated shadow-[var(--pc-shadow-md)] z-50 py-1 min-w-[200px] max-h-60 overflow-y-auto">
+                {availableModels.map((model) => {
+                  const isActive = model === currentModel;
+                  return (
+                    <button
+                      key={model}
+                      type="button"
+                      onClick={() => handleModelSwitch(model)}
+                      className={`w-full text-left px-3 py-2 text-xs transition-colors ${
+                        isActive
+                          ? 'text-pc-accent bg-pc-accent/10'
+                          : 'text-pc-text hover:bg-[var(--pc-hover)]'
+                      }`}
+                    >
+                      {model}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
           <Link
             to={`/agent/${encodeURIComponent(agentAlias)}/workspace`}
-            className="inline-flex items-center gap-1 px-2 h-6 rounded-[var(--radius-md)] text-xs font-medium text-pc-text-secondary transition-colors hover:text-pc-text hover:bg-[var(--pc-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--pc-focus)]"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-pc-text-muted hover:bg-[var(--pc-hover)] hover:text-pc-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--pc-focus)]"
             title={t('agentchat.open_workspace')}
           >
-            <FolderOpen className="h-3.5 w-3.5" />
-            {t('agentchat.files')}
+            <FolderOpen className="h-4 w-4" />
           </Link>
-        </div>
-
-        <div className="relative" ref={modelDropdownRef}>
-          <button
-            type="button"
-            onClick={() => setShowModelDropdown((v) => !v)}
-            disabled={modelLoading || typing || (availableModels.length === 0 && currentModel === null)}
-            className="flex items-center gap-2 px-3 h-7 rounded-[var(--radius-md)] text-xs font-medium border border-pc-border bg-pc-elevated text-pc-text-secondary transition-colors hover:text-pc-text hover:border-pc-border-strong disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--pc-focus)]"
-          >
-            <span className="max-w-[180px] truncate">
-              {modelLoading
-                ? t('agent.model_switching')
-                : (currentModel ?? (availableModels.length === 0 ? t('agent.model_loading') : t('agent.select_model')))}
-            </span>
-            <ChevronDown className="h-3 w-3" />
-          </button>
-
-          {showModelDropdown && availableModels.length > 0 && (
-            <div className="absolute right-0 mt-1.5 rounded-[var(--radius-md)] border border-pc-border bg-pc-elevated shadow-[var(--pc-shadow-md)] z-50 py-1 min-w-[200px] max-h-60 overflow-y-auto">
-              {availableModels.map((model) => {
-                const isActive = model === currentModel;
-                return (
-                  <button
-                    key={model}
-                    type="button"
-                    onClick={() => handleModelSwitch(model)}
-                    className={`w-full text-left px-3 py-2 text-xs transition-colors ${
-                      isActive
-                        ? 'text-pc-accent bg-pc-accent/10'
-                        : 'text-pc-text hover:bg-[var(--pc-hover)]'
-                    }`}
-                  >
-                    {model}
-                  </button>
-                );
-              })}
-            </div>
+          {messages.length > 0 && (
+            <>
+              <button
+                type="button"
+                onClick={toggleCompact}
+                aria-label={t('agent.compact_mode')}
+                title={t('agent.compact_mode')}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-pc-text-muted hover:bg-[var(--pc-hover)] hover:text-pc-text"
+              >
+                {compact ? <Maximize2 className="h-4 w-4" /> : <Minimize2 className="h-4 w-4" />}
+              </button>
+              <button
+                type="button"
+                onClick={toggleToolActivity}
+                aria-label={showToolActivity ? t('agent.tool_activity_hide') : t('agent.tool_activity_show')}
+                aria-pressed={showToolActivity}
+                title={showToolActivity ? t('agent.tool_activity_hide') : t('agent.tool_activity_show')}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-pc-text-muted hover:bg-[var(--pc-hover)] hover:text-pc-text"
+              >
+                <Wrench className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={handleClearAll}
+                aria-label={t('agent.clear_all')}
+                title={t('agent.clear_all')}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-pc-text-muted hover:bg-status-error/15 hover:text-status-error"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </>
+          )}
+          {onToggleRightPanel && (
+            <button
+              type="button"
+              onClick={onToggleRightPanel}
+              aria-label={rightPanelCollapsed ? t('workbench.expand_right') : t('workbench.collapse_right')}
+              title={rightPanelCollapsed ? t('workbench.expand_right') : t('workbench.collapse_right')}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-pc-text-muted hover:bg-[var(--pc-hover)] hover:text-pc-text"
+            >
+              {rightPanelCollapsed ? <PanelRightOpen className="h-4 w-4" /> : <PanelRightClose className="h-4 w-4" />}
+            </button>
           )}
         </div>
       </div>
 
-      {/* Connection status bar */}
       {error && (
         <div className="px-4 py-2 border-b border-status-error/20 bg-status-error/10 text-status-error flex items-center gap-2 text-sm animate-fade-in">
           <AlertCircle className="h-4 w-4 shrink-0" />
           {error}
-        </div>
-      )}
-
-      {/* Chat toolbar */}
-      {messages.length > 0 && (
-        <div className="flex items-center justify-end gap-2 px-4 py-2 border-b border-pc-border bg-pc-surface">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={toggleCompact}
-            aria-label={t('agent.compact_mode')}
-          >
-            {compact ? <Maximize2 className="h-3 w-3" /> : <Minimize2 className="h-3 w-3" />}
-            {t('agent.compact_mode')}
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={toggleToolActivity}
-            aria-label={showToolActivity ? t('agent.tool_activity_hide') : t('agent.tool_activity_show')}
-            aria-pressed={showToolActivity}
-          >
-            <Wrench className="h-3 w-3" />
-            {showToolActivity ? t('agent.tool_activity_hide') : t('agent.tool_activity_show')}
-          </Button>
-          <Button
-            variant="danger"
-            size="sm"
-            onClick={handleClearAll}
-            aria-label={t('agent.clear_all')}
-          >
-            <Trash2 className="h-3 w-3" />
-            {t('agent.clear_all')}
-          </Button>
         </div>
       )}
 
@@ -566,12 +586,11 @@ export function AgentChatInner({
       )}
 
       {/* Input area */}
-      <div className="border-t border-pc-border bg-pc-surface p-4">
-        {/* Slash-command autocomplete popover (#7137) */}
+      <div className="px-4 pb-3 pt-1">
         {showCommandHint && matchedCommands.length > 0 && (
           <div className="relative max-w-4xl mx-auto">
             <div
-              className="absolute bottom-1 left-0 rounded-xl border shadow-lg z-50 py-1 min-w-[260px] overflow-hidden"
+              className="absolute bottom-1 left-0 rounded-lg border shadow-md z-50 py-1 min-w-[260px] overflow-hidden"
               style={{ background: 'var(--pc-bg-elevated)', borderColor: 'var(--pc-border)' }}
             >
               <div
@@ -597,68 +616,68 @@ export function AgentChatInner({
             </div>
           </div>
         )}
-        <div className="flex items-end gap-3 max-w-4xl mx-auto">
-          <textarea
-            ref={inputRef}
-            rows={1}
-            value={input}
-            onChange={handleTextareaChange}
-            onKeyDown={handleKeyDown}
-            onCompositionStart={() => { isComposingRef.current = true; }}
-            onCompositionEnd={() => { isComposingRef.current = false; }}
-            placeholder={!connected
-              ? t('agent.connecting')
-              : typing
-                ? t('agent.running')
-                : t('agent.type_message')}
-            disabled={!connected || typing}
-            className="flex-1 px-4 text-sm resize-none rounded-[var(--radius-md)] border border-pc-border bg-pc-input text-pc-text placeholder:text-pc-text-muted transition-colors focus:outline-none focus:border-pc-accent focus:ring-2 focus:ring-pc-accent/30 disabled:opacity-40"
-            style={{ minHeight: '40px', maxHeight: '200px', paddingTop: '9px', paddingBottom: '9px' }}
-          />
-          {typing ? (
-            <Button
-              variant="danger"
-              size="md"
-              onClick={handleAbort}
-              className="flex-shrink-0 w-10 px-0"
-              aria-label={t('agent.stop')}
-              title={t('agent.stop')}
-            >
-              <Square className="h-4 w-4" fill="currentColor" />
-            </Button>
-          ) : (
-            <Button
-              variant="primary"
-              size="md"
-              onClick={handleSend}
-              disabled={!connected || !input.trim()}
-              className="flex-shrink-0 w-10 px-0"
-              aria-label={t('agent.send')}
-            >
-              <Send className="h-4 w-4" />
-            </Button>
-          )}
-        </div>
-        <div className="flex items-center justify-between mt-2 gap-2 max-w-4xl mx-auto">
-          <div className="flex items-center gap-2">
-            <span
-              className="status-dot"
-              style={typing
-                ? { background: 'var(--pc-accent)', boxShadow: '0 0 6px var(--pc-accent)' }
-                : connected
-                  ? { background: 'var(--color-status-success)', boxShadow: '0 0 6px var(--color-status-success)' }
-                  : { background: 'var(--color-status-error)', boxShadow: '0 0 6px var(--color-status-error)' }
-              }
+        <div className="max-w-4xl mx-auto">
+          <div className="relative flex w-full min-w-0 items-end gap-2 rounded-lg border border-pc-border bg-pc-elevated px-3 py-2">
+            <textarea
+              ref={inputRef}
+              rows={1}
+              value={input}
+              onChange={handleTextareaChange}
+              onKeyDown={handleKeyDown}
+              onCompositionStart={() => { isComposingRef.current = true; }}
+              onCompositionEnd={() => { isComposingRef.current = false; }}
+              placeholder={!connected
+                ? t('agent.connecting')
+                : typing
+                  ? t('agent.running')
+                  : t('agent.type_message')}
+              disabled={!connected || typing}
+              className="flex-1 min-w-0 bg-transparent text-sm resize-none text-pc-text placeholder:text-pc-text-muted focus:outline-none disabled:opacity-40"
+              style={{ minHeight: '2rem', maxHeight: '10rem', paddingTop: '6px', paddingBottom: '6px' }}
             />
-            <span className="text-[10px]" style={{ color: 'var(--pc-text-faint)' }}>
-              {typing
-                ? t('agent.running')
-                : connected
-                  ? t('agent.connected_status')
-                  : t('agent.disconnected_status')}
-            </span>
+            {typing ? (
+              <button
+                type="button"
+                onClick={handleAbort}
+                className="flex-shrink-0 inline-flex size-8 items-center justify-center rounded-md bg-status-error text-white hover:opacity-90 disabled:opacity-40"
+                aria-label={t('agent.stop')}
+                title={t('agent.stop')}
+              >
+                <Square className="h-3.5 w-3.5" fill="currentColor" />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleSend}
+                disabled={!connected || !input.trim()}
+                className="flex-shrink-0 inline-flex size-8 items-center justify-center rounded-md bg-pc-accent text-[#0b1220] hover:bg-pc-accent-light disabled:opacity-40 disabled:cursor-not-allowed"
+                aria-label={t('agent.send')}
+              >
+                <ArrowUp className="h-4 w-4" />
+              </button>
+            )}
           </div>
-          <ContextBar contextMaxTokens={contextMaxTokens} contextInputTokens={contextInputTokens} />
+          <div className="flex items-center justify-between mt-2 gap-2">
+            <div className="flex items-center gap-2">
+              <span
+                className="status-dot"
+                style={typing
+                  ? { background: 'var(--pc-accent)', boxShadow: '0 0 6px var(--pc-accent)' }
+                  : connected
+                    ? { background: 'var(--color-status-success)', boxShadow: '0 0 6px var(--color-status-success)' }
+                    : { background: 'var(--color-status-error)', boxShadow: '0 0 6px var(--color-status-error)' }
+                }
+              />
+              <span className="text-[10px]" style={{ color: 'var(--pc-text-faint)' }}>
+                {typing
+                  ? t('agent.running')
+                  : connected
+                    ? t('agent.connected_status')
+                    : t('agent.disconnected_status')}
+              </span>
+            </div>
+            <ContextBar contextMaxTokens={contextMaxTokens} contextInputTokens={contextInputTokens} />
+          </div>
         </div>
       </div>
     </div>

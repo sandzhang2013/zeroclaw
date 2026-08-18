@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { GripVertical } from 'lucide-react';
 import { AgentProvider } from '@/contexts/AgentContext';
 import { AgentChatInner, type AgentChatStatus } from '@/pages/AgentChat';
 import { WorkbenchSidebar, type SessionIndicator } from '@/components/WorkbenchSidebar';
@@ -9,6 +10,28 @@ import {
 } from '@/lib/ws';
 import { generateUUID } from '@/lib/uuid';
 import { basePath } from '@/lib/basePath';
+import { t } from '@/lib/i18n';
+
+const SIDEBAR_COLLAPSED_KEY = 'zeroclaw-workbench-sidebar-collapsed';
+const RIGHT_COLLAPSED_KEY = 'zeroclaw-workbench-right-collapsed';
+const RIGHT_PCT_KEY = 'zeroclaw-workbench-right-pct';
+
+function readBool(key: string, fallback: boolean): boolean {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw === '1') return true;
+    if (raw === '0') return false;
+  } catch { /* noop */ }
+  return fallback;
+}
+
+function readPct(key: string, fallback: number): number {
+  try {
+    const n = Number(localStorage.getItem(key));
+    if (Number.isFinite(n) && n >= 30 && n <= 70) return n;
+  } catch { /* noop */ }
+  return fallback;
+}
 
 const STORAGE_KEY = 'zeroclaw-chat-workspace-v3';
 export const DEFAULT_FOLDER_ID = 'default';
@@ -137,6 +160,10 @@ export default function ChatWorkspace({ initialAlias }: ChatWorkspaceProps) {
     return findSessionByAgent(sessions, initialAlias)?.id ?? makeSessionId(initialAlias, '__default__');
   });
   const [activeFolderId, setActiveFolderId] = useState<string>(DEFAULT_FOLDER_ID);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readBool(SIDEBAR_COLLAPSED_KEY, false));
+  const [rightCollapsed, setRightCollapsed] = useState(() => readBool(RIGHT_COLLAPSED_KEY, false));
+  const [rightPct, setRightPct] = useState(() => readPct(RIGHT_PCT_KEY, 55));
+  const splitRef = useRef<HTMLDivElement>(null);
 
   const activeSession = useMemo(
     () => sessions.find((s) => s.id === activeSessionId),
@@ -218,8 +245,13 @@ export default function ChatWorkspace({ initialAlias }: ChatWorkspaceProps) {
   }, [folders, sessions, activeSessionId]);
 
   useEffect(() => {
-    const target = `${basePath}/agent/${activeAlias}`;
-    if (window.location.pathname !== target) {
+    const path = window.location.pathname;
+    const workbenchRoot = `${basePath}/workbench`;
+    const onWorkbench = path === workbenchRoot || path.startsWith(`${workbenchRoot}/`);
+    const target = onWorkbench
+      ? `${workbenchRoot}/${encodeURIComponent(activeAlias)}`
+      : `${basePath}/agent/${encodeURIComponent(activeAlias)}`;
+    if (path !== target) {
       try { window.history.replaceState(window.history.state, '', target); } catch { /* noop */ }
     }
   }, [activeAlias]);
@@ -269,13 +301,66 @@ export default function ChatWorkspace({ initialAlias }: ChatWorkspaceProps) {
     setActiveFolderId(folder.id);
   }, []);
 
+  const toggleSidebar = useCallback(() => {
+    setSidebarCollapsed((v) => {
+      const next = !v;
+      try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, next ? '1' : '0'); } catch { /* noop */ }
+      return next;
+    });
+  }, []);
+
+  const toggleRight = useCallback(() => {
+    setRightCollapsed((v) => {
+      const next = !v;
+      try { localStorage.setItem(RIGHT_COLLAPSED_KEY, next ? '1' : '0'); } catch { /* noop */ }
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (!(e.shiftKey && (e.metaKey || e.ctrlKey) && (e.key === 'o' || e.key === 'O'))) return;
+      e.preventDefault();
+      newSession();
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [newSession]);
+
+  function onSplitPointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    const root = splitRef.current;
+    if (!root) return;
+    e.preventDefault();
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    const onMove = (ev: PointerEvent) => {
+      const rect = root.getBoundingClientRect();
+      if (rect.width <= 0) return;
+      const pct = ((rect.right - ev.clientX) / rect.width) * 100;
+      const next = Math.min(70, Math.max(30, pct));
+      setRightPct(next);
+    };
+    const onUp = (ev: PointerEvent) => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      try { (ev.target as HTMLElement).releasePointerCapture?.(ev.pointerId); } catch { /* noop */ }
+      try { localStorage.setItem(RIGHT_PCT_KEY, String(rightPctRef.current)); } catch { /* noop */ }
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }
+
+  const rightPctRef = useRef(rightPct);
+  useEffect(() => { rightPctRef.current = rightPct; }, [rightPct]);
+
   return (
-    <div translate="no" className="notranslate flex flex-1 h-full min-h-0 overflow-hidden">
+    <div translate="no" className="notranslate flex flex-1 h-full min-h-0 overflow-hidden bg-pc-base">
       <WorkbenchSidebar
         folders={folders}
         sessions={sessions}
         activeSessionId={activeSessionId}
         indicators={indicators}
+        collapsed={sidebarCollapsed}
+        onToggleCollapsed={toggleSidebar}
         onNewSession={newSession}
         onSelect={selectSession}
         onClose={closeSession}
@@ -283,7 +368,7 @@ export default function ChatWorkspace({ initialAlias }: ChatWorkspaceProps) {
         onSelectFolder={setActiveFolderId}
       />
 
-      <div className="flex flex-1 min-w-0 min-h-0">
+      <div ref={splitRef} className="flex flex-1 min-w-0 min-h-0 bg-pc-surface">
         {sessions.map((session) => {
           const visible = session.id === activeSessionId;
           return (
@@ -299,12 +384,39 @@ export default function ChatWorkspace({ initialAlias }: ChatWorkspaceProps) {
                 agentAlias={session.agentAlias}
                 taskId={session.taskId === '__default__' ? undefined : session.taskId}
               >
-                <div className="flex flex-1 min-w-0 min-h-0">
-                  <div className="flex flex-col flex-1 min-w-0 min-h-0">
-                    <AgentChatInner agentAlias={session.agentAlias} onStatus={onStatusFor(session.id)} />
-                  </div>
-                  <ResultsPanel />
+                <div
+                  className="flex flex-col min-h-0 min-w-0 overflow-hidden bg-pc-surface"
+                  style={{ flex: rightCollapsed ? '1 1 100%' : `${100 - rightPct} 1 0` }}
+                >
+                  <AgentChatInner
+                    agentAlias={session.agentAlias}
+                    sessionTitle={session.title}
+                    onStatus={onStatusFor(session.id)}
+                    rightPanelCollapsed={rightCollapsed}
+                    onToggleRightPanel={toggleRight}
+                  />
                 </div>
+                {!rightCollapsed && (
+                  <>
+                    <div
+                      role="separator"
+                      aria-orientation="vertical"
+                      aria-label={t('workbench.resize_panels')}
+                      onPointerDown={onSplitPointerDown}
+                      className="group relative z-20 flex w-px shrink-0 cursor-col-resize items-center justify-center bg-pc-border hover:bg-pc-accent/40 after:absolute after:inset-y-0 after:left-1/2 after:w-3 after:-translate-x-1/2"
+                    >
+                      <div className="z-10 flex h-4 w-3 items-center justify-center rounded-sm border border-pc-border bg-pc-elevated opacity-0 group-hover:opacity-100">
+                        <GripVertical className="size-2.5 text-pc-text-muted" />
+                      </div>
+                    </div>
+                    <div
+                      className="flex min-h-0 min-w-[16rem] overflow-hidden"
+                      style={{ flex: `${rightPct} 1 0` }}
+                    >
+                      <ResultsPanel />
+                    </div>
+                  </>
+                )}
               </AgentProvider>
             </div>
           );

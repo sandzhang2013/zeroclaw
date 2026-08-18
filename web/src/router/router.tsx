@@ -22,6 +22,7 @@ import {
   SopView,
   SopsList,
   Tools,
+  WorkbenchPage,
 } from './lazyPages';
 
 function RouteFallback() {
@@ -38,6 +39,8 @@ function RouteFallback() {
 export const Router = () => (
   <Suspense fallback={<RouteFallback />}>
     <Routes>
+      <Route path="/workbench" element={<WorkbenchPage />} />
+      <Route path="/workbench/:alias" element={<WorkbenchPage />} />
       <Route element={<Layout />}>
         <Route path="/" element={<Dashboard />} />
         <Route path="/agent" element={<Navigate to="/agents" replace />} />

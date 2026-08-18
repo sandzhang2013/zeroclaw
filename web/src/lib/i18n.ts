@@ -145,7 +145,9 @@ const translations: Record<Locale, Record<string, string>> = {
     // Workbench
     'workbench.sidebar_label': '会话',
     'workbench.new_session': '新建会话',
+    'workbench.new_task': '新建任务',
     'workbench.folders': '工作区',
+    'workbench.all_tasks': '全部任务',
     'workbench.new_folder': '新建工作区',
     'workbench.folder_default': '默认',
     'workbench.folder_name_placeholder': '工作区名称',
@@ -154,7 +156,16 @@ const translations: Record<Locale, Record<string, string>> = {
     'workbench.default_session': '新会话',
     'workbench.results': '结果',
     'workbench.results_empty': '本会话还没有工具或脚本产出。',
+    'workbench.results_empty_title': '暂无产出',
+    'workbench.results_creating': '正在生成…',
     'workbench.results_running': '执行中…',
+    'workbench.page_title': '工作台',
+    'workbench.brand': 'ZeroClaw',
+    'workbench.collapse_sidebar': '收起侧栏',
+    'workbench.expand_sidebar': '展开侧栏',
+    'workbench.collapse_right': '收起结果栏',
+    'workbench.expand_right': '展开结果栏',
+    'workbench.resize_panels': '调整栏宽',
 
     // Tools
     'tools.title': '可用工具',
@@ -1383,7 +1394,9 @@ const translations: Record<Locale, Record<string, string>> = {
     // Workbench (left sidebar + conversation + results)
     'workbench.sidebar_label': 'Sessions',
     'workbench.new_session': 'New session',
+    'workbench.new_task': 'New task',
     'workbench.folders': 'Workspaces',
+    'workbench.all_tasks': 'All tasks',
     'workbench.new_folder': 'New workspace',
     'workbench.folder_default': 'Default',
     'workbench.folder_name_placeholder': 'Workspace name',
@@ -1392,7 +1405,16 @@ const translations: Record<Locale, Record<string, string>> = {
     'workbench.default_session': 'New session',
     'workbench.results': 'Results',
     'workbench.results_empty': 'No tool or script output in this session yet.',
+    'workbench.results_empty_title': 'No artifacts yet',
+    'workbench.results_creating': 'Creating…',
     'workbench.results_running': 'Running…',
+    'workbench.page_title': 'Workbench',
+    'workbench.brand': 'ZeroClaw',
+    'workbench.collapse_sidebar': 'Collapse sidebar',
+    'workbench.expand_sidebar': 'Expand sidebar',
+    'workbench.collapse_right': 'Collapse results',
+    'workbench.expand_right': 'Expand results',
+    'workbench.resize_panels': 'Resize panels',
 
     // ACP Console
     'acp.title': 'ACP Console',
