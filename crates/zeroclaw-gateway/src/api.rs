@@ -3382,11 +3382,24 @@ pub(crate) mod tests {
     }
 
     fn bff_headers(user: &str, role: &str) -> HeaderMap {
+        bff_identity(user, role, None)
+    }
+
+    fn bff_identity(user: &str, role: &str, region: Option<&str>) -> HeaderMap {
         use axum::http::HeaderValue;
         let mut h = HeaderMap::new();
         h.insert("x-auth-secret", HeaderValue::from_static("s3cret"));
         h.insert("x-user-id", HeaderValue::from_str(user).unwrap());
-        h.insert("x-user-role", HeaderValue::from_str(role).unwrap());
+        h.insert(
+            "x-user-role",
+            HeaderValue::from_bytes(role.as_bytes()).unwrap(),
+        );
+        if let Some(region) = region {
+            h.insert(
+                "x-user-region",
+                HeaderValue::from_bytes(region.as_bytes()).unwrap(),
+            );
+        }
         h
     }
 
@@ -3491,6 +3504,87 @@ pub(crate) mod tests {
         .await
         .into_response();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn simulates_advanced_user_and_wuhan_city_user() {
+        use crate::api_skills::{PersonalSkillBody, handle_save_personal_skill};
+        use zeroclaw_config::schema::AliasedAgentConfig;
+        use zeroclaw_runtime::skills::SkillFrontmatter;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut config = trusted_proxy_config(&tmp);
+        config
+            .agents
+            .insert("web".into(), AliasedAgentConfig::default());
+        let backend = Arc::new(
+            zeroclaw_infra::session_sqlite::SqliteSessionBackend::new(tmp.path()).unwrap(),
+        );
+        backend
+            .append("gw_adv-s", &zeroclaw_providers::ChatMessage::user("hq"))
+            .unwrap();
+        backend
+            .append("gw_wh-s", &zeroclaw_providers::ChatMessage::user("wuhan"))
+            .unwrap();
+        backend.set_session_agent_alias("gw_adv-s", "web").unwrap();
+        backend.set_session_agent_alias("gw_wh-s", "web").unwrap();
+        backend.set_session_user_id("gw_adv-s", "adv-1").unwrap();
+        backend.set_session_user_id("gw_wh-s", "wh-1").unwrap();
+        let state = test_state_with_session_backend(config, backend);
+
+        let advanced = bff_identity("adv-1", "高级用户", None);
+        let wuhan = bff_identity("wh-1", "普通用户", Some("武汉"));
+
+        let listed = handle_api_sessions_list(State(state.clone()), wuhan.clone())
+            .await
+            .into_response();
+        assert_eq!(listed.status(), StatusCode::OK);
+        let json = response_json(listed).await;
+        let sessions = json["sessions"].as_array().unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0]["session_id"], "wh-s");
+
+        let peek = handle_api_session_messages(
+            State(state.clone()),
+            wuhan.clone(),
+            Path("adv-s".to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(peek.status(), StatusCode::NOT_FOUND);
+
+        let flu_skill = || PersonalSkillBody {
+            agent: "web".into(),
+            name: "flu-weekly".into(),
+            frontmatter: SkillFrontmatter {
+                name: "flu-weekly".into(),
+                description: "weekly flu".into(),
+                ..Default::default()
+            },
+            body: "# flu".into(),
+        };
+        let denied =
+            handle_save_personal_skill(State(state.clone()), wuhan, Json(flu_skill())).await;
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+
+        let saved =
+            handle_save_personal_skill(State(state.clone()), advanced, Json(flu_skill())).await;
+        assert_eq!(saved.status(), StatusCode::CREATED);
+        let cfg = state.config.read();
+        assert!(
+            cfg.user_workspace_dir("adv-1", "web")
+                .join("skills/flu-weekly/SKILL.md")
+                .exists()
+        );
+        assert!(
+            !cfg.user_workspace_dir("wh-1", "web")
+                .join("skills/flu-weekly/SKILL.md")
+                .exists()
+        );
+        assert_ne!(
+            cfg.user_workspace_dir("adv-1", "web"),
+            cfg.user_workspace_dir("wh-1", "web")
+        );
     }
 
     #[tokio::test]

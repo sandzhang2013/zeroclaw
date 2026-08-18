@@ -140,7 +140,7 @@ mod tests {
     use super::*;
     use crate::api::test_state;
     use axum::http::{HeaderName, HeaderValue};
-    use zeroclaw_api::ROLE_NORMAL;
+    use zeroclaw_api::{ROLE_ADVANCED, ROLE_NORMAL};
 
     fn bff_state(secret: &str) -> AppState {
         let mut config = zeroclaw_config::schema::Config::default();
@@ -244,5 +244,36 @@ mod tests {
             ]),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn simulates_advanced_user_and_wuhan_city_user() {
+        let state = bff_state("s3cret");
+        let (_, advanced) = require_trusted_proxy(
+            &state,
+            &headers(&[
+                (HEADER_AUTH_SECRET, "s3cret"),
+                (HEADER_USER_ID, "adv-1"),
+                (HEADER_USER_ROLE, ROLE_ADVANCED),
+            ]),
+        )
+        .unwrap();
+        assert!(advanced.is_advanced());
+        assert!(advanced.region.is_none());
+
+        let (_, wuhan) = require_trusted_proxy(
+            &state,
+            &headers(&[
+                (HEADER_AUTH_SECRET, "s3cret"),
+                (HEADER_USER_ID, "wh-1"),
+                (HEADER_USER_ROLE, ROLE_NORMAL),
+                (HEADER_USER_REGION, "武汉"),
+            ]),
+        )
+        .unwrap();
+        assert!(!wuhan.is_advanced());
+        assert_eq!(wuhan.region.as_deref(), Some("武汉"));
+        assert_ne!(advanced.user_id, wuhan.user_id);
+        assert_eq!(wuhan.transport_json()["region"], "武汉");
     }
 }

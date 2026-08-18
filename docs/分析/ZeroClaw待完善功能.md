@@ -27,45 +27,31 @@
 
 ---
 
-## 多用户隔离
+## 多用户隔离（嵌入场景，已落地）
 
-### 会话列表按用户过滤
+身份来自平台 BFF 头 + `X-Auth-Secret`，冻在连接上；**禁止** query / body / 模型 args 自报身份，**禁止** 前端拼 `{user_id}:...` 进 `session_id`（`session_id` 为 UUID）。细则见 `ZeroClaw多用户隔离实施方案.md`。
 
-- **现状**：`GET /api/sessions` 返回所有可归属的会话（按 `agent_alias` 或 `channel_id` 过滤孤儿行），不做用户级过滤。`SessionMetadata`（`crates/zeroclaw-infra/src/session_backend.rs`）没有 `user_id` 字段。
-- **已有基础**：
-  - `Principal`（`crates/zeroclaw-api/src/principal.rs`）已定义完整的用户身份模型：`user_id`、`roles`、`scopes`、`auth_method`、`allowed_aliases`。
-  - 外部打开 ZeroClaw 时会传入用户 ID 和用户信息（通过 OIDC/SSH Key/Peercred 等方式认证，产生 `Principal`）。
-  - 前端 `Web前端多任务面板设计.md` 已规划 session_id 编码方案：`{user_id}:{agent_alias}:{task_id}:{uuid}`。
-- **待改**：
-  - `SessionMetadata` 加 `user_id: Option<String>` 字段
-  - `session_sqlite.rs` 的 sessions 表加 `user_id` 列 + 索引
-  - WS 握手时从 `Principal.user_id` 提取并写入 session
-  - `GET /api/sessions` 按当前用户的 `user_id` 过滤
-  - 前端 `Session` 类型（`web/src/types/api.ts`）加 `user_id` 字段
+### 会话列表按用户过滤 — 已完成
 
-### 会话产物（Workspace）按会话隔离
+- `SessionMetadata.user_id`；SQLite `sessions.user_id` 列 + 索引；JSONL sidecar。
+- 用户面 `GET /api/sessions` 按冻结身份过滤，非主人 404。
+- trait 用默认方法 `set_session_user_id` / `list_sessions_for_user`，未改 4 个 required 签名。生产 SQLite / JSONL 已覆盖。
 
-- **现状**：同一 Agent 的所有会话共享同一个 workspace 目录（`agents/<alias>/workspace/`）。`GET /ws/chat` 支持通过 `cwd`/`workspace_dir` 参数覆盖，但前端未使用。
-- **目标**：每个会话只看到自己相关的文件产物。
-- **方案**：
-  - `resolve_ws_session_cwd()` 接受 session-scoped 路径，当 session 非默认任务时自动派生子目录，如 `agents/<alias>/workspace/sessions/<sanitized_session_key>/`
-  - 前端 `ChatWorkspace` 的 task 标签页在创建 WebSocket 时传入对应的 `cwd`
-  - `AgentWorkspaceExplorer`（文件浏览器）按会话 cwd 展示，而非固定展示 agent workspace 根目录
+### 工作区按用户隔离 — 已完成（按用户，不按会话子目录）
 
-### 记忆（Memory）按用户隔离
+- 服务端计算 `users/<user_id>/agents/<alias>/workspace/`，拒绝前缀外 cwd。
+- 前端 **不** 传 `cwd` / 不拼 user_id。旧方案「`workspace/sessions/<session_key>/` + 前端传入 cwd」已作废。
 
-- **现状**：所有会话、所有配对设备共享同一 Agent 的记忆（SQLite `brain.db`、向量检索）。
-- **待改**：
-  - `memory` 表加 `user_id` 列
-  - 所有 recall/store/consolidation 查询加 `WHERE user_id = ?`
-  - 向量检索按 `user_id` 过滤
-  - `AgentWorkspaceConfig.read_memory_from`（跨 Agent 记忆读取）需加来源用户校验
+### 记忆按用户隔离 — SQLite 已完成
 
-### 安全策略按用户区分
+- `TenantScopedMemory` 每调用读 `TOOL_LOOP_USER_ATTRS`；列 `tenant_id`；unique 为 `(agent_id, ifnull(tenant_id,''), key)`。
+- 同 agent 同 key 跨用户各写一行；get / forget 只动当前用户。
+- **已知限制：** Markdown 记忆工厂未包 wrapper（需求指定 SQLite，默认路径不触发）。
 
-- **现状**：`risk_profiles` 是全局定义，`allowed_commands`、`forbidden_paths`、自主级别等是 per-agent 的。
-- **待改**：多用户场景下需决定安全策略维度 — `risk_profile` 是管理员统一定义还是允许用户自定义？哪些配置可下放给用户？
+### 安全策略按用户区分 — 不做
+
+- `risk_profiles` 仍是全局 / per-agent。嵌入方案明确不做 per-user 安全策略覆盖。
 
 ---
 
-> 记录日期：2026-08-08，更新于 2026-08-10
+> 记录日期：2026-08-08，更新于 2026-08-14

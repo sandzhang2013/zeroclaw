@@ -30,6 +30,15 @@ fn acquire_sqlite_startup_lock() -> MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// Capture tenant before `spawn_blocking`: task-locals do not follow.
+///
+/// - `None` — never scoped; no tenant predicate.
+/// - `Some(None)` — empty scope; fail closed.
+/// - `Some(Some(id))` — freeze this tenant.
+fn memory_query_tenant() -> Option<Option<String>> {
+    zeroclaw_api::current_user_attrs().map(|attrs| attrs.map(|a| a.user_id))
+}
+
 #[derive(Clone)]
 pub struct SqliteMemory {
     alias: String,
@@ -78,6 +87,7 @@ impl SqliteMemory {
         Self::init_schema(&conn)?;
         zeroclaw_config::schema::v2::migrate_sqlite_memory_to_v3(&db_path, &conn)?;
         Self::init_schema(&conn)?;
+        zeroclaw_config::schema::v2::migrate_sqlite_memory_tenant_unique(&db_path, &conn)?;
         Ok(Self {
             alias: alias.to_string(),
             conn: Arc::new(Mutex::new(conn)),
@@ -120,6 +130,7 @@ impl SqliteMemory {
         Self::init_schema(&conn)?;
         zeroclaw_config::schema::v2::migrate_sqlite_memory_to_v3(&db_path, &conn)?;
         Self::init_schema(&conn)?;
+        zeroclaw_config::schema::v2::migrate_sqlite_memory_tenant_unique(&db_path, &conn)?;
 
         Ok(Self {
             alias: alias.to_string(),
@@ -235,10 +246,10 @@ impl SqliteMemory {
 
         execute_batch_retry(
             conn,
-            "-- Core memories table. This is an intermediate shape; the V3
-            -- migration in `zeroclaw_config::schema::v2::migrate_sqlite_memory_to_v3`
-            -- rebuilds it with the `agent_id` column and a composite
-            -- `UNIQUE (agent_id, key)` constraint immediately after init.
+            "            -- Core memories table. This is an intermediate shape; V3 rebuilds
+            -- it with `agent_id` and `UNIQUE (agent_id, key)`, then
+            -- `migrate_sqlite_memory_tenant_unique` swaps that unique for
+            -- `(agent_id, ifnull(tenant_id, ''), key)`.
             CREATE TABLE IF NOT EXISTS memories (
                 id          TEXT PRIMARY KEY,
                 key         TEXT NOT NULL UNIQUE,
@@ -440,7 +451,7 @@ impl SqliteMemory {
                     COALESCE(?11, (SELECT id FROM agents WHERE alias = 'default' LIMIT 1)),
                     ?12, ?13, ?14
                  )
-                 ON CONFLICT(agent_id, key) DO UPDATE SET
+                 ON CONFLICT(agent_id, ifnull(tenant_id, ''), key) DO UPDATE SET
                     content = excluded.content,
                     category = excluded.category,
                     embedding = excluded.embedding,
@@ -1511,6 +1522,11 @@ impl Memory for SqliteMemory {
     }
 
     async fn get(&self, key: &str) -> anyhow::Result<Option<MemoryEntry>> {
+        let tenant = match memory_query_tenant() {
+            Some(None) => return Ok(None),
+            Some(Some(id)) => Some(id),
+            None => None,
+        };
         let conn = self.conn.clone();
         let key = key.to_string();
 
@@ -1519,10 +1535,10 @@ impl Memory for SqliteMemory {
             let mut stmt = conn.prepare(
                 "SELECT m.id, m.key, m.content, m.category, m.created_at, m.session_id, m.namespace, m.importance, m.superseded_by, m.kind, m.pinned, a.alias, m.agent_id, m.tenant_id \
                  FROM memories m LEFT JOIN agents a ON a.id = m.agent_id \
-                 WHERE m.key = ?1",
+                 WHERE m.key = ?1 AND (?2 IS NULL OR m.tenant_id = ?2)",
             )?;
 
-            let mut rows = stmt.query_map(params![key], |row| {
+            let mut rows = stmt.query_map(params![key, tenant], |row| {
                 Ok(MemoryEntry {
                     id: row.get(0)?,
                     key: row.get(1)?,
@@ -1555,6 +1571,11 @@ impl Memory for SqliteMemory {
         key: &str,
         agent_id: &str,
     ) -> anyhow::Result<Option<MemoryEntry>> {
+        let tenant = match memory_query_tenant() {
+            Some(None) => return Ok(None),
+            Some(Some(id)) => Some(id),
+            None => None,
+        };
         let conn = self.conn.clone();
         let key = key.to_string();
         let agent_id = agent_id.to_string();
@@ -1564,10 +1585,10 @@ impl Memory for SqliteMemory {
             let mut stmt = conn.prepare(
                 "SELECT m.id, m.key, m.content, m.category, m.created_at, m.session_id, m.namespace, m.importance, m.superseded_by, m.kind, m.pinned, a.alias, m.agent_id, m.tenant_id \
                  FROM memories m LEFT JOIN agents a ON a.id = m.agent_id \
-                 WHERE m.key = ?1 AND m.agent_id = ?2",
+                 WHERE m.key = ?1 AND m.agent_id = ?2 AND (?3 IS NULL OR m.tenant_id = ?3)",
             )?;
 
-            let mut rows = stmt.query_map(params![key, agent_id], |row| {
+            let mut rows = stmt.query_map(params![key, agent_id, tenant], |row| {
                 Ok(MemoryEntry {
                     id: row.get(0)?,
                     key: row.get(1)?,
@@ -1670,18 +1691,31 @@ impl Memory for SqliteMemory {
     }
 
     async fn forget(&self, key: &str) -> anyhow::Result<bool> {
+        let tenant = match memory_query_tenant() {
+            Some(None) => return Ok(false),
+            Some(Some(id)) => Some(id),
+            None => None,
+        };
         let conn = self.conn.clone();
         let key = key.to_string();
 
         tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
             let conn = conn.lock();
-            let affected = conn.execute("DELETE FROM memories WHERE key = ?1", params![key])?;
+            let affected = conn.execute(
+                "DELETE FROM memories WHERE key = ?1 AND (?2 IS NULL OR tenant_id = ?2)",
+                params![key, tenant],
+            )?;
             Ok(affected > 0)
         })
         .await?
     }
 
     async fn forget_for_agent(&self, key: &str, agent_id: &str) -> anyhow::Result<bool> {
+        let tenant = match memory_query_tenant() {
+            Some(None) => return Ok(false),
+            Some(Some(id)) => Some(id),
+            None => None,
+        };
         let conn = self.conn.clone();
         let key = key.to_string();
         let agent_id = agent_id.to_string();
@@ -1689,8 +1723,8 @@ impl Memory for SqliteMemory {
         tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
             let conn = conn.lock();
             let affected = conn.execute(
-                "DELETE FROM memories WHERE key = ?1 AND agent_id = ?2",
-                params![key, agent_id],
+                "DELETE FROM memories WHERE key = ?1 AND agent_id = ?2 AND (?3 IS NULL OR tenant_id = ?3)",
+                params![key, agent_id, tenant],
             )?;
             Ok(affected > 0)
         })
@@ -2286,6 +2320,51 @@ mod tests {
         let entry = mem.get("pref").await.unwrap().unwrap();
         assert_eq!(entry.content, "loves Rust");
         assert_eq!(mem.count().await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn sqlite_store_same_key_does_not_clobber_other_tenant() {
+        let (_tmp, mem) = temp_sqlite();
+        mem.store_with_options(
+            "prefs",
+            "alice-prefs",
+            MemoryCategory::Core,
+            None,
+            StoreOptions::default().with_tenant_id("alice"),
+        )
+        .await
+        .unwrap();
+        mem.store_with_options(
+            "prefs",
+            "bob-prefs",
+            MemoryCategory::Core,
+            None,
+            StoreOptions::default().with_tenant_id("bob"),
+        )
+        .await
+        .unwrap();
+        mem.store_with_options(
+            "prefs",
+            "alice-prefs-updated",
+            MemoryCategory::Core,
+            None,
+            StoreOptions::default().with_tenant_id("alice"),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(mem.count().await.unwrap(), 2);
+        let exported = mem.export(&ExportFilter::default()).await.unwrap();
+        let alice = exported
+            .iter()
+            .find(|e| e.tenant_id.as_deref() == Some("alice"))
+            .expect("alice row");
+        let bob = exported
+            .iter()
+            .find(|e| e.tenant_id.as_deref() == Some("bob"))
+            .expect("bob row");
+        assert_eq!(alice.content, "alice-prefs-updated");
+        assert_eq!(bob.content, "bob-prefs");
     }
 
     #[tokio::test]

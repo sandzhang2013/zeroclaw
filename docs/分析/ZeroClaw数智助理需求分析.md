@@ -270,16 +270,16 @@ ZeroClaw 已有执行器可参考：`shell`（`zeroclaw-runtime`）、`coding_cl
 不改动认证系统后，实际改动收敛为：
 
 ```
-gateway/ws.rs          ← 校验 BFF secret + 身份头，Principal 冻在 WS session
-gateway/api.rs         ← 用户面 API 走 require_trusted_proxy（pairing 留给运维面）
-runtime/agent/loop_.rs ← 每 turn 从连接身份 scope TOOL_LOOP_USER_ATTRS
-infra/session_backend.rs ← trait 加 user_id 参数
-infra/session_sqlite.rs  ← SQL 加 WHERE user_id = ?
-config/schema.rs       ← user_workspace_dir() 新方法
-memory/agent_scoped.rs ← 模板（TenantScopedMemory 照抄）
-部署/镜像              ← 预装 python3/R 及科学计算包；shell 允许这两条命令
-runtime/skills         ← 每 turn 额外加载用户 cwd 下 skills/；禁止用户写入共享 Skill 库
-平台前端               ← 工作台（全员）+ 管理页（仅运维）；不发 ZeroClaw Dashboard 整站
+gateway/ws.rs            ← 校验 BFF secret + 身份头，Principal 冻在 WS session
+gateway/api.rs           ← 用户面 API 走 require_trusted_proxy（pairing 留给运维面）
+runtime/agent/loop_.rs   ← 每 turn 从连接身份 scope TOOL_LOOP_USER_ATTRS
+infra/session_backend.rs ← 默认方法 set_session_user_id / list_sessions_for_user（未改 required 签名）
+infra/session_sqlite.rs  ← SQL 加 user_id 列 + WHERE user_id = ?
+config/schema.rs         ← user_workspace_dir() 新方法
+memory/tenant_scoped.rs  ← TenantScopedMemory；SQLite unique (agent_id, ifnull(tenant_id,''), key)
+部署/镜像                ← 预装 python3/R 及科学计算包；shell 允许这两条命令（仓外）
+runtime/skills           ← 每 turn 额外加载用户 cwd 下 skills/；禁止用户写入共享 Skill 库
+平台前端                 ← 工作台（全员）+ 管理页（仅运维）；不发 ZeroClaw Dashboard 整站（仓外）
 ```
 
 ## MCP — 外部数据主通道
@@ -293,46 +293,46 @@ MCP 是 per-agent 的（通过 `mcp_bundles` 配置授予），服务器全局�
   → 工具前缀 {server}__{tool} → McpToolWrapper → execute()
 ```
 
-### 关键发现：MCP 调用不传用户上下文
+### 当时发现：MCP 调用签名不带用户
 
-`McpRegistry::call_tool()`（`mcp_client.rs:1157`）签名里没有 `session_key`、`agent_alias`、`user_id` 任何身份参数。MCP 服务端无法知道是谁在调用。
+`McpRegistry::call_tool()` 签名里没有 `session_key`、`agent_alias`、`user_id`。身份不能走这条签名，也不能从模型可见的 tool args 里「补」。
 
-**需求确认：** MCP 需要区分用户的角色、地区、机构等属性来做数据隔离。
+**需求确认：** MCP 需要区分用户的角色、地区、机构等属性来做数据隔离。数据 `WHERE` 在 MCP 服务端（仓外）；ZeroClaw 只把连接上已冻结的身份盖到传输层。
 
 ### 工具执行上下文的现有机制
 
-ZeroClaw 工具不通过 `execute()` 签名传上下文，而是用 **Tokio task-local storage**（`zeroclaw-api/src/lib.rs:25-41`）：
+ZeroClaw 工具不通过 `execute()` 签名传上下文，而是用 **Tokio task-local storage**：
 
 ```rust
 tokio::task_local! {
-    pub static TOOL_LOOP_SESSION_KEY: Option<String>;  // 当前 turn 的 session key
+    pub static TOOL_LOOP_SESSION_KEY: Option<String>;
+    pub static TOOL_LOOP_USER_ATTRS: Option<UserAttrs>;
     // ...
 }
 ```
 
-`shell.rs` 工具就是通过 `TOOL_LOOP_SESSION_KEY.try_with(...)` 读取 session key 并在执行命令时注入环境变量。这是**已验证的模式**。
+`shell.rs` 通过 `TOOL_LOOP_SESSION_KEY.try_with(...)` 读 session key。身份用同一模式：`TOOL_LOOP_USER_ATTRS`。
 
-还有第二个注入路径：**args 注入**。在 `call_prep.rs:88-155`，`run_tool_call_loop` 在调用 `tool.execute()` 之前会向 args JSON 注入运行时字段（`approved` 布尔值、channel delivery defaults）。任何工具都能从 args 中读取这些字段。
+`call_prep` 会向即将 `execute()` 的 args 注入 `approved` 等运行时字段。**不要**把 `user_id` / `region` / `role` / `_zeroclaw_user` 走这条路：那些字段会进会话历史，下一轮可被模型伪造。
 
-### MCP 用户上下文注入方案
+### MCP 用户上下文：只走传输层（现行）
 
-**采用 task-local + args 注入组合：**
+**禁止** 合并到模型可见 args JSON，也 **禁止** 在 `call_prep` 里注入身份。
 
 ```
-1. 新增 TOOL_LOOP_USER_ATTRS task-local
-   ├─ 结构: UserAttrs { user_id, role, region, organization }
-   └─ 位置: zeroclaw-api/src/lib.rs
+1. TOOL_LOOP_USER_ATTRS task-local
+   └─ UserAttrs { user_id, role, region, organization }
 
 2. Gateway 把 UserAttrs 冻在 WS session；每个 turn 再 scope 到 task-local
-   └─ 身份只来自已通过 secret 校验的 BFF 头，不从 query 读
+   └─ 身份只来自已通过 secret 校验的 BFF 头，不从 query / body / 模型 args 读
 
-3. McpToolWrapper::execute() 中读取并注入
-   ├─ 方式 A: 从 TOOL_LOOP_USER_ATTRS 读取，合并到 args JSON
-   └─ 方式 B: 在 call_prep.rs 中统一注入到所有 MCP 工具 args
+3. McpToolWrapper::execute()
+   ├─ 读 TOOL_LOOP_USER_ATTRS；缺失 → 该 MCP 调用失败关闭
+   └─ strip_identity_args：丢掉模型带来的身份键，历史只留业务 args
 
-4. MCP transport 层透传
-   ├─ HTTP/SSE: 添加 X-User-Id, X-User-Role, X-User-Region, X-User-Org headers
-   └─ Stdio: 注入到 JSON-RPC params._zeroclaw_user 中
+4. MCP transport 层盖章（模型看不见）
+   ├─ HTTP/SSE: X-User-Id / X-User-Role / X-User-Region / X-User-Org
+   └─ Stdio: JSON-RPC params._zeroclaw_user（与 arguments 并列，不回写历史）
 ```
 
 **数据流：**
@@ -341,12 +341,12 @@ tokio::task_local! {
 平台 BFF → X-User-Id / Role / Region / Org + X-Auth-Secret
   → Gateway 校验 secret，冻在连接上
   → 每 turn scope TOOL_LOOP_USER_ATTRS
-  → McpToolWrapper 读取
-  → MCP HTTP header / stdio 内部字段（覆盖模型带来的同名身份）
-  → MCP 服务端收到网关保证的用户上下文
+  → McpToolWrapper 读取并剥离模型身份键
+  → MCP HTTP 头 / stdio 内部字段
+  → MCP 服务端：无头失败关闭；有头则 WHERE region = …
 ```
 
-**为什么不需要改 Tool trait：** args 是 `serde_json::Value`，任意字段都可以注入。MCP 服务端的 tool schema 中 `_zeroclaw_user` 字段即使不在 schema 里也能传（大多数 MCP SDK 会忽略未知字段）。或者 MCP 服务端主动声明接受这些字段。
+**为什么不改 Tool trait：** 身份不进 `execute()` 的 args。task-local 给内部读；传输层给 MCP 服务端。`_zeroclaw_user` 只存在 stdio 信封上，大多数 MCP SDK 会忽略未知 params 字段。
 
 ### Python/R 数据流
 
@@ -367,7 +367,7 @@ tokio::task_local! {
 之前的三份文档仍然有效，但需要调整的部分：
 
 - **风险评估**：去掉"安全模型重构"（无 per-user 安全策略需求）、"数据迁移"（无旧数据）；新增 MCP 用户上下文评估
-- **实施方案**：第 1 步 BFF 担保；第 5 步 MCP 传输层盖章；第 6 步脚本 = 环境 + shell + 沙箱；第 8 步个人技能；**第 9 步平台工作台**（三栏，不用前端拼 user_id）
+- **实施方案**：第 1 步 BFF 担保；第 5 步 MCP **只走传输层**（不把身份合并进模型可见 args）；第 6 步脚本 = 环境 + shell + 沙箱；第 8 步个人技能；**第 9 步平台工作台**（三栏，不用前端拼 user_id）
 - **变更记录**：去掉认证系统相关条目；新增工具条目；新增 MCP 条目（如需要）
 - **测试用例设计**：已按 BFF 担保、入口角色闸门、会话/目录/记忆、MCP 盖章、Python/R 沙箱、高级用户/运维技能补齐
 - **Web 页面**：本节为产品清单；工作台 = 左侧边栏（新建会话 / 工作区 / 会话）+ 中间对话区 + 右侧结果区；UI 细节见聊天界面设计参考；不用 ZeroClaw `web/` 整站、不用前端拼 user_id

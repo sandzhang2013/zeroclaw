@@ -358,6 +358,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn same_key_is_independent_per_tenant() {
+        let (_tmp, mem) = fresh();
+        TOOL_LOOP_USER_ATTRS
+            .scope(Some(UserAttrs::new("alice")), async {
+                mem.store("prefs", "alice-prefs", MemoryCategory::Core, None)
+                    .await
+                    .unwrap();
+            })
+            .await;
+        TOOL_LOOP_USER_ATTRS
+            .scope(Some(UserAttrs::new("bob")), async {
+                mem.store("prefs", "bob-prefs", MemoryCategory::Core, None)
+                    .await
+                    .unwrap();
+                let entry = mem.get("prefs").await.unwrap().expect("bob sees own prefs");
+                assert_eq!(entry.content, "bob-prefs");
+                assert_eq!(entry.tenant_id.as_deref(), Some("bob"));
+            })
+            .await;
+        TOOL_LOOP_USER_ATTRS
+            .scope(Some(UserAttrs::new("alice")), async {
+                let entry = mem
+                    .get("prefs")
+                    .await
+                    .unwrap()
+                    .expect("alice sees own prefs");
+                assert_eq!(entry.content, "alice-prefs");
+                assert!(mem.forget("prefs").await.unwrap());
+                assert!(mem.get("prefs").await.unwrap().is_none());
+            })
+            .await;
+        TOOL_LOOP_USER_ATTRS
+            .scope(Some(UserAttrs::new("bob")), async {
+                let entry = mem
+                    .get("prefs")
+                    .await
+                    .unwrap()
+                    .expect("bob prefs survive alice forget");
+                assert_eq!(entry.content, "bob-prefs");
+            })
+            .await;
+    }
+
+    #[tokio::test]
     async fn tenant_scoped_memory_rejects_foreign_writes() {
         let (_tmp, mem) = fresh();
         TOOL_LOOP_USER_ATTRS

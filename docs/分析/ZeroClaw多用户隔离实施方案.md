@@ -458,7 +458,7 @@ test_frontend_cannot_select_other_user_by_session_id
 | 步骤 | 模块 | 改动量 | 保障机制 |
 |------|------|--------|----------|
 | 1 | 可信上游担保 Principal | **中** | secret 校验 + 连接冻结 + 拒绝 query 身份；测试覆盖伪造 |
-| 2 | 会话隔离 | **中偏小** | trait 参数编译期强制 + 隔离测试；user_id 只来自 Principal |
+| 2 | 会话隔离 | **中偏小** | SQLite/JSONL 实现按主人过滤；trait 用默认方法，未改 required 签名 |
 | 3 | 目录隔离 | **小** | 服务端计算用户 cwd 并校验前缀 |
 | 4 | 记忆隔离 | **小** | 每连接 `TenantScopedMemory` + 隔离测试 |
 | 5 | MCP 传输层盖身份章 | **中** | 头/内部字段 + 剥离模型身份 args + 缺身份失败关闭；数据 WHERE 在 MCP 服务端 |
@@ -466,6 +466,20 @@ test_frontend_cannot_select_other_user_by_session_id
 | 7 | 内网适配 | **极小** | 纯配置 |
 | 8 | 个人技能 | **中** | 用户 cwd `skills/`；新增仅高级用户；组织 Skill 仅全平台运维；同名组织优先 |
 | 9 | 平台工作台 | **中** | 两套路由；三栏工作台；隔离不靠前端拼 user_id |
+
+## 仓外（外部实现，本仓库不改）
+
+| 事项 | 谁做 | 合同 |
+|------|------|------|
+| 平台 BFF 代连 | 现有 Web 平台 | 从登录态带头 `X-User-Id` / `Role` / `Region` / `Org` + `X-Auth-Secret`；浏览器不直连 ZeroClaw |
+| 两套路由闸门 | 现有 Web 平台 | 工作台：所有登录用户；助手管理：仅运维。BFF 按角色 403 |
+| 业务 MCP `WHERE` | 业务 MCP 服务 | 无 `X-User-Region` 失败关闭，禁止返回全国数据；有头则按地区过滤 |
+| 内网镜像 | 部署 | DeepSeek/Qwen OpenAI compatible；预装 `python3` / `Rscript` 与科学计算包；禁止运行时 pip/CRAN |
+
+## 本仓已知限制（嵌入场景可接受）
+
+1. **Markdown 记忆工厂未包 `TenantScopedMemory`。** `create_memory_for_agent` 在 `backend = markdown` 时提前 return，读写的是 `agents/<alias>/workspace/`，不是用户目录。需求指定 SQLite，默认路径已隔离。若有人改成 markdown，同 agent 下用户会共享记忆文件。
+2. **会话 trait 用默认方法，不是编译期强制。** `set_session_user_id` 默认空操作；`list_sessions_for_user` 默认事后过滤。生产 SQLite / JSONL 已覆盖。新建 `SessionBackend` 若漏实现，盖章会静默丢掉，合并时要人工盯。
 
 ## 不做的事
 

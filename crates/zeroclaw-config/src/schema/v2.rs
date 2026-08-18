@@ -2801,8 +2801,22 @@ fn postgres_memory_schema_version() -> MigResult<i32> {
         .context("Postgres memory schema version exceeds INTEGER range")
 }
 
+/// Named unique index: `(agent_id, ifnull(tenant_id, ''), key)`.
+pub const SQLITE_MEMORIES_AGENT_TENANT_KEY_INDEX: &str = "idx_memories_agent_tenant_key";
+
+/// Stamped after the tenant-aware unique index lands. Distinct from
+/// [`SQLITE_MEMORY_SCHEMA_VERSION`] (V3 agent_id uniqueness) so Postgres,
+/// which has no `tenant_id` column, does not claim this migration.
+pub const SQLITE_MEMORY_TENANT_UNIQUE_SCHEMA_VERSION: i64 = 2;
+
 pub fn migrate_sqlite_memory_to_v3(db_path: &Path, conn: &Connection) -> MigResult<()> {
-    if sqlite_memories_agent_id_is_not_null(conn)? && sqlite_memories_has_unique_agent_key(conn)? {
+    // V4 replaces UNIQUE (agent_id, key) with a tenant-aware index. Skip V3
+    // on either generation so a later-shaped DB is never rebuilt without
+    // tenant_id / kind / pinned.
+    if sqlite_memories_agent_id_is_not_null(conn)?
+        && (sqlite_memories_has_unique_agent_key(conn)?
+            || sqlite_memories_has_unique_agent_tenant_key(conn)?)
+    {
         return Ok(());
     }
 
@@ -2914,6 +2928,136 @@ pub fn migrate_sqlite_memory_to_v3(db_path: &Path, conn: &Connection) -> MigResu
     }
 }
 
+/// Replace table-level `UNIQUE (agent_id, key)` with
+/// `(agent_id, ifnull(tenant_id, ''), key)` so two BFF users can store the
+/// same caller-chosen key. Unscoped `NULL` tenants still collide with each
+/// other. Idempotent.
+pub fn migrate_sqlite_memory_tenant_unique(db_path: &Path, conn: &Connection) -> MigResult<()> {
+    if sqlite_memories_has_unique_agent_tenant_key(conn)?
+        && !sqlite_memories_has_unique_agent_key(conn)?
+    {
+        return Ok(());
+    }
+
+    if sqlite_memories_row_count(conn)? > 0 && db_path.exists() {
+        backup_sqlite_for_multi_agent_migration(db_path)?;
+    }
+
+    let existing = sqlite_memories_column_set(conn)?;
+    let select_kind = if existing.contains("kind") {
+        "kind"
+    } else {
+        "NULL AS kind"
+    };
+    let select_pinned = if existing.contains("pinned") {
+        "pinned"
+    } else {
+        "0 AS pinned"
+    };
+    let select_tenant = if existing.contains("tenant_id") {
+        "tenant_id"
+    } else {
+        "NULL AS tenant_id"
+    };
+
+    conn.execute_batch("BEGIN IMMEDIATE; PRAGMA defer_foreign_keys = ON;")?;
+    let result = (|| -> MigResult<()> {
+        let rebuild = format!(
+            "DROP TRIGGER IF EXISTS memories_ai;
+             DROP TRIGGER IF EXISTS memories_ad;
+             DROP TRIGGER IF EXISTS memories_au;
+             DROP TABLE IF EXISTS memories_fts;
+
+             CREATE TABLE memories_new (
+                id            TEXT PRIMARY KEY,
+                key           TEXT NOT NULL,
+                content       TEXT NOT NULL,
+                category      TEXT NOT NULL DEFAULT 'core',
+                embedding     BLOB,
+                created_at    TEXT NOT NULL,
+                updated_at    TEXT NOT NULL,
+                session_id    TEXT,
+                namespace     TEXT DEFAULT 'default',
+                importance    REAL DEFAULT 0.5,
+                superseded_by TEXT,
+                agent_id      TEXT NOT NULL REFERENCES agents(id),
+                kind          TEXT,
+                pinned        INTEGER NOT NULL DEFAULT 0,
+                tenant_id     TEXT
+             );
+
+             INSERT INTO memories_new (
+                id, key, content, category, embedding, created_at, updated_at,
+                session_id, namespace, importance, superseded_by, agent_id,
+                kind, pinned, tenant_id
+             )
+             SELECT
+                id, key, content, category, embedding, created_at, updated_at,
+                session_id, namespace, importance, superseded_by, agent_id,
+                {select_kind}, {select_pinned}, {select_tenant}
+             FROM memories;
+
+             DROP TABLE memories;
+             ALTER TABLE memories_new RENAME TO memories;
+
+             CREATE INDEX IF NOT EXISTS idx_memories_category  ON memories(category);
+             CREATE INDEX IF NOT EXISTS idx_memories_key       ON memories(key);
+             CREATE INDEX IF NOT EXISTS idx_memories_session   ON memories(session_id);
+             CREATE INDEX IF NOT EXISTS idx_memories_namespace ON memories(namespace);
+             CREATE INDEX IF NOT EXISTS idx_memories_agent_id  ON memories(agent_id);
+             CREATE INDEX IF NOT EXISTS idx_memories_tenant ON memories(tenant_id);
+             CREATE INDEX IF NOT EXISTS idx_memories_namespace_category ON memories(namespace, category);
+
+             CREATE UNIQUE INDEX IF NOT EXISTS {SQLITE_MEMORIES_AGENT_TENANT_KEY_INDEX}
+                ON memories(agent_id, ifnull(tenant_id, ''), key);
+
+             CREATE VIRTUAL TABLE memories_fts USING fts5(
+                key, content, content=memories, content_rowid=rowid
+             );
+             INSERT INTO memories_fts(memories_fts) VALUES('rebuild');
+
+             CREATE TRIGGER memories_ai AFTER INSERT ON memories BEGIN
+                INSERT INTO memories_fts(rowid, key, content)
+                VALUES (new.rowid, new.key, new.content);
+             END;
+             CREATE TRIGGER memories_ad AFTER DELETE ON memories BEGIN
+                INSERT INTO memories_fts(memories_fts, rowid, key, content)
+                VALUES ('delete', old.rowid, old.key, old.content);
+             END;
+             CREATE TRIGGER memories_au AFTER UPDATE ON memories BEGIN
+                INSERT INTO memories_fts(memories_fts, rowid, key, content)
+                VALUES ('delete', old.rowid, old.key, old.content);
+                INSERT INTO memories_fts(rowid, key, content)
+                VALUES (new.rowid, new.key, new.content);
+             END;"
+        );
+        conn.execute_batch(&rebuild)?;
+        sqlite_stamp_memory_schema_version(conn, SQLITE_MEMORY_TENANT_UNIQUE_SCHEMA_VERSION)?;
+        Ok(())
+    })();
+
+    match result {
+        Ok(()) => {
+            conn.execute_batch("COMMIT;")?;
+            Ok(())
+        }
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK;");
+            Err(e)
+        }
+    }
+}
+
+fn sqlite_stamp_memory_schema_version(conn: &Connection, version: i64) -> MigResult<()> {
+    sqlite_ensure_schema_version_table(conn)?;
+    conn.execute(
+        "INSERT OR REPLACE INTO schema_version (component, version, applied_at) \
+         VALUES ('memories', ?1, ?2)",
+        params![version, chrono::Utc::now().to_rfc3339()],
+    )?;
+    Ok(())
+}
+
 fn sqlite_ensure_schema_version_table(conn: &Connection) -> MigResult<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS schema_version (
@@ -2984,18 +3128,41 @@ fn sqlite_memories_has_unique_agent_key(conn: &Connection) -> MigResult<bool> {
         // itself or our own migrations, so this is safe.
         let pragma = format!("PRAGMA index_info(\"{}\")", idx_name.replace('"', "\"\""));
         let mut info_stmt = conn.prepare(&pragma)?;
-        let cols: Vec<String> = info_stmt
-            .query_map([], |row| row.get::<_, String>(2))?
+        let cols: Vec<Option<String>> = info_stmt
+            .query_map([], |row| row.get::<_, Option<String>>(2))?
             .filter_map(Result::ok)
             .collect();
+        // Expression indexes report NULL column names; those are not the
+        // table-level UNIQUE (agent_id, key) this detector is looking for.
         if cols.len() == 2
-            && cols.contains(&"agent_id".to_string())
-            && cols.contains(&"key".to_string())
+            && cols.iter().all(Option::is_some)
+            && cols.iter().any(|c| c.as_deref() == Some("agent_id"))
+            && cols.iter().any(|c| c.as_deref() == Some("key"))
         {
             return Ok(true);
         }
     }
     Ok(false)
+}
+
+fn sqlite_memories_has_unique_agent_tenant_key(conn: &Connection) -> MigResult<bool> {
+    let mut idx_stmt = conn.prepare("PRAGMA index_list(memories)")?;
+    Ok(idx_stmt
+        .query_map([], |row| {
+            let name: String = row.get(1)?;
+            let unique: i64 = row.get(2)?;
+            Ok((name, unique != 0))
+        })?
+        .filter_map(Result::ok)
+        .any(|(name, is_unique)| is_unique && name == SQLITE_MEMORIES_AGENT_TENANT_KEY_INDEX))
+}
+
+fn sqlite_memories_column_set(conn: &Connection) -> MigResult<std::collections::HashSet<String>> {
+    let mut stmt = conn.prepare("PRAGMA table_info(memories)")?;
+    Ok(stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(Result::ok)
+        .collect())
 }
 
 fn sqlite_memories_row_count(conn: &Connection) -> MigResult<i64> {
@@ -3610,6 +3777,94 @@ mod fs_db_migration_tests {
             )
             .unwrap();
         assert_eq!(count, 1, "existing memory row must survive the migration");
+    }
+
+    #[test]
+    fn migrate_sqlite_memory_tenant_unique_allows_same_key_per_tenant() {
+        use rusqlite::Connection;
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("brain.db");
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+
+        conn.execute_batch(
+            "CREATE TABLE agents (
+                id         TEXT PRIMARY KEY,
+                alias      TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL
+             );
+             INSERT INTO agents VALUES ('uuid-1','default','2025-01-01T00:00:00Z');
+
+             CREATE TABLE memories (
+                id         TEXT PRIMARY KEY,
+                key        TEXT NOT NULL,
+                content    TEXT NOT NULL,
+                category   TEXT NOT NULL DEFAULT 'core',
+                embedding  BLOB,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                session_id TEXT,
+                namespace  TEXT DEFAULT 'default',
+                importance REAL DEFAULT 0.5,
+                superseded_by TEXT,
+                agent_id   TEXT NOT NULL REFERENCES agents(id),
+                tenant_id  TEXT,
+                UNIQUE (agent_id, key)
+             );
+             INSERT INTO memories (
+                id, key, content, category, embedding, created_at, updated_at,
+                session_id, namespace, importance, superseded_by, agent_id, tenant_id
+             ) VALUES (
+                'mid-1','prefs','alice-prefs','core',NULL,
+                '2025-01-01T00:00:00Z','2025-01-01T00:00:00Z',
+                NULL,'default',0.5,NULL,'uuid-1','alice'
+             );",
+        )
+        .unwrap();
+
+        migrate_sqlite_memory_to_v3(&db_path, &conn).expect("V3 must no-op on V3-shaped DB");
+        migrate_sqlite_memory_tenant_unique(&db_path, &conn)
+            .expect("tenant unique migration must succeed");
+        migrate_sqlite_memory_tenant_unique(&db_path, &conn)
+            .expect("tenant unique migration must be idempotent");
+        migrate_sqlite_memory_to_v3(&db_path, &conn)
+            .expect("V3 must not rebuild a tenant-unique DB");
+
+        assert!(
+            sqlite_memories_has_unique_agent_tenant_key(&conn).unwrap(),
+            "named tenant unique index must exist"
+        );
+        assert!(
+            !sqlite_memories_has_unique_agent_key(&conn).unwrap(),
+            "legacy UNIQUE (agent_id, key) must be gone"
+        );
+
+        conn.execute(
+            "INSERT INTO memories (
+                id, key, content, category, created_at, updated_at, agent_id, tenant_id
+             ) VALUES (
+                'mid-2','prefs','bob-prefs','core',
+                '2025-01-01T00:00:00Z','2025-01-01T00:00:00Z','uuid-1','bob'
+             )",
+            [],
+        )
+        .expect("bob must be able to store the same key as alice");
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM memories WHERE key='prefs'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 2, "alice and bob rows must both survive");
+
+        let alice: String = conn
+            .query_row(
+                "SELECT content FROM memories WHERE key='prefs' AND tenant_id='alice'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(alice, "alice-prefs");
     }
 
     #[cfg(feature = "memory-postgres")]

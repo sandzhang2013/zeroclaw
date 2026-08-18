@@ -68,12 +68,11 @@ TaskTab.id = "agentAlias::taskId"  ← 全局唯一键
 | 任务短 ID | `tab.taskId` | `"a1b2c3d4"` 或 `"__default__"` | UI 显示 |
 | 后端 Session | `session_id` (UUID) | `"7f3c8a21-..."` | WS 参数、后端持久化 |
 
-## 多用户前缀方案（可选叠加）
+## 多用户前缀方案 — 已作废
 
-如需多用户隔离，session_id 结构可扩展为：
+**不要** 把 `user_id` 拼进 `session_id`。隔离靠 BFF 冻结身份 + Gateway，不靠前端编码。
 
 ```
-session_id = "{user_id}:{agent_alias}:{task_id}:{uuid}"
+session_id = UUID          ← 现行（web/src/lib/sessionId.ts）
+# 禁止：session_id = "{user_id}:{agent_alias}:{task_id}:{uuid}"
 ```
-
-前端 session 函数统一加 `getUserPrefix()` 拼接，改动仅限 `ws.ts` 一处。隔离效果：对话历史隔离，但长期记忆和安全策略仍共享。
