@@ -6,8 +6,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::mcp_client::McpRegistry;
+use crate::mcp_images::{materialize_mcp_images, mcp_history_without_images};
 use crate::mcp_protocol::McpToolDef;
 use zeroclaw_api::tool::{Tool, ToolOutput, ToolResult, ToolSpec};
+use zeroclaw_config::policy::SecurityPolicy;
 
 /// A zeroclaw [`Tool`] backed by an MCP server tool.
 /// The `prefixed_name` (e.g. `filesystem__read_file`) is what the agent loop
@@ -24,6 +26,9 @@ pub struct McpToolWrapper {
     input_schema: Arc<serde_json::Value>,
     /// Shared registry — used to dispatch actual tool calls.
     registry: Arc<McpRegistry>,
+    /// Live policy handle. `workspace_dir` is read at execute time so session
+    /// cwd changes are visible; not a copied path snapshot.
+    security: Option<Arc<SecurityPolicy>>,
 }
 
 impl McpToolWrapper {
@@ -34,7 +39,15 @@ impl McpToolWrapper {
             description,
             input_schema: Arc::new(def.input_schema),
             registry,
+            security: None,
         }
+    }
+
+    /// Attach the turn's live [`SecurityPolicy`] so image parts can be written
+    /// into the current session workspace.
+    pub fn with_security(mut self, security: Arc<SecurityPolicy>) -> Self {
+        self.security = Some(security);
+        self
     }
 }
 
@@ -88,11 +101,24 @@ impl Tool for McpToolWrapper {
             });
         }
         match self.registry.call_tool(&self.prefixed_name, args).await {
-            Ok(output) => Ok(ToolResult {
-                success: true,
-                output: output.into(),
-                error: None,
-            }),
+            Ok(output) => {
+                let output = match &self.security {
+                    Some(policy) if policy.can_act() => {
+                        materialize_mcp_images(&output, &policy.workspace_dir, &self.prefixed_name)
+                            .or_else(|| mcp_history_without_images(&output).map(ToolOutput::text))
+                            .unwrap_or_else(|| ToolOutput::from(output))
+                    }
+                    Some(_) => mcp_history_without_images(&output)
+                        .map(ToolOutput::text)
+                        .unwrap_or_else(|| ToolOutput::from(output)),
+                    None => ToolOutput::from(output),
+                };
+                Ok(ToolResult {
+                    success: true,
+                    output,
+                    error: None,
+                })
+            }
             Err(e) => Ok(ToolResult {
                 success: false,
                 output: ToolOutput::default(),

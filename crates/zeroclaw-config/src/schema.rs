@@ -21,7 +21,17 @@ use tokio::fs::File;
 use tokio::fs::{self, OpenOptions};
 use tokio::io::AsyncWriteExt;
 use zeroclaw_api::runtime_status::RuntimeConfigKind;
+use zeroclaw_api::session_keys::sanitize_session_key;
 use zeroclaw_macros::Configurable;
+
+fn session_workspace_segment(session_id: &str) -> String {
+    let key = sanitize_session_key(session_id);
+    if key.is_empty() {
+        "session".to_string()
+    } else {
+        key
+    }
+}
 
 const SUPPORTED_PROXY_SERVICE_KEYS: &[&str] = &[
     "model_provider.anthropic",
@@ -4434,10 +4444,11 @@ impl Config {
         self.install_root_dir().join("shared")
     }
 
-    /// Per-user session cwd / file sandbox (not the shared agent workspace).
+    /// Per-user workspace root (personal `skills/`, not the tool sandbox).
     ///
     /// `<install>/users/<user_id>/agents/<alias>/workspace/`
     ///
+    /// Session file/script cwd is [`Self::user_session_workspace_dir`].
     /// `user_id` must already be normalized ([`zeroclaw_api::normalize_user_id`]).
     /// SQLite memory and sessions stay in `data_dir` and isolate by row, not
     /// by this directory.
@@ -4449,6 +4460,35 @@ impl Config {
             .join("agents")
             .join(agent_alias)
             .join("workspace")
+    }
+
+    /// Per-user, per-session tool sandbox.
+    ///
+    /// `<install>/users/<user_id>/agents/<alias>/workspace/sessions/<session_id>/`
+    #[must_use]
+    pub fn user_session_workspace_dir(
+        &self,
+        user_id: &str,
+        agent_alias: &str,
+        session_id: &str,
+    ) -> std::path::PathBuf {
+        self.user_workspace_dir(user_id, agent_alias)
+            .join("sessions")
+            .join(session_workspace_segment(session_id))
+    }
+
+    /// Per-session sandbox under the shared agent workspace (no frozen user).
+    ///
+    /// `<agent_workspace>/sessions/<session_id>/`
+    #[must_use]
+    pub fn agent_session_workspace_dir(
+        &self,
+        agent_alias: &str,
+        session_id: &str,
+    ) -> std::path::PathBuf {
+        self.agent_workspace_dir(agent_alias)
+            .join("sessions")
+            .join(session_workspace_segment(session_id))
     }
 
     /// Install root: `<install>/` derived from `config_path`'s parent. Used
@@ -39530,6 +39570,24 @@ model_provider = \"ollama.default\"
         assert!(alice.ends_with("users/alice/agents/default/workspace"));
         assert!(bob.ends_with("users/bob/agents/default/workspace"));
         assert_ne!(alice, bob);
+    }
+
+    #[test]
+    async fn user_session_workspace_dir_nests_under_user_and_session() {
+        let config = Config {
+            config_path: std::path::PathBuf::from("/opt/zeroclaw/config.toml"),
+            ..Config::default()
+        };
+        let alice_a = config.user_session_workspace_dir("alice", "default", "sess-a");
+        let alice_b = config.user_session_workspace_dir("alice", "default", "sess-b");
+        let bob_a = config.user_session_workspace_dir("bob", "default", "sess-a");
+        assert!(alice_a.ends_with("users/alice/agents/default/workspace/sessions/sess-a"));
+        assert!(alice_b.ends_with("users/alice/agents/default/workspace/sessions/sess-b"));
+        assert!(bob_a.ends_with("users/bob/agents/default/workspace/sessions/sess-a"));
+        assert_ne!(alice_a, alice_b);
+        assert_ne!(alice_a, bob_a);
+        assert!(alice_a.starts_with(config.user_workspace_dir("alice", "default")));
+        assert!(!alice_a.starts_with(config.user_workspace_dir("bob", "default")));
     }
 
     #[test]

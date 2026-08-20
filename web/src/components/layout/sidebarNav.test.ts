@@ -4,7 +4,8 @@ import test from "node:test";
 import { findActiveNavPath } from "./sidebarNav.ts";
 
 const navPaths = [
-  "/",
+  "/workbench",
+  "/dashboard",
   "/agents",
   "/config",
   "/config/agents",
@@ -44,7 +45,10 @@ test("path matching respects segment boundaries", () => {
 });
 
 test("nested route families keep their owning sidebar destination active", () => {
-  assert.equal(findActiveNavPath("/", navPaths), "/");
+  assert.equal(findActiveNavPath("/", navPaths), null);
+  assert.equal(findActiveNavPath("/dashboard", navPaths), "/dashboard");
+  assert.equal(findActiveNavPath("/workbench", navPaths), "/workbench");
+  assert.equal(findActiveNavPath("/workbench/deepseek", navPaths), "/workbench");
   assert.equal(findActiveNavPath("/agents", navPaths), "/agents");
   assert.equal(findActiveNavPath("/sops/new", navPaths), "/sops");
   assert.equal(findActiveNavPath("/sops/example/edit", navPaths), "/sops");

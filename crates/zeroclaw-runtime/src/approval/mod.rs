@@ -86,8 +86,10 @@ pub struct ApprovalManager {
     auto_approve: HashSet<String>,
     /// Tools that always need approval, ignoring session allowlist.
     always_ask: HashSet<String>,
-    /// Autonomy level from config.
-    autonomy_level: AutonomyLevel,
+    /// Config snapshot. Live session overlays may lower autonomy, never raise it.
+    autonomy_ceiling: AutonomyLevel,
+    /// Live autonomy for this session (clamped to [`Self::autonomy_ceiling`]).
+    autonomy_level: Mutex<AutonomyLevel>,
     /// When `true`, tools that would require interactive approval are
     /// auto-denied instead. Used for channel-driven (non-CLI) runs.
     non_interactive: bool,
@@ -106,7 +108,8 @@ impl ApprovalManager {
         Self {
             auto_approve: risk_profile.auto_approve.iter().cloned().collect(),
             always_ask: risk_profile.always_ask.iter().cloned().collect(),
-            autonomy_level: risk_profile.level,
+            autonomy_ceiling: risk_profile.level,
+            autonomy_level: Mutex::new(risk_profile.level),
             non_interactive: false,
             non_interactive_shell_requires_approval: false,
             session_allowlist: Mutex::new(HashSet::new()),
@@ -118,7 +121,8 @@ impl ApprovalManager {
         Self {
             auto_approve: risk_profile.auto_approve.iter().cloned().collect(),
             always_ask: risk_profile.always_ask.iter().cloned().collect(),
-            autonomy_level: risk_profile.level,
+            autonomy_ceiling: risk_profile.level,
+            autonomy_level: Mutex::new(risk_profile.level),
             non_interactive: true,
             non_interactive_shell_requires_approval: false,
             session_allowlist: Mutex::new(HashSet::new()),
@@ -130,7 +134,8 @@ impl ApprovalManager {
         Self {
             auto_approve: risk_profile.auto_approve.iter().cloned().collect(),
             always_ask: risk_profile.always_ask.iter().cloned().collect(),
-            autonomy_level: risk_profile.level,
+            autonomy_ceiling: risk_profile.level,
+            autonomy_level: Mutex::new(risk_profile.level),
             non_interactive: true,
             non_interactive_shell_requires_approval: true,
             session_allowlist: Mutex::new(HashSet::new()),
@@ -152,7 +157,8 @@ impl ApprovalManager {
         Self {
             auto_approve: risk_profile.auto_approve.iter().cloned().collect(),
             always_ask: risk_profile.always_ask.iter().cloned().collect(),
-            autonomy_level: risk_profile.level,
+            autonomy_ceiling: risk_profile.level,
+            autonomy_level: Mutex::new(risk_profile.level),
             non_interactive: self.non_interactive,
             non_interactive_shell_requires_approval: self.non_interactive_shell_requires_approval,
             session_allowlist: Mutex::new(HashSet::new()),
@@ -166,6 +172,18 @@ impl ApprovalManager {
         self.non_interactive
     }
 
+    /// Session-scoped override of the profile autonomy level.
+    /// Overlays may lower autonomy, never raise it above the config snapshot.
+    pub fn set_autonomy_level(&self, level: AutonomyLevel) {
+        *self.autonomy_level.lock() = level.min(self.autonomy_ceiling);
+    }
+
+    /// Config snapshot used as the session autonomy ceiling.
+    #[must_use]
+    pub fn configured_autonomy(&self) -> AutonomyLevel {
+        self.autonomy_ceiling
+    }
+
     /// Check whether a tool call requires interactive approval.
     /// Returns `true` if the call needs a prompt, `false` if it can proceed.
     pub fn needs_approval(&self, tool_name: &str) -> bool {
@@ -173,19 +191,21 @@ impl ApprovalManager {
     }
 
     pub fn approval_requirement(&self, tool_name: &str) -> ApprovalRequirement {
-        // Full autonomy never prompts.
-        if self.autonomy_level == AutonomyLevel::Full {
-            return ApprovalRequirement::Approved;
-        }
+        let autonomy_level = *self.autonomy_level.lock();
 
         // ReadOnly blocks everything — handled elsewhere; no prompt needed.
-        if self.autonomy_level == AutonomyLevel::ReadOnly {
+        if autonomy_level == AutonomyLevel::ReadOnly {
             return ApprovalRequirement::NotRequired;
         }
 
-        // always_ask overrides everything.
+        // always_ask overrides everything, including Full.
         if self.always_ask.contains("*") || self.always_ask.contains(tool_name) {
             return ApprovalRequirement::Prompt;
+        }
+
+        // Full autonomy never prompts except for always_ask above.
+        if autonomy_level == AutonomyLevel::Full {
+            return ApprovalRequirement::Approved;
         }
 
         if self.non_interactive
@@ -561,6 +581,43 @@ mod tests {
         };
         let mgr = ApprovalManager::from_risk_profile(&config);
         assert!(!mgr.needs_approval("shell"));
+    }
+
+    #[test]
+    fn set_autonomy_level_cannot_raise_above_profile() {
+        let mgr = ApprovalManager::from_risk_profile(&supervised_config());
+        assert!(mgr.needs_approval("file_write"));
+        mgr.set_autonomy_level(AutonomyLevel::Full);
+        assert!(
+            mgr.needs_approval("file_write"),
+            "supervised profile must keep prompting even if a client asks for full"
+        );
+        mgr.set_autonomy_level(AutonomyLevel::ReadOnly);
+        assert!(!mgr.needs_approval("file_write"));
+        mgr.set_autonomy_level(AutonomyLevel::Supervised);
+        assert!(mgr.needs_approval("file_write"));
+    }
+
+    #[test]
+    fn set_autonomy_level_can_drop_and_restore_when_profile_is_full() {
+        let mgr = ApprovalManager::from_risk_profile(&full_config());
+        assert!(!mgr.needs_approval("file_write"));
+        mgr.set_autonomy_level(AutonomyLevel::Supervised);
+        assert!(mgr.needs_approval("file_write"));
+        mgr.set_autonomy_level(AutonomyLevel::Full);
+        assert!(!mgr.needs_approval("file_write"));
+    }
+
+    #[test]
+    fn full_autonomy_still_honors_always_ask() {
+        let config = RiskProfileConfig {
+            level: AutonomyLevel::Full,
+            always_ask: vec!["shell".into()],
+            ..RiskProfileConfig::default()
+        };
+        let mgr = ApprovalManager::from_risk_profile(&config);
+        assert!(mgr.needs_approval("shell"));
+        assert!(!mgr.needs_approval("file_write"));
     }
 
     // ── session allowlist ────────────────────────────────────

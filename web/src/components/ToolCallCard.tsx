@@ -6,12 +6,17 @@ import {
 } from 'lucide-react';
 import { Card, Badge } from '@/components/ui';
 import { t } from '@/lib/i18n';
+import type { ToolArtifactInfo } from '@/lib/artifactKind';
+import type { CanvasFramePreview } from '@/lib/canvasFrame';
+import { extractToolImages } from '@/lib/chatImages';
 
 export interface ToolCallInfo {
   name: string;
   args?: unknown;
   output?: string;       // undefined = executing; string = completed
   id?: string;           // gateway tool_call_id; correlates result to card
+  artifact?: ToolArtifactInfo;
+  canvas?: CanvasFramePreview;
 }
 
 interface ToolCallCardProps {
@@ -60,6 +65,7 @@ export default function ToolCallCard({ toolCall }: ToolCallCardProps) {
     : null;
 
   const output = toolCall.output ?? '';
+  const hasImages = extractToolImages(output).length > 0;
   const isInline = output.length <= INLINE_THRESHOLD;
 
   return (
@@ -93,7 +99,10 @@ export default function ToolCallCard({ toolCall }: ToolCallCardProps) {
         </details>
       )}
 
-      {resolved && (
+      {resolved && hasImages && (
+        <p className="mt-2 text-pc-text-muted">{t('workbench.chart_generated')}</p>
+      )}
+      {resolved && !hasImages && (
         isInline ? (
           output && (
             <div className="mt-2 overflow-auto rounded-[var(--radius-sm)] bg-pc-code p-2 font-mono text-[11px] leading-relaxed text-pc-text-secondary">

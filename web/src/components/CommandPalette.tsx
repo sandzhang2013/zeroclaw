@@ -33,7 +33,8 @@ interface Destination {
 }
 
 const DESTINATIONS: Destination[] = [
-  { to: '/', icon: LayoutDashboard, labelKey: 'nav.dashboard', groupKey: 'nav.group.home' },
+  { to: '/workbench', icon: MessageSquare, labelKey: 'workbench.page_title', groupKey: 'nav.group.home' },
+  { to: '/dashboard', icon: LayoutDashboard, labelKey: 'nav.dashboard', groupKey: 'nav.group.home' },
   { to: '/agents', icon: MessageSquare, labelKey: 'nav.agents', groupKey: 'nav.group.chat' },
   { to: '/config', icon: Settings, labelKey: 'nav.config', groupKey: 'nav.group.configure' },
   { to: '/config/agents', icon: Bot, labelKey: 'nav.agent', groupKey: 'nav.group.configure' },

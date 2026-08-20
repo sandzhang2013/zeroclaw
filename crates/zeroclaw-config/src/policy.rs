@@ -2,6 +2,8 @@ use anyhow::Context as _;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{Duration, Instant};
 use zeroclaw_api::runtime_traits::ShellDialect;
 
@@ -371,6 +373,11 @@ pub struct SecurityPolicy {
     /// resolves to `"firejail"`.
     pub firejail_args: Vec<String>,
     pub tracker: PerSenderTracker,
+    /// Session-scoped live autonomy. When set, [`Self::effective_autonomy`]
+    /// reads this instead of the config snapshot in [`Self::autonomy`].
+    /// Shared so a WebSocket session can switch readonly / supervised / full
+    /// without rewriting global `risk_profiles`.
+    pub live_autonomy: Option<Arc<AtomicU8>>,
 }
 
 impl SecurityPolicy {
@@ -666,6 +673,7 @@ impl Default for SecurityPolicy {
             sandbox_backend: None,
             firejail_args: vec![],
             tracker: PerSenderTracker::new(),
+            live_autonomy: None,
         }
     }
 }
@@ -2220,7 +2228,7 @@ impl SecurityPolicy {
             {
                 return Err("Command blocked: high-risk command is disallowed by policy".into());
             }
-            if self.autonomy == AutonomyLevel::Supervised && !approved {
+            if self.effective_autonomy() == AutonomyLevel::Supervised && !approved {
                 return Err(
                     "Command requires explicit approval (approved=true): high-risk operation"
                         .into(),
@@ -2229,7 +2237,7 @@ impl SecurityPolicy {
         }
 
         if risk == CommandRiskLevel::Medium
-            && self.autonomy == AutonomyLevel::Supervised
+            && self.effective_autonomy() == AutonomyLevel::Supervised
             && self.require_approval_for_medium_risk
             && !approved
         {
@@ -2352,7 +2360,7 @@ impl SecurityPolicy {
     }
 
     fn is_simple_powershell_command_allowed(&self, command: &str) -> bool {
-        if self.autonomy == AutonomyLevel::ReadOnly {
+        if self.effective_autonomy() == AutonomyLevel::ReadOnly {
             return false;
         }
 
@@ -2413,7 +2421,7 @@ impl SecurityPolicy {
     }
 
     fn is_posix_like_command_allowed(&self, command: &str, dialect: ShellDialect) -> bool {
-        if self.autonomy == AutonomyLevel::ReadOnly {
+        if self.effective_autonomy() == AutonomyLevel::ReadOnly {
             return false;
         }
 
@@ -3171,7 +3179,32 @@ impl SecurityPolicy {
 
     /// Check if autonomy level permits any action at all
     pub fn can_act(&self) -> bool {
-        self.autonomy != AutonomyLevel::ReadOnly
+        self.effective_autonomy() != AutonomyLevel::ReadOnly
+    }
+
+    /// Config snapshot, or the live session override when one is attached.
+    #[must_use]
+    pub fn effective_autonomy(&self) -> AutonomyLevel {
+        self.live_autonomy
+            .as_ref()
+            .map(|handle| AutonomyLevel::from_u8(handle.load(Ordering::Relaxed)))
+            .unwrap_or(self.autonomy)
+    }
+
+    /// Attach a shared live autonomy cell initialized from the config snapshot.
+    /// Call once before wrapping the policy in `Arc` so later session switches
+    /// are visible to every tool that cloned the `Arc`.
+    pub fn attach_live_autonomy(&mut self) {
+        self.live_autonomy = Some(Arc::new(AtomicU8::new(self.autonomy.as_u8())));
+    }
+
+    /// Update the live cell. No-op when [`Self::attach_live_autonomy`] was not called.
+    ///
+    /// Session overlays may lower autonomy, never raise it above the config snapshot.
+    pub fn set_live_autonomy(&self, level: AutonomyLevel) {
+        if let Some(handle) = &self.live_autonomy {
+            handle.store(level.min(self.autonomy).as_u8(), Ordering::Relaxed);
+        }
     }
 
     // ── Tool Operation Gating ──────────────────────────────────────────────
@@ -3460,6 +3493,7 @@ impl SecurityPolicy {
             sandbox_backend: risk_profile.sandbox_backend.clone(),
             firejail_args: risk_profile.firejail_args.clone(),
             tracker: PerSenderTracker::new(),
+            live_autonomy: None,
         }
     }
 
@@ -3539,7 +3573,7 @@ impl SecurityPolicy {
         let mut out = String::new();
 
         // Autonomy level
-        let _ = writeln!(out, "**Autonomy level**: {:?}", self.autonomy);
+        let _ = writeln!(out, "**Autonomy level**: {:?}", self.effective_autonomy());
 
         // Workspace constraint
         if self.workspace_only {
@@ -4006,6 +4040,42 @@ mod tests {
     #[test]
     fn can_act_full_true() {
         assert!(full_policy().can_act());
+    }
+
+    #[test]
+    fn live_autonomy_override_changes_can_act_without_rewriting_snapshot() {
+        let mut p = SecurityPolicy {
+            autonomy: AutonomyLevel::Supervised,
+            ..SecurityPolicy::default()
+        };
+        p.attach_live_autonomy();
+        assert!(p.can_act());
+        p.set_live_autonomy(AutonomyLevel::ReadOnly);
+        assert!(!p.can_act());
+        assert_eq!(p.autonomy, AutonomyLevel::Supervised);
+        assert_eq!(p.effective_autonomy(), AutonomyLevel::ReadOnly);
+        p.set_live_autonomy(AutonomyLevel::Full);
+        assert!(p.can_act());
+        assert_eq!(
+            p.effective_autonomy(),
+            AutonomyLevel::Supervised,
+            "live overlay must not raise autonomy above the config snapshot"
+        );
+        p.set_live_autonomy(AutonomyLevel::Supervised);
+        assert_eq!(p.effective_autonomy(), AutonomyLevel::Supervised);
+    }
+
+    #[test]
+    fn live_autonomy_can_restore_full_when_snapshot_is_full() {
+        let mut p = SecurityPolicy {
+            autonomy: AutonomyLevel::Full,
+            ..SecurityPolicy::default()
+        };
+        p.attach_live_autonomy();
+        p.set_live_autonomy(AutonomyLevel::ReadOnly);
+        assert_eq!(p.effective_autonomy(), AutonomyLevel::ReadOnly);
+        p.set_live_autonomy(AutonomyLevel::Full);
+        assert_eq!(p.effective_autonomy(), AutonomyLevel::Full);
     }
 
     #[test]

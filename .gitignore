@@ -61,6 +61,9 @@ docker-compose.override.yml
 # Environment files (may contain secrets)
 .env
 
+# Local analysis notes and data (may contain personal/health data)
+/docs/分析/
+
 # Python virtual environments
 
 .venv/

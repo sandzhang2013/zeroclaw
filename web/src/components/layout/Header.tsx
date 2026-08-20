@@ -7,16 +7,17 @@ import { useAuth } from '@/hooks/useAuth';
 import { SettingsModal } from '@/components/SettingsModal';
 import { Button } from '@/components/ui';
 
-// Exact-path titles. The dashboard ('/') must stay exact so it doesn't
-// swallow every other route as a prefix.
+// Exact-path titles. `/dashboard` stays exact so it doesn't swallow
+// nested dashboard URLs if any are added later.
 const exactRouteTitles: Record<string, string> = {
-  '/': 'nav.dashboard',
+  '/dashboard': 'nav.dashboard',
 };
 
 // Section titles keyed by the first path segment. Resolving by the matched
 // section (not the literal pathname) means nested routes like /config/agents,
 // /agent/:alias, or /agents all surface a correct <h1> instead of an empty one.
 const sectionTitles: Record<string, string> = {
+  dashboard: 'nav.dashboard',
   agent: 'nav.agent',
   agents: 'nav.agents',
   tools: 'nav.tools',

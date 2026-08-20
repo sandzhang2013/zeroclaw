@@ -137,6 +137,11 @@ body {
   outline-offset: 2px;
 }
 
+textarea:focus,
+textarea:focus-visible {
+  outline: none;
+}
+
 :focus:not(:focus-visible) {
   outline: none;
 }

@@ -1778,6 +1778,10 @@ pub async fn run_gateway(
             get(api_browse::handle_agent_workspace_read),
         )
         .route(
+            "/api/agents/{alias}/workspace/raw",
+            get(api_browse::handle_agent_workspace_raw),
+        )
+        .route(
             "/api/agents/{alias}/workspace/path",
             delete(api_browse::handle_agent_workspace_delete),
         )
@@ -1953,6 +1957,21 @@ pub async fn run_gateway(
             Duration::from_secs(gateway_request_timeout_secs(&config.gateway)),
         ));
 
+    // Chat uploads need a larger body than the gateway-wide 64 KiB cap.
+    let upload_router: Router = Router::new()
+        .route(
+            "/api/agents/{alias}/workspace/upload",
+            post(api_browse::handle_agent_workspace_upload),
+        )
+        .with_state(state.clone())
+        .layer(RequestBodyLimitLayer::new(
+            zeroclaw_runtime::browse::AGENT_WORKSPACE_UPLOAD_CAP as usize,
+        ))
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            Duration::from_secs(120),
+        ));
+
     // Manual cron-trigger and A2A task routes live on their own sub-router so
     // they can opt out of the 30s gateway-wide TimeoutLayer. Both run a
     // synchronous agent turn inline. Layers attached here travel with the
@@ -1969,7 +1988,7 @@ pub async fn run_gateway(
             Duration::from_secs(gateway_long_running_request_timeout_secs(&config.gateway)),
         ));
 
-    let inner = inner.merge(long_running_router);
+    let inner = inner.merge(upload_router).merge(long_running_router);
 
     // Nest under path prefix when configured (axum strips prefix before routing).
     // nest() at "/prefix" handles both "/prefix" and "/prefix/*" but not "/prefix/"

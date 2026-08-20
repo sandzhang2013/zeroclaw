@@ -26,6 +26,49 @@ pub enum AutonomyLevel {
     Full,
 }
 
+impl AutonomyLevel {
+    /// Compact encoding for a shared session-scoped atomic.
+    #[must_use]
+    pub const fn as_u8(self) -> u8 {
+        match self {
+            Self::ReadOnly => 0,
+            Self::Supervised => 1,
+            Self::Full => 2,
+        }
+    }
+
+    /// Inverse of [`Self::as_u8`]. Unknown values fall back to supervised.
+    #[must_use]
+    pub const fn from_u8(value: u8) -> Self {
+        match value {
+            0 => Self::ReadOnly,
+            2 => Self::Full,
+            _ => Self::Supervised,
+        }
+    }
+
+    /// Parse the serde / WebSocket wire form (`readonly` / `supervised` / `full`).
+    #[must_use]
+    pub fn from_wire(value: &str) -> Option<Self> {
+        match value {
+            "readonly" => Some(Self::ReadOnly),
+            "supervised" => Some(Self::Supervised),
+            "full" => Some(Self::Full),
+            _ => None,
+        }
+    }
+
+    /// Inverse of [`Self::from_wire`].
+    #[must_use]
+    pub const fn as_wire(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "readonly",
+            Self::Supervised => "supervised",
+            Self::Full => "full",
+        }
+    }
+}
+
 /// Delegation mode for a risk profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
@@ -102,6 +145,20 @@ impl crate::config::HasPropKind for ApprovalRoute {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wire_form_round_trips() {
+        for level in [
+            AutonomyLevel::ReadOnly,
+            AutonomyLevel::Supervised,
+            AutonomyLevel::Full,
+        ] {
+            assert_eq!(AutonomyLevel::from_wire(level.as_wire()), Some(level));
+        }
+        assert!(AutonomyLevel::from_wire("yolo").is_none());
+        assert!(AutonomyLevel::ReadOnly < AutonomyLevel::Supervised);
+        assert!(AutonomyLevel::Supervised < AutonomyLevel::Full);
+    }
 
     #[test]
     fn delegation_default_is_forbidden() {

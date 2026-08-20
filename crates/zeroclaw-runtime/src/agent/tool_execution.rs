@@ -413,7 +413,7 @@ pub(crate) async fn execute_one_tool(
                 artifact: out
                     .output_data
                     .as_ref()
-                    .and_then(ToolArtifact::from_delivered_data),
+                    .and_then(ToolArtifact::from_output_data),
             })
             .await;
     }

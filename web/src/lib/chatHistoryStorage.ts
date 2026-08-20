@@ -1,5 +1,6 @@
 import type { SessionMessageRow } from '@/types/api';
 import { generateUUID } from '@/lib/uuid';
+import type { ToolArtifactInfo } from '@/lib/artifactKind';
 
 const MAX_MESSAGES = 100;
 const PREFIX = 'zeroclaw_chat_history_v1:';
@@ -13,7 +14,7 @@ export interface PersistedChatBubble {
   /** Verbatim locally-composed user input — never gateway-prefixed, so the
    *  bubble skips stripServerTimestamp for it. (Server rows omit this.) */
   local?: boolean;
-  toolCall?: { name: string; args?: unknown; output?: string };
+  toolCall?: { name: string; args?: unknown; output?: string; artifact?: ToolArtifactInfo };
   timestamp: string;
 }
 
@@ -88,7 +89,7 @@ export function persistedToUiMessages(
   thinking?: string;
   markdown?: boolean;
   local?: boolean;
-  toolCall?: { name: string; args?: unknown; output?: string };
+  toolCall?: { name: string; args?: unknown; output?: string; artifact?: ToolArtifactInfo };
   timestamp: Date;
 }> {
   return rows.map((m) => ({
@@ -112,7 +113,7 @@ export function uiMessagesToPersisted(
     markdown?: boolean;
     local?: boolean;
     ephemeral?: boolean;
-    toolCall?: { name: string; args?: unknown; output?: string };
+    toolCall?: { name: string; args?: unknown; output?: string; artifact?: ToolArtifactInfo };
     timestamp: Date;
   }>,
 ): PersistedChatBubble[] {

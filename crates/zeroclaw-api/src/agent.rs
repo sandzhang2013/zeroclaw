@@ -1,10 +1,44 @@
+use std::path::Path;
+
 use crate::plan::PlanEntry;
 
+/// Guess a MIME type from a filename. Used for workspace file cards and the
+/// raw-file HTTP response. Unknown extensions stay `application/octet-stream`.
+#[must_use]
+pub fn guess_file_mime(filename: &str) -> String {
+    let ext = Path::new(filename)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "html" | "htm" => "text/html",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        // SVG can carry script. Never advertise it as an inline image type.
+        "svg" => "application/octet-stream",
+        "pdf" => "application/pdf",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "doc" => "application/msword",
+        "xls" => "application/vnd.ms-excel",
+        "ppt" => "application/vnd.ms-powerpoint",
+        "txt" | "md" => "text/plain",
+        "json" => "application/json",
+        "csv" => "text/csv",
+        _ => "application/octet-stream",
+    }
+    .to_string()
+}
+
 /// Structured metadata for a tool that produced a file artifact (e.g.
-/// `deliver_file`). Carried on [`TurnEvent::ToolResult`] so a channel attaches
-/// the file from typed fields instead of parsing a text trailer out of the
-/// free-form `output` string. Trailer parsing let a crafted filename forge the
-/// delivered path (arbitrary-file-read / confused-deputy class).
+/// `deliver_file` or `file_write`). Carried on [`TurnEvent::ToolResult`] so a
+/// channel attaches the file from typed fields instead of parsing a text
+/// trailer out of the free-form `output` string. Trailer parsing let a crafted
+/// filename forge the delivered path (arbitrary-file-read / confused-deputy class).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolArtifact {
     /// Absolute path of the delivered file on the agent host.
@@ -23,11 +57,21 @@ pub struct ToolArtifact {
 
 impl ToolArtifact {
     /// Build from a tool's structured `output_data` when it declares a delivered
-    /// file (`delivered: true` with a non-empty `path`). Returns `None` for any
-    /// other structured output, keeping this a channel-neutral convention rather
-    /// than a hook tied to one tool name.
+    /// file (`delivered: true` with a non-empty `path`) or a workspace write
+    /// (`written: true`). Returns `None` for any other structured output.
+    pub fn from_output_data(data: &serde_json::Value) -> Option<Self> {
+        Self::from_flagged_file(data, "delivered")
+            .or_else(|| Self::from_flagged_file(data, "written"))
+    }
+
+    /// ACP `deliver_file` convention (`delivered: true`). Prefer
+    /// [`Self::from_output_data`] at new call sites.
     pub fn from_delivered_data(data: &serde_json::Value) -> Option<Self> {
-        if data.get("delivered").and_then(serde_json::Value::as_bool) != Some(true) {
+        Self::from_flagged_file(data, "delivered")
+    }
+
+    fn from_flagged_file(data: &serde_json::Value, flag: &str) -> Option<Self> {
+        if data.get(flag).and_then(serde_json::Value::as_bool) != Some(true) {
             return None;
         }
         let field = |key: &str| {
@@ -40,11 +84,38 @@ impl ToolArtifact {
         if path.is_empty() {
             return None;
         }
+        let filename = {
+            let named = field("filename");
+            if named.is_empty() {
+                Path::new(&path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            } else {
+                named
+            }
+        };
+        let title = {
+            let titled = field("title");
+            if titled.is_empty() {
+                filename.clone()
+            } else {
+                titled
+            }
+        };
+        let mime = {
+            let declared = field("mimeType");
+            if declared.is_empty() {
+                guess_file_mime(&filename)
+            } else {
+                declared
+            }
+        };
         Some(Self {
             uri: field("uri"),
-            filename: field("filename"),
-            title: field("title"),
-            mime: field("mimeType"),
+            filename,
+            title,
+            mime,
             size: data
                 .get("bytes")
                 .and_then(serde_json::Value::as_u64)
@@ -183,5 +254,33 @@ mod tool_artifact_tests {
         assert!(
             ToolArtifact::from_delivered_data(&json!({"delivered": true, "path": ""})).is_none()
         );
+    }
+
+    #[test]
+    fn projects_file_write_data_without_confusing_deliver_file() {
+        let data = json!({
+            "written": true,
+            "path": "/ws/sessions/s1/login.html",
+            "filename": "login.html",
+            "mimeType": "text/html",
+            "bytes": 94,
+        });
+        let a = ToolArtifact::from_output_data(&data).expect("written file is an artifact");
+        assert_eq!(a.path, "/ws/sessions/s1/login.html");
+        assert_eq!(a.filename, "login.html");
+        assert_eq!(a.mime, "text/html");
+        assert_eq!(a.size, 94);
+        assert!(a.uri.is_empty());
+        assert!(ToolArtifact::from_delivered_data(&data).is_none());
+    }
+
+    #[test]
+    fn guess_file_mime_covers_preview_and_office_types() {
+        assert_eq!(guess_file_mime("a.HTML"), "text/html");
+        assert_eq!(guess_file_mime("p.png"), "image/png");
+        assert_eq!(guess_file_mime("icon.SVG"), "application/octet-stream");
+        assert_eq!(guess_file_mime("r.pdf"), "application/pdf");
+        assert!(guess_file_mime("t.docx").contains("wordprocessingml"));
+        assert_eq!(guess_file_mime("x.bin"), "application/octet-stream");
     }
 }

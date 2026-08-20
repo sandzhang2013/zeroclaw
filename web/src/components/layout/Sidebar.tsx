@@ -48,7 +48,10 @@ interface NavGroup {
 const navGroups: NavGroup[] = [
   {
     headingKey: 'nav.group.home',
-    items: [{ to: '/', icon: LayoutDashboard, labelKey: 'nav.dashboard' }],
+    items: [
+      { to: '/workbench', icon: MessageSquare, labelKey: 'workbench.page_title' },
+      { to: '/dashboard', icon: LayoutDashboard, labelKey: 'nav.dashboard' },
+    ],
   },
   {
     headingKey: 'nav.group.chat',

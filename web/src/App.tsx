@@ -103,6 +103,12 @@ export class ErrorBoundary extends Component<
             <button
               onClick={() => {
                 sessionStorage.removeItem("zeroclaw-chunk-reloaded");
+                if (this.state.error && isChunkLoadError(this.state.error)) {
+                  // Chrome caches a failed `import()` for the page lifetime.
+                  // Clearing React state is not enough; refetch the module.
+                  window.location.reload();
+                  return;
+                }
                 this.setState({ error: null });
               }}
               className="btn-electric mt-6 px-4 py-2 text-sm font-medium"
@@ -421,14 +427,13 @@ function AppContent() {
 }
 
 // Redirects fresh installs (no agents yet, Quickstart never completed)
-// from `/` to `/quickstart`. The daemon always writes a default
+// from `/dashboard` to `/quickstart`. The daemon always writes a default
 // config.toml on init, so file existence isn't the right signal —
 // we ask the gateway via /api/quickstart/state which reports
 // quickstart_completed plus the live agents list.
 //
-// Fires once per session. Only redirects when the user lands at `/` —
-// manual navigation to other routes is left alone, so returning users
-// who already have agents can always reach Quickstart from the nav.
+// Fires once per session. Only redirects when the user lands at `/dashboard`
+// — `/` is the workbench. Manual navigation to other routes is left alone.
 function FreshInstallRedirect() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -437,7 +442,7 @@ function FreshInstallRedirect() {
   useEffect(() => {
     if (checked) return;
     setChecked(true);
-    if (location.pathname !== "/") return;
+    if (location.pathname !== "/dashboard") return;
     void getQuickstartState()
       .then((state) => {
         if (!state.quickstart_completed && state.agents.length === 0) {

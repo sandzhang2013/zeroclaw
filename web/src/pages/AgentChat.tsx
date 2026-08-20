@@ -1,9 +1,9 @@
 import { memo, useState, useEffect, useRef, useCallback } from 'react';
-import { Link, Navigate, useParams } from 'react-router-dom';
-import { ArrowUp, Square, Bot, User, AlertCircle, Copy, Check, X, Trash2, Minimize2, Maximize2, ChevronDown, Wrench, BarChart2, FolderOpen, PanelRightClose, PanelRightOpen } from 'lucide-react';
+import { Navigate, useParams } from 'react-router-dom';
+import { ArrowUp, Square, User, AlertCircle, Copy, Check, X, Trash2, Minimize2, Maximize2, ChevronDown, Wrench, PanelRightClose, PanelRightOpen, Plus, Mic, Loader2 } from 'lucide-react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { useAgent, type ChatMessage } from '@/contexts/AgentContext';
+import { AgentProvider, useAgent, type ChatMessage } from '@/contexts/AgentContext';
 import { useDraft } from '@/hooks/useDraft';
 import { t } from '@/lib/i18n';
 import {
@@ -14,12 +14,57 @@ import {
   parseCommand,
   type CommandSpec,
 } from '@/lib/slashCommands';
-import ChatWorkspace from '@/pages/ChatWorkspace';
-
 import ToolCallCard from '@/components/ToolCallCard';
+import { ArtifactCard, HtmlSrcDocPreview } from '@/components/ArtifactCard';
 import ApprovalBanner from '@/components/ApprovalBanner';
+import { AutonomySelect } from '@/components/AutonomySelect';
+import { uploadAgentWorkspaceFile } from '@/lib/api';
+import {
+  DEFAULT_WORKBENCH_AUTONOMY,
+  loadWorkbenchAutonomy,
+  saveWorkbenchAutonomy,
+  clampWorkbenchAutonomy,
+  maxAutonomyForRole,
+  type WorkbenchAutonomy,
+} from '@/lib/workbenchAutonomy';
+import {
+  CHAT_UPLOAD_MAX_BYTES,
+  CHAT_UPLOAD_MAX_FILES,
+  composeUploadMessage,
+  cwdRelativeUploadPath,
+  displayUploadMessage,
+  sessionUploadWorkspacePath,
+  uniqueUploadFileName,
+} from '@/lib/chatUpload';
+import { splitChatHtmlBlocks } from '@/lib/chatHtmlPreview';
+import { isVisualArtifact } from '@/lib/artifactKind';
+import { canvasPreviewFromToolCall } from '@/lib/canvasFrame';
+import { extractMcpToolText, extractToolImages, looksLikeChatImages, stripImageMarkers } from '@/lib/chatImages';
+import { ChatImagePreview } from '@/components/ChatImagePreview';
+import { basePath } from '@/lib/basePath';
 
 const DRAFT_KEY_PREFIX = 'agent-chat';
+
+function AgentAvatar({ className }: { className: string }) {
+  return (
+    <img
+      src={`${basePath}/_app/agent-avatar.png`}
+      alt=""
+      className={`shrink-0 object-contain ${className}`}
+    />
+  );
+}
+
+type PendingAttach = {
+  id: string;
+  filename: string;
+  size: number;
+  mime: string;
+  cwdRel: string;
+  workspacePath: string;
+  status: 'uploading' | 'ready' | 'error';
+  previewUrl?: string;
+};
 
 // Open chat links in a new tab so navigation never replaces the live chat
 // page. In-page anchors (e.g. GFM footnote refs) keep default navigation.
@@ -37,45 +82,64 @@ function fmtTokens(n: number): string {
   return n.toLocaleString();
 }
 
-/** Context bar component showing context window usage. */
-function ContextBar({ contextMaxTokens, contextInputTokens }: { 
-  contextMaxTokens: number | null; 
-  contextInputTokens: number | null; 
+function compactTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
+  if (n >= 10_000) return `${Math.round(n / 1_000)}k`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1).replace(/\.0$/, '')}k`;
+  return String(n);
+}
+
+/** Compact context meter for the composer toolbar, next to the model picker. */
+function ContextMeter({
+  contextMaxTokens,
+  contextInputTokens,
+}: {
+  contextMaxTokens: number | null;
+  contextInputTokens: number | null;
 }) {
   if (!contextMaxTokens) return null;
 
   const used = contextInputTokens ?? 0;
   const max = contextMaxTokens;
   const pct = max > 0 ? Math.min((used / max) * 100, 100) : 0;
-  const barWidth = 16;
-  const filled = Math.round((pct / 100) * barWidth);
-  const empty = Math.max(0, barWidth - filled);
-  const bar = '█'.repeat(filled) + '░'.repeat(empty);
-
-  const label = `ctx: ${fmtTokens(used).padStart(7)} / ${fmtTokens(max).padStart(7)}  [${bar}]  ${pct.toFixed(0)}%`;
+  const full = `ctx: ${fmtTokens(used)} / ${fmtTokens(max)}  ${pct.toFixed(0)}%`;
 
   return (
-    <div className="px-4 py-1.5 border-b text-[11px] font-mono flex items-center gap-2" style={{ borderColor: 'var(--pc-border)', background: 'var(--pc-bg-surface)' }}>
-      <BarChart2 className="h-3 w-3 shrink-0" style={{ color: 'var(--pc-text-muted)' }} />
-      <span style={{ color: 'var(--pc-text-secondary)' }}>{label}</span>
-    </div>
+    <span
+      className="inline-flex items-center gap-1.5 text-[11px] tabular-nums text-pc-text-muted"
+      title={full}
+    >
+      <span className="h-1 w-10 overflow-hidden rounded-full bg-pc-border">
+        <span
+          className="block h-full rounded-full"
+          style={{
+            width: `${pct}%`,
+            background: pct >= 95 ? 'var(--color-status-error)' : pct >= 80 ? 'var(--color-status-warning)' : 'var(--pc-accent)',
+          }}
+        />
+      </span>
+      <span className="whitespace-nowrap">{compactTokens(used)}/{compactTokens(max)} {pct.toFixed(0)}%</span>
+    </span>
   );
 }
 
 /**
- * Route entry point for `/agent/:alias`. Reads the alias from the URL and
- * hands it to the workbench as the initial session to open and
- * activate. The workspace itself owns the set of open sessions and never
- * remounts on switches, so the alias is passed as a prop (not used
- * as a React `key`) — that keeps every session's AgentProvider WebSocket alive
- * across sidebar switches. Missing alias → redirect to the agents list.
+ * Dashboard chat at `/agent/:alias`. Stays inside the ops Layout.
+ * The CDC workbench (`/workbench/:alias`) is a separate full-viewport surface.
  */
 export default function AgentChat() {
   const { alias } = useParams<{ alias: string }>();
   if (!alias) {
     return <Navigate to="/agents" replace />;
   }
-  return <ChatWorkspace initialAlias={alias} />;
+  const agentAlias = decodeURIComponent(alias);
+  return (
+    <AgentProvider agentAlias={agentAlias}>
+      <div className="flex h-full min-h-0 flex-1 flex-col">
+        <AgentChatInner agentAlias={agentAlias} />
+      </div>
+    </AgentProvider>
+  );
 }
 
 /** Status snapshot a chat pane pushes up to the workbench sidebar. */
@@ -102,12 +166,24 @@ export function AgentChatInner({
   sessionTitle,
   rightPanelCollapsed,
   onToggleRightPanel,
+  initialPrompt,
+  onInitialPromptConsumed,
+  initialAutonomy,
+  initialFiles,
+  autonomyScope,
+  userRole,
 }: {
   agentAlias: string;
   onStatus?: (s: AgentChatStatus) => void;
   sessionTitle?: string;
   rightPanelCollapsed?: boolean;
   onToggleRightPanel?: () => void;
+  initialPrompt?: string;
+  onInitialPromptConsumed?: () => void;
+  initialAutonomy?: WorkbenchAutonomy;
+  initialFiles?: File[];
+  autonomyScope?: string;
+  userRole?: string;
 }) {
   const {
     messages,
@@ -129,10 +205,21 @@ export function AgentChatInner({
     respondToApproval,
     contextMaxTokens,
     contextInputTokens,
+    sessionId,
   } = useAgent();
 
   const { draft, saveDraft, clearDraft } = useDraft(`${DRAFT_KEY_PREFIX}.${agentAlias}`);
   const [input, setInput] = useState(draft);
+  const persistAutonomyScope = autonomyScope ?? sessionId;
+  const maxAutonomy = maxAutonomyForRole(userRole);
+  const [autonomy, setAutonomy] = useState<WorkbenchAutonomy>(() =>
+    clampWorkbenchAutonomy(
+      initialAutonomy
+        ?? loadWorkbenchAutonomy(persistAutonomyScope)
+        ?? DEFAULT_WORKBENCH_AUTONOMY,
+      maxAutonomy,
+    ),
+  );
   const [showModelDropdown, setShowModelDropdown] = useState(false);
   // Slash-command autocomplete popover (#7137). Shown while the input begins
   // with a single '/' and the token still matches at least one command.
@@ -153,7 +240,15 @@ export function AgentChatInner({
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const modelDropdownRef = useRef<HTMLDivElement>(null);
+  const consumedInitialRef = useRef(false);
+  const wasTypingRef = useRef(false);
+  const [attachments, setAttachments] = useState<PendingAttach[]>([]);
+  const attachmentsRef = useRef(attachments);
+  attachmentsRef.current = attachments;
+  const [dragOver, setDragOver] = useState(false);
+  const [attachHint, setAttachHint] = useState<string | null>(null);
 
   // Persist draft to in-memory store so it survives route changes
   useEffect(() => {
@@ -174,6 +269,13 @@ export function AgentChatInner({
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, typing, streamingContent]);
+
+  useEffect(() => {
+    const finished = wasTypingRef.current && !typing;
+    wasTypingRef.current = typing;
+    if (!finished || !connected) return;
+    requestAnimationFrame(() => inputRef.current?.focus());
+  }, [typing, connected]);
 
   // Close model dropdown when clicking outside
   useEffect(() => {
@@ -255,20 +357,39 @@ export function AgentChatInner({
 
   const handleSend = () => {
     const trimmed = input.trim();
-    if (!trimmed) return;
+    const ready = attachments.filter((a) => a.status === 'ready');
+    if (attachments.some((a) => a.status === 'uploading')) return;
 
-    // Slash commands are dispatched BEFORE the connectivity check so purely
-    // local commands like /help still work during transient disconnects.
-    // Network-dependent commands (/clear, /model) self-recover via their own
-    // reconnect paths inside the context. #7137
     if (isSlashCommand(trimmed)) {
       runCommand(trimmed);
-    } else {
-      if (!connected) return;
-      // `//` is the documented escape for a literal leading slash (#7223);
-      // strip one `/` so `//foo` is sent to the agent as `/foo`.
-      sendMessage(trimmed.startsWith('//') ? trimmed.slice(1) : trimmed);
+      setShowCommandHint(false);
+      setInput('');
+      clearDraft();
+      if (inputRef.current) {
+        inputRef.current.style.height = 'auto';
+        inputRef.current.focus();
+      }
+      return;
     }
+
+    if (!connected) return;
+    if (!trimmed && ready.length === 0) return;
+
+    const text = trimmed.startsWith('//') ? trimmed.slice(1) : trimmed;
+    const payload = ready.length
+      ? composeUploadMessage(
+          text,
+          ready.map((a) => ({ cwdRel: a.cwdRel, filename: a.filename, mime: a.mime })),
+        )
+      : text;
+    sendMessage(payload, clampWorkbenchAutonomy(autonomy, maxAutonomy));
+    setAttachments((prev) => {
+      for (const a of prev) {
+        if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
+      }
+      return [];
+    });
+    setAttachHint(null);
     setShowCommandHint(false);
     setInput('');
     clearDraft();
@@ -276,6 +397,111 @@ export function AgentChatInner({
       inputRef.current.style.height = 'auto';
       inputRef.current.focus();
     }
+  };
+
+  const addFiles = useCallback(
+    async (fileList: File[]): Promise<Array<{ cwdRel: string; filename: string; mime: string }>> => {
+      if (fileList.length === 0) return [];
+      setAttachHint(null);
+      const prev = attachmentsRef.current;
+      let room = Math.max(0, CHAT_UPLOAD_MAX_FILES - prev.length);
+      if (fileList.length > room) setAttachHint(t('workbench.attach_too_many'));
+      const jobs: Array<{ id: string; file: File; filename: string; path: string }> = [];
+      const extras: PendingAttach[] = [];
+      const used = prev.map((a) => a.filename);
+      for (const file of fileList) {
+        if (room <= 0) break;
+        if (file.size > CHAT_UPLOAD_MAX_BYTES) {
+          setAttachHint(t('workbench.attach_too_large').replace('{name}', file.name));
+          continue;
+        }
+        const filename = uniqueUploadFileName(used, file.name);
+        used.push(filename);
+        const id = crypto.randomUUID();
+        const path = sessionUploadWorkspacePath(sessionId, filename);
+        jobs.push({ id, file, filename, path });
+        extras.push({
+          id,
+          filename,
+          size: file.size,
+          mime: file.type,
+          cwdRel: cwdRelativeUploadPath(filename),
+          workspacePath: path,
+          status: 'uploading',
+          previewUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined,
+        });
+        room -= 1;
+      }
+      if (extras.length === 0) return [];
+      setAttachments((cur) => [...cur, ...extras]);
+      const uploaded: Array<{ cwdRel: string; filename: string; mime: string }> = [];
+      for (const job of jobs) {
+        try {
+          await uploadAgentWorkspaceFile(agentAlias, job.path, job.file);
+          setAttachments((cur) =>
+            cur.map((a) => (a.id === job.id ? { ...a, status: 'ready' } : a)),
+          );
+          uploaded.push({
+            cwdRel: cwdRelativeUploadPath(job.filename),
+            filename: job.filename,
+            mime: job.file.type,
+          });
+        } catch {
+          setAttachments((cur) =>
+            cur.map((a) => (a.id === job.id ? { ...a, status: 'error' } : a)),
+          );
+          setAttachHint(t('workbench.attach_failed').replace('{name}', job.file.name));
+        }
+      }
+      return uploaded;
+    },
+    [agentAlias, sessionId],
+  );
+
+  useEffect(() => {
+    if (consumedInitialRef.current) return;
+    const trimmed = (initialPrompt ?? '').trim();
+    const files = initialFiles ?? [];
+    const bootstrapping = initialPrompt !== undefined || files.length > 0;
+    if (!bootstrapping) return;
+    if (!trimmed && files.length === 0) {
+      consumedInitialRef.current = true;
+      onInitialPromptConsumed?.();
+      return;
+    }
+    if (isSlashCommand(trimmed) && files.length === 0) {
+      consumedInitialRef.current = true;
+      runCommand(trimmed);
+      onInitialPromptConsumed?.();
+      return;
+    }
+    if (!connected) return;
+    consumedInitialRef.current = true;
+    void (async () => {
+      const ready = files.length > 0 ? await addFiles(files) : [];
+      const text = trimmed.startsWith('//') ? trimmed.slice(1) : trimmed;
+      if (!text && ready.length === 0) {
+        onInitialPromptConsumed?.();
+        return;
+      }
+      const payload = ready.length ? composeUploadMessage(text, ready) : text;
+      sendMessage(payload, clampWorkbenchAutonomy(autonomy, maxAutonomy));
+      setAttachments((prev) => {
+        for (const a of prev) {
+          if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
+        }
+        return [];
+      });
+      onInitialPromptConsumed?.();
+    })();
+  }, [initialPrompt, initialFiles, connected, runCommand, sendMessage, onInitialPromptConsumed, autonomy, addFiles]);
+
+  const removeAttachment = (id: string) => {
+    setAttachments((prev) => {
+      const target = prev.find((a) => a.id === id);
+      if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl);
+      return prev.filter((a) => a.id !== id);
+    });
   };
 
   const isComposingRef = useRef(false);
@@ -412,12 +638,35 @@ export function AgentChatInner({
        Hoisting the opt-out to the outermost container covers all of them
        with a single ancestor. Static UI chrome here localizes through
        t() i18n, so losing browser translation on it is intentional. */
-    <div translate="no" className="notranslate flex flex-col h-full min-h-0 bg-pc-surface">
+    <div
+      translate="no"
+      className="notranslate relative flex h-full min-h-0 flex-col bg-pc-surface"
+      onDragEnter={(e) => {
+        e.preventDefault();
+        if (e.dataTransfer.types.includes('Files')) setDragOver(true);
+      }}
+      onDragOver={(e) => {
+        e.preventDefault();
+        if (e.dataTransfer.types.includes('Files')) setDragOver(true);
+      }}
+      onDragLeave={(e) => {
+        if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+        setDragOver(false);
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragOver(false);
+        void addFiles([...e.dataTransfer.files]);
+      }}
+    >
+      {dragOver && (
+        <div className="pointer-events-none absolute inset-3 z-40 flex items-center justify-center rounded-xl border-2 border-dashed border-pc-accent bg-pc-accent/10">
+          <p className="text-sm font-medium text-pc-accent">{t('workbench.attach_drop')}</p>
+        </div>
+      )}
       <div className="flex w-full min-w-0 items-center justify-between border-b border-pc-border px-4 py-3 overflow-hidden shrink-0">
         <div className="flex items-center gap-3 flex-1 min-w-0 overflow-hidden">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--pc-hover)] shrink-0">
-            <Bot className="h-5 w-5 text-pc-text" />
-          </div>
+          <AgentAvatar className="h-9 w-9" />
           <div className="flex flex-col min-w-0 flex-1 overflow-hidden">
             <h2 className="text-sm font-semibold min-w-0 truncate text-pc-text" title={sessionTitle?.trim() || agentAlias}>
               {sessionTitle?.trim() || agentAlias}
@@ -428,81 +677,35 @@ export function AgentChatInner({
           </div>
         </div>
         <div className="flex items-center shrink-0 ml-2 gap-0.5">
-          <div className="relative" ref={modelDropdownRef}>
-            <button
-              type="button"
-              onClick={() => setShowModelDropdown((v) => !v)}
-              disabled={modelLoading || typing || (availableModels.length === 0 && currentModel === null)}
-              className="flex items-center gap-2 px-2 h-8 max-w-[220px] rounded-md text-xs font-medium text-pc-text-secondary transition-colors hover:bg-[var(--pc-hover)] hover:text-pc-text disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--pc-focus)]"
-            >
-              <span className="truncate">
-                {modelLoading
-                  ? t('agent.model_switching')
-                  : (currentModel ?? (availableModels.length === 0 ? t('agent.model_loading') : t('agent.select_model')))}
-              </span>
-              <ChevronDown className="h-3 w-3" />
-            </button>
-            {showModelDropdown && availableModels.length > 0 && (
-              <div className="absolute right-0 mt-1.5 rounded-[var(--radius-md)] border border-pc-border bg-pc-elevated shadow-[var(--pc-shadow-md)] z-50 py-1 min-w-[200px] max-h-60 overflow-y-auto">
-                {availableModels.map((model) => {
-                  const isActive = model === currentModel;
-                  return (
-                    <button
-                      key={model}
-                      type="button"
-                      onClick={() => handleModelSwitch(model)}
-                      className={`w-full text-left px-3 py-2 text-xs transition-colors ${
-                        isActive
-                          ? 'text-pc-accent bg-pc-accent/10'
-                          : 'text-pc-text hover:bg-[var(--pc-hover)]'
-                      }`}
-                    >
-                      {model}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-          <Link
-            to={`/agent/${encodeURIComponent(agentAlias)}/workspace`}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-pc-text-muted hover:bg-[var(--pc-hover)] hover:text-pc-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--pc-focus)]"
-            title={t('agentchat.open_workspace')}
+          <button
+            type="button"
+            onClick={toggleCompact}
+            aria-label={t('agent.compact_mode')}
+            title={t('agent.compact_mode')}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-pc-text-muted hover:bg-[var(--pc-hover)] hover:text-pc-text"
           >
-            <FolderOpen className="h-4 w-4" />
-          </Link>
-          {messages.length > 0 && (
-            <>
-              <button
-                type="button"
-                onClick={toggleCompact}
-                aria-label={t('agent.compact_mode')}
-                title={t('agent.compact_mode')}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-pc-text-muted hover:bg-[var(--pc-hover)] hover:text-pc-text"
-              >
-                {compact ? <Maximize2 className="h-4 w-4" /> : <Minimize2 className="h-4 w-4" />}
-              </button>
-              <button
-                type="button"
-                onClick={toggleToolActivity}
-                aria-label={showToolActivity ? t('agent.tool_activity_hide') : t('agent.tool_activity_show')}
-                aria-pressed={showToolActivity}
-                title={showToolActivity ? t('agent.tool_activity_hide') : t('agent.tool_activity_show')}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-pc-text-muted hover:bg-[var(--pc-hover)] hover:text-pc-text"
-              >
-                <Wrench className="h-4 w-4" />
-              </button>
-              <button
-                type="button"
-                onClick={handleClearAll}
-                aria-label={t('agent.clear_all')}
-                title={t('agent.clear_all')}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-pc-text-muted hover:bg-status-error/15 hover:text-status-error"
-              >
-                <Trash2 className="h-4 w-4" />
-              </button>
-            </>
-          )}
+            {compact ? <Maximize2 className="h-4 w-4" /> : <Minimize2 className="h-4 w-4" />}
+          </button>
+          <button
+            type="button"
+            onClick={toggleToolActivity}
+            aria-label={showToolActivity ? t('agent.tool_activity_hide') : t('agent.tool_activity_show')}
+            aria-pressed={showToolActivity}
+            title={showToolActivity ? t('agent.tool_activity_hide') : t('agent.tool_activity_show')}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-pc-text-muted hover:bg-[var(--pc-hover)] hover:text-pc-text"
+          >
+            <Wrench className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={handleClearAll}
+            disabled={messages.length === 0}
+            aria-label={t('agent.clear_all')}
+            title={t('agent.clear_all')}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-pc-text-muted hover:bg-status-error/15 hover:text-status-error disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-pc-text-muted"
+          >
+            <Trash2 className="h-4 w-4" />
+          </button>
           {onToggleRightPanel && (
             <button
               type="button"
@@ -526,26 +729,25 @@ export function AgentChatInner({
 
       {/* Messages area. */}
       <div
-        className={`flex-1 overflow-y-auto p-4 ${compact ? 'space-y-1.5' : 'space-y-4'}`}
+        className={`flex-1 overflow-y-auto p-4 pb-8 ${compact ? 'space-y-1.5' : 'space-y-2'}`}
       >
-        {messages.length === 0 && (
+        {messages.length === 0 && !initialPrompt && (
           <div className="flex flex-col items-center justify-center h-full text-center animate-fade-in text-pc-text-muted">
-            <div className="h-14 w-14 rounded-[var(--radius-lg)] flex items-center justify-center mb-4 bg-pc-accent/10">
-              <Bot className="h-7 w-7 text-pc-accent" />
-            </div>
-            <p className="text-base font-semibold mb-1 text-pc-text">{t('agentchat.empty_title')}</p>
+            <AgentAvatar className="mb-4 h-14 w-14" />
+            <p className="text-base font-semibold mb-1 text-pc-text">{t('workbench.brand')}</p>
             <p className="text-sm text-pc-text-muted">{t('agent.start_conversation')}</p>
           </div>
         )}
 
         {messages
-          .filter((msg) => showToolActivity || !msg.toolCall)
+          .filter((msg) => showToolActivity || !msg.toolCall || isVisualArtifact(msg.toolCall.artifact) || !!canvasPreviewFromToolCall(msg.toolCall) || looksLikeChatImages(msg.toolCall.output))
           .map((msg, idx) => (
             <MessageItem
               key={msg.id}
               msg={msg}
               idx={idx}
               compact={compact}
+              showToolActivity={showToolActivity}
               isCopied={copiedId === msg.id}
               onCopy={handleCopy}
               onDelete={handleDeleteMessage}
@@ -554,11 +756,9 @@ export function AgentChatInner({
 
         {typing && (
           <div className="flex items-start gap-3 animate-fade-in">
-            <div className="flex-shrink-0 w-8 h-8 rounded-[var(--radius-md)] flex items-center justify-center border border-pc-border bg-pc-elevated">
-              <Bot className="h-4 w-4 text-pc-accent" />
-            </div>
+            <AgentAvatar className="h-8 w-8" />
             {streamingContent || streamingThinking ? (
-              <div className="rounded-[var(--radius-lg)] px-4 py-3 border border-pc-border bg-pc-elevated text-pc-text max-w-[75%]">
+              <div className="min-w-0 flex-1 rounded-[var(--radius-lg)] px-4 py-3 border border-pc-border bg-pc-elevated text-pc-text">
                 {streamingThinking && (
                   <details className="mb-2" open={!streamingContent}>
                     <summary className="text-xs cursor-pointer select-none text-pc-text-muted">{t('agentchat.thinking')}{!streamingContent && '...'}</summary>
@@ -617,13 +817,58 @@ export function AgentChatInner({
           </div>
         )}
         <div className="max-w-4xl mx-auto">
-          <div className="relative flex w-full min-w-0 items-end gap-2 rounded-lg border border-pc-border bg-pc-elevated px-3 py-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={(e) => {
+              void addFiles([...(e.target.files ?? [])]);
+              e.target.value = '';
+            }}
+          />
+          <div className="relative flex w-full min-w-0 flex-col rounded-2xl border border-pc-border bg-pc-elevated px-3 pt-3 pb-2">
+            {attachments.length > 0 && (
+              <ul className="mb-2 flex flex-wrap gap-1.5">
+                {attachments.map((file) => (
+                  <li
+                    key={file.id}
+                    className="flex max-w-full items-center gap-1.5 rounded-md border border-pc-border bg-pc-surface px-2 py-1 text-xs text-pc-text"
+                  >
+                    {file.previewUrl ? (
+                      <img src={file.previewUrl} alt="" className="size-6 rounded object-cover" />
+                    ) : null}
+                    {file.status === 'uploading' ? (
+                      <Loader2 className="size-3.5 shrink-0 animate-spin text-pc-text-muted" />
+                    ) : null}
+                    <span className="min-w-0 truncate" title={file.filename}>
+                      {file.filename}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => removeAttachment(file.id)}
+                      className="inline-flex size-5 items-center justify-center rounded text-pc-text-muted hover:bg-[var(--pc-hover)] hover:text-pc-text"
+                      aria-label={t('workbench.attach_remove')}
+                      title={t('workbench.attach_remove')}
+                    >
+                      <X className="size-3" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
             <textarea
               ref={inputRef}
               rows={1}
               value={input}
               onChange={handleTextareaChange}
               onKeyDown={handleKeyDown}
+              onPaste={(e) => {
+                const files = [...e.clipboardData.files];
+                if (files.length === 0) return;
+                e.preventDefault();
+                void addFiles(files);
+              }}
               onCompositionStart={() => { isComposingRef.current = true; }}
               onCompositionEnd={() => { isComposingRef.current = false; }}
               placeholder={!connected
@@ -632,52 +877,126 @@ export function AgentChatInner({
                   ? t('agent.running')
                   : t('agent.type_message')}
               disabled={!connected || typing}
-              className="flex-1 min-w-0 bg-transparent text-sm resize-none text-pc-text placeholder:text-pc-text-muted focus:outline-none disabled:opacity-40"
-              style={{ minHeight: '2rem', maxHeight: '10rem', paddingTop: '6px', paddingBottom: '6px' }}
+              className="w-full min-w-0 bg-transparent text-sm resize-none text-pc-text placeholder:text-pc-text-muted outline-none focus:outline-none focus-visible:outline-none disabled:opacity-40"
+              style={{ minHeight: '2.5rem', maxHeight: '10rem', paddingTop: '2px', paddingBottom: '8px' }}
             />
-            {typing ? (
-              <button
-                type="button"
-                onClick={handleAbort}
-                className="flex-shrink-0 inline-flex size-8 items-center justify-center rounded-md bg-status-error text-white hover:opacity-90 disabled:opacity-40"
-                aria-label={t('agent.stop')}
-                title={t('agent.stop')}
-              >
-                <Square className="h-3.5 w-3.5" fill="currentColor" />
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={handleSend}
-                disabled={!connected || !input.trim()}
-                className="flex-shrink-0 inline-flex size-8 items-center justify-center rounded-md bg-pc-accent text-[#0b1220] hover:bg-pc-accent-light disabled:opacity-40 disabled:cursor-not-allowed"
-                aria-label={t('agent.send')}
-              >
-                <ArrowUp className="h-4 w-4" />
-              </button>
-            )}
-          </div>
-          <div className="flex items-center justify-between mt-2 gap-2">
-            <div className="flex items-center gap-2">
-              <span
-                className="status-dot"
-                style={typing
-                  ? { background: 'var(--pc-accent)', boxShadow: '0 0 6px var(--pc-accent)' }
-                  : connected
-                    ? { background: 'var(--color-status-success)', boxShadow: '0 0 6px var(--color-status-success)' }
-                    : { background: 'var(--color-status-error)', boxShadow: '0 0 6px var(--color-status-error)' }
-                }
-              />
-              <span className="text-[10px]" style={{ color: 'var(--pc-text-faint)' }}>
-                {typing
-                  ? t('agent.running')
-                  : connected
-                    ? t('agent.connected_status')
-                    : t('agent.disconnected_status')}
-              </span>
+            <div className="flex w-full min-w-0 items-center justify-between gap-2">
+              <div className="flex min-w-0 items-center gap-0.5">
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={!connected || typing}
+                  className="flex-shrink-0 inline-flex size-8 items-center justify-center rounded-md text-pc-text-muted hover:bg-[var(--pc-hover)] hover:text-pc-text disabled:opacity-40"
+                  aria-label={t('workbench.attach_file')}
+                  title={t('workbench.attach_file')}
+                >
+                  <Plus className="h-4 w-4" />
+                </button>
+                <AutonomySelect
+                  value={autonomy}
+                  maxLevel={maxAutonomy}
+                  disabled={!connected || typing}
+                  onChange={(level) => {
+                    const next = clampWorkbenchAutonomy(level, maxAutonomy);
+                    setAutonomy(next);
+                    saveWorkbenchAutonomy(persistAutonomyScope, next);
+                  }}
+                />
+              </div>
+              <div className="flex shrink-0 items-center gap-1.5">
+                <span
+                  className="inline-flex size-4 shrink-0 rounded-full border-2"
+                  style={typing
+                    ? { borderColor: 'var(--pc-accent)' }
+                    : connected
+                      ? { borderColor: 'var(--color-status-success)' }
+                      : { borderColor: 'var(--color-status-error)' }
+                  }
+                  title={typing
+                    ? t('agent.running')
+                    : connected
+                      ? t('agent.connected_status')
+                      : t('agent.disconnected_status')}
+                />
+                <div className="flex items-center gap-1.5">
+                  <div className="relative" ref={modelDropdownRef}>
+                    <button
+                      type="button"
+                      onClick={() => setShowModelDropdown((v) => !v)}
+                      disabled={modelLoading || typing || (availableModels.length === 0 && currentModel === null)}
+                      className="flex items-center gap-1 rounded-md px-1.5 py-1 text-sm text-pc-text-secondary hover:bg-[var(--pc-hover)] hover:text-pc-text disabled:opacity-50"
+                    >
+                      <span className="max-w-[9rem] truncate">
+                        {modelLoading
+                          ? t('agent.model_switching')
+                          : (currentModel ?? (availableModels.length === 0 ? t('agent.model_loading') : t('agent.select_model')))}
+                      </span>
+                      <ChevronDown className="h-3 w-3 shrink-0" />
+                    </button>
+                    {showModelDropdown && availableModels.length > 0 && (
+                      <div className="absolute bottom-[calc(100%+8px)] right-0 z-50 max-h-60 min-w-[200px] overflow-y-auto rounded-[var(--radius-md)] border border-pc-border bg-pc-elevated py-1 shadow-[var(--pc-shadow-md)]">
+                        {availableModels.map((model) => {
+                          const isActive = model === currentModel;
+                          return (
+                            <button
+                              key={model}
+                              type="button"
+                              onClick={() => handleModelSwitch(model)}
+                              className={`w-full text-left px-3 py-2 text-xs transition-colors ${
+                                isActive
+                                  ? 'text-pc-accent bg-pc-accent/10'
+                                  : 'text-pc-text hover:bg-[var(--pc-hover)]'
+                              }`}
+                            >
+                              {model}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                  <ContextMeter contextMaxTokens={contextMaxTokens} contextInputTokens={contextInputTokens} />
+                </div>
+                <button
+                  type="button"
+                  disabled
+                  className="inline-flex size-8 shrink-0 items-center justify-center rounded-md text-pc-text-muted opacity-60"
+                  aria-label={t('workbench.voice_input')}
+                  title={t('workbench.voice_soon')}
+                >
+                  <Mic className="h-4 w-4" />
+                </button>
+                {typing ? (
+                  <button
+                    type="button"
+                    onClick={handleAbort}
+                    className="flex-shrink-0 inline-flex size-8 items-center justify-center rounded-full bg-status-error text-white hover:opacity-90 disabled:opacity-40"
+                    aria-label={t('agent.stop')}
+                    title={t('agent.stop')}
+                  >
+                    <Square className="h-3.5 w-3.5" fill="currentColor" />
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleSend}
+                    disabled={
+                      !connected
+                      || attachments.some((a) => a.status === 'uploading')
+                      || (!input.trim() && attachments.filter((a) => a.status === 'ready').length === 0)
+                    }
+                    className="flex-shrink-0 inline-flex size-8 items-center justify-center rounded-full bg-pc-text text-pc-base hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
+                    aria-label={t('agent.send')}
+                  >
+                    <ArrowUp className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
             </div>
-            <ContextBar contextMaxTokens={contextMaxTokens} contextInputTokens={contextInputTokens} />
           </div>
+          {attachHint && (
+            <p className="mt-1 text-[11px] text-status-error">{attachHint}</p>
+          )}
         </div>
       </div>
     </div>
@@ -705,15 +1024,35 @@ interface MessageItemProps {
   msg: ChatMessage;
   idx: number;
   compact: boolean;
+  showToolActivity: boolean;
   isCopied: boolean;
   onCopy: (id: string, content: string) => void;
   onDelete: (id: string) => void;
+}
+
+function ChatMarkdown({ content, compact }: { content: string; compact: boolean }) {
+  const { markdown, htmlBlocks } = splitChatHtmlBlocks(stripImageMarkers(content));
+  const images = extractToolImages(content);
+  return (
+    <>
+      {markdown ? (
+        <div className={`${compact ? 'text-xs' : 'text-sm'} break-words leading-relaxed chat-markdown`}>
+          <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{markdown}</ReactMarkdown>
+        </div>
+      ) : null}
+      {htmlBlocks.map((html, i) => (
+        <HtmlSrcDocPreview key={i} html={html} />
+      ))}
+      <ChatImagePreview images={images} />
+    </>
+  );
 }
 
 const MessageItem = memo(function MessageItem({
   msg,
   idx,
   compact,
+  showToolActivity,
   isCopied,
   onCopy,
   onDelete,
@@ -723,39 +1062,34 @@ const MessageItem = memo(function MessageItem({
   // them (that would clip a message starting with a bracketed datetime). Only
   // server-sourced messages can be prefixed.
   const cleanContent = msg.local || msg.ephemeral ? msg.content : stripServerTimestamp(msg.content);
+  const shownContent = msg.role === 'user' ? displayUploadMessage(cleanContent) : cleanContent;
+  const canvas = canvasPreviewFromToolCall(msg.toolCall);
+
+  const isUser = msg.role === 'user';
+  const userLong = isUser && (shownContent.includes('\n') || shownContent.length > 40);
 
   return (
     <div
-      className={`group flex items-start ${compact ? 'gap-2' : 'gap-3'} ${
-        msg.role === 'user' ? 'flex-row-reverse animate-slide-in-right' : 'animate-slide-in-left'
+      className={`group relative z-0 hover:z-30 flex items-start ${compact ? 'gap-2' : 'gap-3'} ${
+        isUser ? 'justify-end animate-slide-in-right' : 'animate-slide-in-left'
       }`}
       style={{ animationDelay: `${Math.min(idx * 30, 200)}ms` }}
     >
-      {!compact && (
-        <div
-          className={`flex-shrink-0 w-8 h-8 rounded-[var(--radius-md)] flex items-center justify-center border ${
-            msg.notice
-              ? 'bg-status-warning/10 border-status-warning/30'
-              : msg.role === 'user'
-              ? 'bg-pc-accent/15 border-pc-accent/30'
-              : 'bg-pc-elevated border-pc-border'
-          }`}
-        >
-          {msg.notice ? (
+      {!isUser && !compact && (
+        msg.notice ? (
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-status-warning/30 bg-status-warning/10">
             <AlertCircle className="h-4 w-4 text-status-warning" />
-          ) : msg.role === 'user' ? (
-            <User className="h-4 w-4 text-pc-accent" />
-          ) : (
-            <Bot className="h-4 w-4 text-pc-accent" />
-          )}
-        </div>
+          </div>
+        ) : (
+          <AgentAvatar className="h-8 w-8" />
+        )
       )}
-      <div className="relative max-w-[75%]">
+      <div className={isUser ? 'relative max-w-[75%] min-w-0' : 'relative min-w-0 flex-1'}>
         <div
-          className={`${compact ? 'rounded-[var(--radius-md)] px-3 py-1.5 border' : 'rounded-[var(--radius-lg)] px-4 py-3 border'} text-pc-text ${
+          className={`${isUser ? `w-fit max-w-full ml-auto ${userLong ? 'text-left' : 'text-right'}` : 'w-full'} ${compact ? 'rounded-[var(--radius-md)] px-3 py-1.5 border' : 'rounded-[var(--radius-lg)] px-4 py-3 border'} text-pc-text ${
             msg.notice
               ? 'bg-status-warning/5 border-status-warning/30'
-              : msg.role === 'user'
+              : isUser
               ? 'bg-pc-accent/10 border-pc-accent/20'
               : 'bg-pc-elevated border-pc-border'
           }`}
@@ -767,21 +1101,44 @@ const MessageItem = memo(function MessageItem({
             </details>
           )}
           {msg.toolCall ? (
-            <ToolCallCard toolCall={msg.toolCall} />
+            <>
+              {showToolActivity && <ToolCallCard toolCall={msg.toolCall} />}
+              {isVisualArtifact(msg.toolCall.artifact) && msg.toolCall.artifact && (
+                <div className={showToolActivity ? 'mt-2' : ''}>
+                  <ArtifactCard artifact={msg.toolCall.artifact} />
+                </div>
+              )}
+              {canvas && (
+                <HtmlSrcDocPreview
+                  html={canvas.content}
+                  title={canvas.canvasId}
+                />
+              )}
+              {!isVisualArtifact(msg.toolCall.artifact) && (
+                <ChatImagePreview
+                  images={extractToolImages(msg.toolCall.output)}
+                  caption={extractMcpToolText(msg.toolCall.output ?? '')}
+                />
+              )}
+            </>
           ) : msg.markdown ? (
-            <div className={`${compact ? 'text-xs' : 'text-sm'} break-words leading-relaxed chat-markdown`}><ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{cleanContent}</ReactMarkdown></div>
+            <ChatMarkdown content={shownContent} compact={compact} />
           ) : (
-            <p className={`${compact ? 'text-xs' : 'text-sm'} whitespace-pre-wrap break-words leading-relaxed`}>{cleanContent}</p>
-          )}
-          {!compact && (
-            <p className="text-[10px] mt-1.5 text-pc-text-faint">
-              {msg.timestamp.toLocaleTimeString()}
-            </p>
+            <p className={`${compact ? 'text-xs' : 'text-sm'} whitespace-pre-wrap break-words leading-relaxed ${isUser ? (userLong ? 'text-left' : 'text-right') : ''}`}>{shownContent}</p>
           )}
         </div>
-        <div className="flex items-center justify-end gap-1 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div
+          className={[
+            'absolute top-full z-20 mt-0.5 flex items-center gap-1 rounded-md bg-pc-surface/95 px-1 py-0.5',
+            'opacity-0 group-hover:opacity-100 transition-opacity',
+            msg.role === 'user' ? 'right-0' : 'left-0',
+          ].join(' ')}
+        >
+          <span className="px-1 text-[10px] tabular-nums text-pc-text-faint whitespace-nowrap">
+            {msg.timestamp.toLocaleString(undefined, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
+          </span>
           <button
-            onClick={() => onCopy(msg.id, cleanContent)}
+            onClick={() => onCopy(msg.id, shownContent)}
             aria-label={t('agent.copy_message')}
             className="p-1 rounded-[var(--radius-sm)] text-pc-text-muted hover:text-pc-text transition-colors"
           >
@@ -800,6 +1157,11 @@ const MessageItem = memo(function MessageItem({
           </button>
         </div>
       </div>
+      {isUser && !compact && (
+        <div className="flex-shrink-0 w-8 h-8 rounded-[var(--radius-md)] flex items-center justify-center border bg-pc-accent/15 border-pc-accent/30">
+          <User className="h-4 w-4 text-pc-accent" />
+        </div>
+      )}
     </div>
   );
 });

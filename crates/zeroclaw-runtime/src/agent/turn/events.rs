@@ -100,11 +100,11 @@ pub(crate) async fn emit_tool_result(
             name: name.to_string(),
             output: scrub_credentials(&outcome.output),
             // Project the tool's structured output into typed artifact metadata
-            // when it declared a delivered file, so channels never parse `output`.
+            // when it declared a delivered or written file, so channels never parse `output`.
             artifact: outcome
                 .output_data
                 .as_ref()
-                .and_then(ToolArtifact::from_delivered_data),
+                .and_then(ToolArtifact::from_output_data),
         })
         .await;
 }

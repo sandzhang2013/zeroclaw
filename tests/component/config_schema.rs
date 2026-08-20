@@ -665,10 +665,28 @@ fn user_workspace_dir_is_under_install_users() {
 }
 
 #[test]
+fn user_session_workspace_dir_nests_under_user_and_session() {
+    let config = Config {
+        config_path: std::path::PathBuf::from("/opt/zeroclaw/config.toml"),
+        ..Config::default()
+    };
+    let alice_a = config.user_session_workspace_dir("alice", "default", "sess-a");
+    let alice_b = config.user_session_workspace_dir("alice", "default", "sess-b");
+    let bob_a = config.user_session_workspace_dir("bob", "default", "sess-a");
+    assert!(alice_a.ends_with("users/alice/agents/default/workspace/sessions/sess-a"));
+    assert!(alice_b.ends_with("users/alice/agents/default/workspace/sessions/sess-b"));
+    assert!(bob_a.ends_with("users/bob/agents/default/workspace/sessions/sess-a"));
+    assert_ne!(alice_a, alice_b);
+    assert_ne!(alice_a, bob_a);
+}
+
+#[test]
 fn trusted_proxy_without_secret_fails_validation() {
     let mut config = Config::default();
     config.gateway.trusted_proxy = true;
     config.gateway.trusted_proxy_secret = None;
-    let err = config.validate().expect_err("empty secret must fail closed");
+    let err = config
+        .validate()
+        .expect_err("empty secret must fail closed");
     assert!(err.to_string().contains("trusted_proxy_secret"));
 }

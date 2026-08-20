@@ -185,11 +185,16 @@ export class WebSocketClient {
   }
 
   /** Send a chat message to the agent. */
-  sendMessage(content: string): void {
+  sendMessage(content: string, autonomy?: 'readonly' | 'supervised' | 'full'): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error('WebSocket is not connected');
     }
-    this.ws.send(JSON.stringify({ type: 'message', content }));
+    const payload: { type: 'message'; content: string; autonomy?: string } = {
+      type: 'message',
+      content,
+    };
+    if (autonomy) payload.autonomy = autonomy;
+    this.ws.send(JSON.stringify(payload));
   }
 
   /**

@@ -1288,9 +1288,10 @@ export function rmdirShared(path: string): Promise<{ removed: string }> {
 
 // ── Agent workspace explorer ────────────────────────────────────────────
 //
-// All four endpoints scope to `<install>/agents/{alias}/workspace/`. The
-// runtime enforces containment + protected-file refusal; the dashboard is
-// a viewer/editor on top.
+// All four endpoints scope to the frozen user's workspace when the BFF
+// asserts identity (`users/<id>/agents/{alias}/workspace/`), otherwise
+// `<install>/agents/{alias}/workspace/`. The runtime enforces containment
+// + protected-file refusal; the dashboard is a viewer/editor on top.
 
 export interface AgentWorkspaceFileRead {
   path: string;
@@ -1299,6 +1300,14 @@ export interface AgentWorkspaceFileRead {
   /** UTF-8 text when `is_text` is true, base64 otherwise. */
   content: string;
   encoding: "utf8" | "base64";
+  mime?: string;
+}
+
+/** Same-origin raw bytes URL. Relies on BFF/cookie identity, not query user_id. */
+export function workspaceRawUrl(alias: string, path: string, download = false): string {
+  const q = new URLSearchParams({ path });
+  if (download) q.set("download", "true");
+  return `/api/agents/${encodeURIComponent(alias)}/workspace/raw?${q.toString()}`;
 }
 
 export function listAgentWorkspace(
@@ -1349,6 +1358,55 @@ export function createAgentWorkspaceDirectory(
     `/api/agents/${encodeURIComponent(alias)}/workspace/mkdir`,
     { method: "POST", body: JSON.stringify({ path }) },
   );
+}
+
+export interface AgentWorkspaceUploadResult {
+  path: string;
+  size: number;
+  mime: string;
+}
+
+/** Raw-body upload into the frozen user's workspace. Path is workspace-relative. */
+export async function uploadAgentWorkspaceFile(
+  alias: string,
+  path: string,
+  body: Blob,
+): Promise<AgentWorkspaceUploadResult> {
+  const token = getToken();
+  const headers = new Headers();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  headers.set("Content-Type", body.type || "application/octet-stream");
+  const url = `${apiOrigin}${basePath}/api/agents/${encodeURIComponent(alias)}/workspace/upload?path=${encodeURIComponent(path)}`;
+  const response = await fetch(url, { method: "POST", headers, body });
+  const text = response.status === 204 ? "" : await response.text().catch(() => "");
+  if (response.status === 401) {
+    clearToken();
+    window.dispatchEvent(new Event("zeroclaw-unauthorized"));
+    throw new UnauthorizedError();
+  }
+  if (!response.ok) {
+    if (text) {
+      try {
+        const parsed = JSON.parse(text) as { code?: string; message?: string; error?: string };
+        if (parsed && typeof parsed === "object") {
+          const message =
+            typeof parsed.message === "string"
+              ? parsed.message
+              : typeof parsed.error === "string"
+                ? parsed.error
+                : text;
+          throw new ApiError(response.status, {
+            code: typeof parsed.code === "string" ? parsed.code : "upload_failed",
+            message,
+          });
+        }
+      } catch (e) {
+        if (e instanceof ApiError) throw e;
+      }
+    }
+    throw new Error(`API ${response.status}: ${text || response.statusText}`);
+  }
+  return JSON.parse(text) as AgentWorkspaceUploadResult;
 }
 
 /**

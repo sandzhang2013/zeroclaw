@@ -4,6 +4,7 @@ import { AgentProvider } from '@/contexts/AgentContext';
 import { AgentChatInner, type AgentChatStatus } from '@/pages/AgentChat';
 import { WorkbenchSidebar, type SessionIndicator } from '@/components/WorkbenchSidebar';
 import { ResultsPanel } from '@/components/ResultsPanel';
+import { WorkbenchHome } from '@/components/WorkbenchHome';
 import {
   createTaskSessionId,
   removeTaskSession,
@@ -11,6 +12,13 @@ import {
 import { generateUUID } from '@/lib/uuid';
 import { basePath } from '@/lib/basePath';
 import { t } from '@/lib/i18n';
+import { workspaceStorageId } from '@/lib/platformUser';
+import {
+  saveWorkbenchAutonomy,
+  clampWorkbenchAutonomy,
+  maxAutonomyForRole,
+  type WorkbenchAutonomy,
+} from '@/lib/workbenchAutonomy';
 
 const SIDEBAR_COLLAPSED_KEY = 'zeroclaw-workbench-sidebar-collapsed';
 const RIGHT_COLLAPSED_KEY = 'zeroclaw-workbench-right-collapsed';
@@ -48,6 +56,8 @@ export interface WorkbenchSession {
   taskId: string;
   folderId: string;
   title?: string;
+  /** Last activity, epoch milliseconds. */
+  updatedAt?: number;
 }
 
 interface PersistedStateV1 {
@@ -77,9 +87,17 @@ function makeSessionId(agentAlias: string, taskId: string): string {
   return `${agentAlias}::${taskId}`;
 }
 
+function stampNow(): number {
+  return Date.now();
+}
+
+function withUpdatedAt(session: WorkbenchSession): WorkbenchSession {
+  return session.updatedAt ? session : { ...session, updatedAt: stampNow() };
+}
+
 function makeDefaultSession(agentAlias: string, folderId = DEFAULT_FOLDER_ID): WorkbenchSession {
   const taskId = '__default__';
-  return { id: makeSessionId(agentAlias, taskId), agentAlias, taskId, folderId };
+  return { id: makeSessionId(agentAlias, taskId), agentAlias, taskId, folderId, updatedAt: stampNow() };
 }
 
 function defaultFolders(): WorkbenchFolder[] {
@@ -101,9 +119,15 @@ function findSessionByAgent(sessions: WorkbenchSession[], agentAlias: string): W
   return sessions.find((s) => s.agentAlias === agentAlias);
 }
 
-function loadPersisted(): Partial<PersistedStateV3> {
+function workspaceKey(userId?: string): string {
+  return userId ? `${STORAGE_KEY}:${workspaceStorageId(userId)}` : STORAGE_KEY;
+}
+
+function loadPersisted(userId?: string): Partial<PersistedStateV3> {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY) ?? localStorage.getItem('zeroclaw-chat-workspace-v2');
+    const raw = userId
+      ? localStorage.getItem(workspaceKey(userId))
+      : (localStorage.getItem(STORAGE_KEY) ?? localStorage.getItem('zeroclaw-chat-workspace-v2'));
     if (!raw) return {};
     const parsed = JSON.parse(raw);
 
@@ -123,11 +147,16 @@ function loadPersisted(): Partial<PersistedStateV3> {
         agentAlias: t.agentAlias,
         taskId: t.taskId,
         folderId: DEFAULT_FOLDER_ID,
+        updatedAt: stampNow(),
       }));
       return { folders: defaultFolders(), sessions, activeSessionId: v2.activeTabId };
     }
 
-    return parsed as Partial<PersistedStateV3>;
+    const v3 = parsed as Partial<PersistedStateV3>;
+    if (Array.isArray(v3.sessions)) {
+      v3.sessions = v3.sessions.map(withUpdatedAt);
+    }
+    return v3;
   } catch {
     return {};
   }
@@ -135,14 +164,26 @@ function loadPersisted(): Partial<PersistedStateV3> {
 
 export interface ChatWorkspaceProps {
   initialAlias: string;
+  userId?: string;
+  userName?: string;
+  userRole?: string;
+  userRegion?: string;
+  onSwitchUser?: () => void;
 }
 
 /**
  * Workbench: left session sidebar, middle transcript, right results.
  * Each open session stays mounted (CSS hidden) so background turns keep streaming.
  */
-export default function ChatWorkspace({ initialAlias }: ChatWorkspaceProps) {
-  const persisted = useRef<Partial<PersistedStateV3>>(loadPersisted());
+export default function ChatWorkspace({
+  initialAlias,
+  userId,
+  userName,
+  userRole,
+  userRegion,
+  onSwitchUser,
+}: ChatWorkspaceProps) {
+  const persisted = useRef<Partial<PersistedStateV3>>(loadPersisted(userId));
 
   const [folders, setFolders] = useState<WorkbenchFolder[]>(() => {
     const stored = persisted.current.folders;
@@ -152,11 +193,11 @@ export default function ChatWorkspace({ initialAlias }: ChatWorkspaceProps) {
     const stored = persisted.current.sessions ?? [];
     const existing = findSessionByAgent(stored, initialAlias);
     const seed: WorkbenchSession[] = existing ? stored : [...stored, makeDefaultSession(initialAlias)];
-    return dedupeSessions(seed);
+    return dedupeSessions(seed.map(withUpdatedAt));
   });
   const [activeSessionId, setActiveSessionId] = useState<string>(() => {
     const stored = persisted.current.activeSessionId;
-    if (stored) return stored;
+    if (typeof stored === 'string') return stored;
     return findSessionByAgent(sessions, initialAlias)?.id ?? makeSessionId(initialAlias, '__default__');
   });
   const [activeFolderId, setActiveFolderId] = useState<string>(DEFAULT_FOLDER_ID);
@@ -164,6 +205,13 @@ export default function ChatWorkspace({ initialAlias }: ChatWorkspaceProps) {
   const [rightCollapsed, setRightCollapsed] = useState(() => readBool(RIGHT_COLLAPSED_KEY, false));
   const [rightPct, setRightPct] = useState(() => readPct(RIGHT_PCT_KEY, 55));
   const splitRef = useRef<HTMLDivElement>(null);
+  const [pendingPrompt, setPendingPrompt] = useState<{
+    sessionId: string;
+    text: string;
+    autonomy: WorkbenchAutonomy;
+    files: File[];
+  } | null>(null);
+  const showHome = !sessions.some((s) => s.id === activeSessionId);
 
   const activeSession = useMemo(
     () => sessions.find((s) => s.id === activeSessionId),
@@ -206,12 +254,18 @@ export default function ChatWorkspace({ initialAlias }: ChatWorkspaceProps) {
         streaming: s.typing,
         unread: visible ? false : prev.unread || grew,
       };
-      if (s.preview?.trim()) {
-        const preview = s.preview.trim();
+      const preview = s.preview?.trim();
+      if (grew || preview) {
         setSessions((list) => {
           const current = list.find((sess) => sess.id === sessionId);
-          if (!current || current.title) return list;
-          return list.map((sess) => (sess.id === sessionId ? { ...sess, title: preview } : sess));
+          if (!current) return list;
+          const nextTitle = current.title || preview;
+          if (!grew && nextTitle === current.title) return list;
+          return list.map((sess) => (
+            sess.id === sessionId
+              ? { ...sess, title: nextTitle, updatedAt: grew ? stampNow() : sess.updatedAt }
+              : sess
+          ));
         });
       }
       syncIndicatorsRef.current();
@@ -235,23 +289,16 @@ export default function ChatWorkspace({ initialAlias }: ChatWorkspaceProps) {
       if (findSessionByAgent(prev, initialAlias)) return prev;
       return [...prev, makeDefaultSession(initialAlias, activeFolderId)];
     });
-    const session = findSessionByAgent(sessions, initialAlias);
-    if (session) setActiveSessionId(session.id);
   }, [initialAlias]);
 
   useEffect(() => {
     const snapshot: PersistedStateV3 = { folders, sessions, activeSessionId };
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot)); } catch { /* noop */ }
-  }, [folders, sessions, activeSessionId]);
+    try { localStorage.setItem(workspaceKey(userId), JSON.stringify(snapshot)); } catch { /* noop */ }
+  }, [folders, sessions, activeSessionId, userId]);
 
   useEffect(() => {
-    const path = window.location.pathname;
-    const workbenchRoot = `${basePath}/workbench`;
-    const onWorkbench = path === workbenchRoot || path.startsWith(`${workbenchRoot}/`);
-    const target = onWorkbench
-      ? `${workbenchRoot}/${encodeURIComponent(activeAlias)}`
-      : `${basePath}/agent/${encodeURIComponent(activeAlias)}`;
-    if (path !== target) {
+    const target = `${basePath}/workbench/${encodeURIComponent(activeAlias)}`;
+    if (window.location.pathname !== target) {
       try { window.history.replaceState(window.history.state, '', target); } catch { /* noop */ }
     }
   }, [activeAlias]);
@@ -263,17 +310,27 @@ export default function ChatWorkspace({ initialAlias }: ChatWorkspaceProps) {
   }, [sessions]);
 
   const newSession = useCallback(() => {
+    setActiveSessionId('');
+  }, []);
+
+  const startSessionFromHome = useCallback((text: string, autonomy: WorkbenchAutonomy, files: File[] = []) => {
     const folderId = folders.some((f) => f.id === activeFolderId) ? activeFolderId : DEFAULT_FOLDER_ID;
     const taskId = createTaskSessionId(activeAlias);
+    const titleSource = text.trim().split('\n')[0] || files[0]?.name || '';
     const session: WorkbenchSession = {
       id: makeSessionId(activeAlias, taskId),
       agentAlias: activeAlias,
       taskId,
       folderId,
+      updatedAt: stampNow(),
+      title: titleSource.slice(0, 48),
     };
+    const capped = clampWorkbenchAutonomy(autonomy, maxAutonomyForRole(userRole));
+    saveWorkbenchAutonomy(session.id, capped);
+    setPendingPrompt({ sessionId: session.id, text, autonomy: capped, files });
     setSessions((prev) => [...prev, session]);
     setActiveSessionId(session.id);
-  }, [activeAlias, activeFolderId, folders]);
+  }, [activeAlias, activeFolderId, folders, userRole]);
 
   const closeSession = useCallback((sessionId: string) => {
     setSessions((prev) => {
@@ -366,9 +423,23 @@ export default function ChatWorkspace({ initialAlias }: ChatWorkspaceProps) {
         onClose={closeSession}
         onNewFolder={newFolder}
         onSelectFolder={setActiveFolderId}
+        userName={userName}
+        userRole={userRole}
+        userRegion={userRegion}
+        onSwitchUser={onSwitchUser}
       />
 
       <div ref={splitRef} className="flex flex-1 min-w-0 min-h-0 bg-pc-surface">
+        {showHome && (
+          <WorkbenchHome
+            onSend={startSessionFromHome}
+            folders={folders}
+            activeFolderId={activeFolderId}
+            onSelectFolder={setActiveFolderId}
+            agentAlias={activeAlias}
+            userRole={userRole}
+          />
+        )}
         {sessions.map((session) => {
           const visible = session.id === activeSessionId;
           return (
@@ -394,6 +465,14 @@ export default function ChatWorkspace({ initialAlias }: ChatWorkspaceProps) {
                     onStatus={onStatusFor(session.id)}
                     rightPanelCollapsed={rightCollapsed}
                     onToggleRightPanel={toggleRight}
+                    initialPrompt={pendingPrompt?.sessionId === session.id ? pendingPrompt.text : undefined}
+                    initialAutonomy={pendingPrompt?.sessionId === session.id ? pendingPrompt.autonomy : undefined}
+                    initialFiles={pendingPrompt?.sessionId === session.id ? pendingPrompt.files : undefined}
+                    autonomyScope={session.id}
+                    userRole={userRole}
+                    onInitialPromptConsumed={() => {
+                      setPendingPrompt((p) => (p?.sessionId === session.id ? null : p));
+                    }}
                   />
                 </div>
                 {!rightCollapsed && (

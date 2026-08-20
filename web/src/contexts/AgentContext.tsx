@@ -8,6 +8,7 @@ import { primeModelProviderCatalog, modelProviderDisplayName } from '@/lib/model
 import { resolveAvailableModels } from './modelPicker.logic';
 import type { ToolCallInfo } from '@/components/ToolCallCard';
 import { resolveToolResultIndex } from '@/lib/toolCardMatch';
+import { parseToolArtifact } from '@/lib/artifactKind';
 import {
   initialTurnStreamState,
   reduceTurnFrame,
@@ -48,8 +49,12 @@ export interface ChatMessage {
 }
 
 interface AgentContextValue {
+  /** Alias this provider is bound to. */
+  agentAlias: string;
+  /** Gateway chat session id for this pane. */
+  sessionId: string;
   messages: ChatMessage[];
-  sendMessage: (content: string) => void;
+  sendMessage: (content: string, autonomy?: 'readonly' | 'supervised' | 'full') => void;
   connected: boolean;
   error: string | null;
   typing: boolean;
@@ -369,6 +374,7 @@ export function AgentProvider({ agentAlias, taskId, children }: AgentProviderPro
         }
         const toolName = msg.name;
         const resultId = msg.id;
+        const artifact = parseToolArtifact(msg.artifact);
         localMessageMutationVersionRef.current += 1;
         setMessages((prev) => {
           // Correlate the result to its pending card by gateway tool_call_id so
@@ -380,7 +386,11 @@ export function AgentProvider({ agentAlias, taskId, children }: AgentProviderPro
             const existing = prev[idx]!;
             updated[idx] = {
               ...existing,
-              toolCall: { ...existing.toolCall!, output: msg.output ?? '' },
+              toolCall: {
+                ...existing.toolCall!,
+                output: msg.output ?? '',
+                ...(artifact ? { artifact } : {}),
+              },
             };
             return updated;
           }
@@ -390,7 +400,11 @@ export function AgentProvider({ agentAlias, taskId, children }: AgentProviderPro
               id: generateUUID(),
               role: 'agent' as const,
               content: `${t('agent.tool_result_prefix')} ${msg.output ?? ''}`,
-              toolCall: { name: toolName, output: msg.output ?? '' },
+              toolCall: {
+                name: toolName,
+                output: msg.output ?? '',
+                ...(artifact ? { artifact } : {}),
+              },
               timestamp: new Date(),
             },
           ];
@@ -642,10 +656,10 @@ export function AgentProvider({ agentAlias, taskId, children }: AgentProviderPro
     };
   }, [modelInfoVersion, agentAlias]);
 
-  const sendMessage = useCallback((content: string) => {
+  const sendMessage = useCallback((content: string, autonomy?: 'readonly' | 'supervised' | 'full') => {
     if (!wsRef.current?.connected) return;
     try {
-      wsRef.current.sendMessage(content);
+      wsRef.current.sendMessage(content, autonomy);
       setTyping(true);
       foldTurnStream({ type: 'turn_start' });
       localMessageMutationVersionRef.current += 1;
@@ -865,6 +879,8 @@ export function AgentProvider({ agentAlias, taskId, children }: AgentProviderPro
   }, []);
 
   const value: AgentContextValue = {
+    agentAlias,
+    sessionId: sessionIdRef.current,
     messages,
     sendMessage,
     connected,

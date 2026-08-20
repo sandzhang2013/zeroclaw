@@ -278,6 +278,7 @@ export interface WsMessage {
   timestamp?: string;
   job_id?: string;
   success?: boolean;
+  artifact?: unknown;
   // Supervised-mode tool approval (server → client). See #6522.
   request_id?: string;
   tool?: string;

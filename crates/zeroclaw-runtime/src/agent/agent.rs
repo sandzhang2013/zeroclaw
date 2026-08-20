@@ -363,6 +363,9 @@ pub struct Agent {
     security_summary: Option<String>,
     /// Autonomy level from config; controls safety prompt instructions.
     autonomy_level: crate::security::AutonomyLevel,
+    /// Shared with tools so a WebSocket session can switch autonomy without
+    /// rewriting global `risk_profiles`.
+    security_policy: Option<Arc<SecurityPolicy>>,
     /// Cross-channel HITL: resolved from the active risk profile's
     /// `approval_route`. When set, the per-turn approval bridge asks the named
     /// approver channel (bounded + fail-closed) instead of the originating
@@ -515,6 +518,7 @@ pub struct AgentBuilder {
     response_cache: Option<Arc<zeroclaw_memory::response_cache::ResponseCache>>,
     security_summary: Option<String>,
     autonomy_level: Option<crate::security::AutonomyLevel>,
+    security_policy: Option<Arc<SecurityPolicy>>,
     approval_route: Option<zeroclaw_config::autonomy::ApprovalRoute>,
     activated_tools: Option<Arc<std::sync::Mutex<crate::tools::ActivatedToolSet>>>,
     mcp_pinned_section: Option<String>,
@@ -565,6 +569,7 @@ impl AgentBuilder {
             response_cache: None,
             security_summary: None,
             autonomy_level: None,
+            security_policy: None,
             approval_route: None,
             activated_tools: None,
             mcp_pinned_section: None,
@@ -741,6 +746,11 @@ impl AgentBuilder {
 
     pub fn autonomy_level(mut self, level: crate::security::AutonomyLevel) -> Self {
         self.autonomy_level = Some(level);
+        self
+    }
+
+    pub fn security_policy(mut self, policy: Option<Arc<SecurityPolicy>>) -> Self {
+        self.security_policy = policy;
         self
     }
 
@@ -929,6 +939,7 @@ impl AgentBuilder {
             autonomy_level: self
                 .autonomy_level
                 .unwrap_or(crate::security::AutonomyLevel::Supervised),
+            security_policy: self.security_policy,
             activated_tools: self.activated_tools,
             mcp_pinned_section: self.mcp_pinned_section.unwrap_or_default(),
             mcp_deferred_section: self.mcp_deferred_section.unwrap_or_default(),
@@ -984,6 +995,33 @@ impl Agent {
 
     pub fn set_channel_name(&mut self, name: String) {
         self.channel_name = name;
+    }
+
+    /// Config snapshot for this agent. Session overlays may lower live
+    /// autonomy, never raise it above this ceiling.
+    pub fn configured_autonomy(&self) -> crate::security::AutonomyLevel {
+        if let Some(policy) = &self.security_policy {
+            return policy.autonomy;
+        }
+        if let Some(manager) = &self.approval_manager {
+            return manager.configured_autonomy();
+        }
+        self.autonomy_level
+    }
+
+    /// Apply a session-scoped autonomy override (WebSocket workbench mode switch).
+    /// Updates the live policy cell, approval manager, and safety prompt level.
+    /// Requested levels above the config snapshot are clamped down.
+    pub fn set_session_autonomy(&mut self, level: crate::security::AutonomyLevel) {
+        let level = level.min(self.configured_autonomy());
+        self.autonomy_level = level;
+        if let Some(policy) = &self.security_policy {
+            policy.set_live_autonomy(level);
+            self.security_summary = Some(policy.prompt_summary());
+        }
+        if let Some(manager) = &self.approval_manager {
+            manager.set_autonomy_level(level);
+        }
     }
 
     fn new_turn_id() -> String {
@@ -1506,6 +1544,7 @@ impl Agent {
                 policy.workspace_dir = cwd.to_path_buf();
                 policy.allowed_roots.push(agent_workspace.clone());
             }
+            policy.attach_live_autonomy();
             policy
         });
 
@@ -1755,6 +1794,7 @@ impl Agent {
             .exclude_memory(exclude_memory)
             .security_summary(Some(security.prompt_summary()))
             .autonomy_level(risk_profile.level)
+            .security_policy(Some(Arc::clone(&security)))
             .approval_route(risk_profile.approval_route.clone())
             .activated_tools(activated_handle)
             .mcp_deferred_section(Some(deferred_section))

@@ -19,6 +19,7 @@ use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
+use zeroclaw_api::agent::ToolArtifact;
 use zeroclaw_api::channel::ChannelApprovalResponse;
 use zeroclaw_runtime::sop::approval::{
     ApprovalDecision as SopApprovalDecision, ApprovalPrincipal as SopApprovalPrincipal,
@@ -515,6 +516,7 @@ async fn handle_socket(
         &config,
         &agent_alias,
         frozen_user.as_ref().map(|a| a.user_id.as_str()),
+        &session_id,
     ) {
         Ok(cwd) => cwd,
         Err(e) => {
@@ -636,6 +638,11 @@ async fn handle_socket(
         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(text) {
             if parsed["type"].as_str() == Some("message") {
                 if let Some(content) = first_chat_message_content(text) {
+                    if let Err(err) = apply_ws_autonomy(&mut agent, &parsed, frozen_user.as_ref()) {
+                        let _ = sender.send(Message::Text(err.to_string().into())).await;
+                        return;
+                    }
+                    let content = resolve_workspace_image_markers(&content, &session_cwd);
                     let _session_guard = match state.session_queue.acquire(&session_key).await {
                         Ok(guard) => guard,
                         Err(e) => {
@@ -806,6 +813,11 @@ async fn handle_socket(
                     let _ = sender.send(Message::Text(err.to_string().into())).await;
                     continue;
                 }
+                if let Err(err) = apply_ws_autonomy(&mut agent, &parsed, frozen_user.as_ref()) {
+                    let _ = sender.send(Message::Text(err.to_string().into())).await;
+                    continue;
+                }
+                let content = resolve_workspace_image_markers(&content, &session_cwd);
 
                 // Acquire session lock to serialize concurrent turns
                 let _session_guard = match state.session_queue.acquire(&session_key).await {
@@ -877,6 +889,38 @@ async fn handle_socket(
     }
 }
 
+fn workspace_relative_artifact(
+    artifact: &ToolArtifact,
+    workspace_root: &Path,
+) -> Option<serde_json::Value> {
+    let rel = strip_workspace_prefix(Path::new(&artifact.path), workspace_root)?;
+    Some(serde_json::json!({
+        "path": rel,
+        "filename": artifact.filename,
+        "title": if artifact.title.is_empty() {
+            artifact.filename.clone()
+        } else {
+            artifact.title.clone()
+        },
+        "mime": artifact.mime,
+        "size": artifact.size,
+    }))
+}
+
+fn strip_workspace_prefix(path: &Path, root: &Path) -> Option<String> {
+    let as_rel = |p: &Path, r: &Path| {
+        p.strip_prefix(r)
+            .ok()
+            .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+            .filter(|s| !s.is_empty() && !s.contains("..") && !s.starts_with('/'))
+    };
+    as_rel(path, root).or_else(|| {
+        let canon_path = path.canonicalize().ok()?;
+        let canon_root = root.canonicalize().ok()?;
+        as_rel(&canon_path, &canon_root)
+    })
+}
+
 fn resolve_session_cwd(
     requested_cwd: Option<&str>,
     default_workspace: &Path,
@@ -907,51 +951,62 @@ fn resolve_ws_session_cwd(
     config: &zeroclaw_config::schema::Config,
     agent_alias: &str,
     user_id: Option<&str>,
+    session_id: &str,
 ) -> anyhow::Result<PathBuf> {
-    let default_workspace = if let Some(uid) = user_id {
+    if let Some(uid) = user_id {
         let user_ws = config.user_workspace_dir(uid, agent_alias);
-        std::fs::create_dir_all(&user_ws).map_err(|e| {
+        let skills = user_ws.join("skills");
+        std::fs::create_dir_all(&skills).map_err(|e| {
             anyhow::Error::msg(format!(
                 "cwd is not a usable directory ({}): {e}",
-                user_ws.display()
+                skills.display()
             ))
         })?;
-        let skills = user_ws.join("skills");
-        let _ = std::fs::create_dir_all(&skills);
-        user_ws
-    } else {
-        config.agent_workspace_dir(agent_alias)
-    };
-    if requested_cwd.is_none() && user_id.is_none() {
-        std::fs::create_dir_all(&default_workspace).map_err(|e| {
+        let session_ws = config.user_session_workspace_dir(uid, agent_alias, session_id);
+        std::fs::create_dir_all(&session_ws).map_err(|e| {
+            anyhow::Error::msg(format!(
+                "cwd is not a usable directory ({}): {e}",
+                session_ws.display()
+            ))
+        })?;
+        let resolved = session_ws.canonicalize().map_err(|e| {
+            anyhow::Error::msg(format!(
+                "cwd is not a usable directory ({}): {e}",
+                session_ws.display()
+            ))
+        })?;
+        let allowed = user_ws
+            .canonicalize()
+            .unwrap_or_else(|_| config.user_workspace_dir(uid, agent_alias));
+        if !resolved.starts_with(&allowed) {
+            anyhow::bail!("cwd is outside the user workspace ({})", allowed.display());
+        }
+        return Ok(resolved);
+    }
+
+    if requested_cwd.is_none() {
+        let session_ws = config.agent_session_workspace_dir(agent_alias, session_id);
+        std::fs::create_dir_all(&session_ws).map_err(|e| {
             ::zeroclaw_log::record!(
                 WARN,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Reject)
                     .with_outcome(::zeroclaw_log::EventOutcome::Failure)
                     .with_attrs(::serde_json::json!({
                         "agent": agent_alias,
-                        "cwd": default_workspace.display().to_string(),
+                        "cwd": session_ws.display().to_string(),
                         "error": format!("{}", e),
                     })),
                 "ws agent workspace cwd rejected"
             );
             anyhow::Error::msg(format!(
                 "cwd is not a usable directory ({}): {e}",
-                default_workspace.display()
+                session_ws.display()
             ))
         })?;
+        return resolve_session_cwd(None, &session_ws);
     }
-    let resolved = resolve_session_cwd(requested_cwd, &default_workspace)?;
-    if let Some(uid) = user_id {
-        let allowed = config
-            .user_workspace_dir(uid, agent_alias)
-            .canonicalize()
-            .unwrap_or_else(|_| config.user_workspace_dir(uid, agent_alias));
-        if !resolved.starts_with(&allowed) {
-            anyhow::bail!("cwd is outside the user workspace ({})", allowed.display());
-        }
-    }
-    Ok(resolved)
+
+    resolve_session_cwd(requested_cwd, &config.agent_workspace_dir(agent_alias))
 }
 
 fn session_queue_ws_error_code(error: &crate::session_queue::SessionQueueError) -> &'static str {
@@ -1028,6 +1083,107 @@ fn first_chat_message_content(text: &str) -> Option<String> {
         .filter(|content| !content.is_empty())
 }
 
+/// Optional per-message autonomy overlay. Omitted / empty / null keeps the
+/// session's current level. Invalid values are rejected so the client cannot
+/// silently fall back to full.
+fn parse_ws_autonomy(
+    parsed: &serde_json::Value,
+) -> Result<Option<zeroclaw_config::autonomy::AutonomyLevel>, ()> {
+    let Some(value) = parsed.get("autonomy") else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let Some(raw) = value.as_str() else {
+        return Err(());
+    };
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    zeroclaw_config::autonomy::AutonomyLevel::from_wire(raw)
+        .map(Some)
+        .ok_or(())
+}
+
+fn apply_ws_autonomy(
+    agent: &mut zeroclaw_runtime::agent::Agent,
+    parsed: &serde_json::Value,
+    frozen_user: Option<&zeroclaw_api::UserAttrs>,
+) -> Result<(), serde_json::Value> {
+    match parse_ws_autonomy(parsed) {
+        Ok(Some(level)) => {
+            let ceiling = ws_autonomy_ceiling(agent.configured_autonomy(), frozen_user);
+            agent.set_session_autonomy(level.min(ceiling));
+            Ok(())
+        }
+        Ok(None) => Ok(()),
+        Err(()) => Err(serde_json::json!({
+            "type": "error",
+            "message": "autonomy must be one of readonly, supervised, full",
+            "code": "INVALID_AUTONOMY"
+        })),
+    }
+}
+
+/// Role cap for WebSocket session overlays. Ordinary users cannot skip
+/// tool approval even when the agent profile is `full`. Missing identity
+/// (legacy non-BFF) applies no extra role cap; the config snapshot still
+/// ceilings the request.
+fn ws_role_autonomy_ceiling(
+    user: Option<&zeroclaw_api::UserAttrs>,
+) -> zeroclaw_config::autonomy::AutonomyLevel {
+    use zeroclaw_config::autonomy::AutonomyLevel;
+    match user {
+        Some(u) if u.is_ops() || u.is_advanced() => AutonomyLevel::Full,
+        Some(_) => AutonomyLevel::Supervised,
+        None => AutonomyLevel::Full,
+    }
+}
+
+fn ws_autonomy_ceiling(
+    configured: zeroclaw_config::autonomy::AutonomyLevel,
+    user: Option<&zeroclaw_api::UserAttrs>,
+) -> zeroclaw_config::autonomy::AutonomyLevel {
+    configured.min(ws_role_autonomy_ceiling(user))
+}
+
+/// Resolve workspace-relative `[IMAGE:uploads/a.png]` markers against the
+/// session cwd so multimodal loading can `fs::read` them. Leave data URIs,
+/// URLs, absolute paths, and `..` segments unchanged.
+fn resolve_workspace_image_markers(content: &str, cwd: &Path) -> String {
+    const PREFIX: &str = "[IMAGE:";
+    let mut out = String::with_capacity(content.len());
+    let mut rest = content;
+    while let Some(start) = rest.find(PREFIX) {
+        out.push_str(&rest[..start]);
+        rest = &rest[start + PREFIX.len()..];
+        let Some(end) = rest.find(']') else {
+            out.push_str(PREFIX);
+            out.push_str(rest);
+            return out;
+        };
+        let inner = rest[..end].trim();
+        rest = &rest[end + 1..];
+        let resolved = if inner.is_empty()
+            || inner.starts_with("data:")
+            || inner.starts_with("http://")
+            || inner.starts_with("https://")
+            || inner.contains("..")
+            || Path::new(inner).is_absolute()
+        {
+            inner.to_string()
+        } else {
+            cwd.join(inner).display().to_string()
+        };
+        out.push_str(PREFIX);
+        out.push_str(&resolved);
+        out.push(']');
+    }
+    out.push_str(rest);
+    out
+}
+
 fn event_matches_session(event: &serde_json::Value, session_id: &str) -> bool {
     match event.get("session_id").and_then(|value| value.as_str()) {
         Some(event_session_id) => event_session_id == session_id,
@@ -1071,6 +1227,13 @@ async fn process_chat_message(
     use zeroclaw_runtime::agent::TurnEvent;
 
     let (turn_alias, turn_provider, turn_model) = agent.attribution_fields();
+    let browse_root = {
+        let config = state.config.read();
+        frozen_user
+            .as_ref()
+            .map(|a| config.user_workspace_dir(&a.user_id, &turn_alias))
+            .unwrap_or_else(|| config.agent_workspace_dir(&turn_alias))
+    };
     let provider_label = turn_provider.clone();
     let cost_tracking_context = state.cost_tracker.as_ref().map(|tracker| {
         let config = state.config.read();
@@ -1337,9 +1500,24 @@ async fn process_chat_message(
                             serde_json::json!({ "type": "tool_call", "id": id, "name": name, "args": args })
                         }
                         TurnEvent::ToolResult {
-                            id, name, output, ..
+                            id,
+                            name,
+                            output,
+                            artifact,
                         } => {
-                            serde_json::json!({ "type": "tool_result", "id": id, "name": name, "output": output })
+                            let mut frame = serde_json::json!({
+                                "type": "tool_result",
+                                "id": id,
+                                "name": name,
+                                "output": output,
+                            });
+                            if let Some(meta) = artifact
+                                .as_ref()
+                                .and_then(|a| workspace_relative_artifact(a, &browse_root))
+                            {
+                                frame["artifact"] = meta;
+                            }
+                            frame
                         }
                         TurnEvent::ApprovalRequest {
                             request_id,
@@ -1703,6 +1881,77 @@ mod tests {
     }
 
     #[test]
+    fn parse_ws_autonomy_accepts_wire_values_and_rejects_unknown() {
+        use zeroclaw_config::autonomy::AutonomyLevel;
+        let omit = serde_json::json!({"type": "message", "content": "hi"});
+        assert_eq!(parse_ws_autonomy(&omit), Ok(None));
+        let empty = serde_json::json!({"type": "message", "content": "hi", "autonomy": ""});
+        assert_eq!(parse_ws_autonomy(&empty), Ok(None));
+        let full = serde_json::json!({"autonomy": "full"});
+        assert_eq!(parse_ws_autonomy(&full), Ok(Some(AutonomyLevel::Full)));
+        let readonly = serde_json::json!({"autonomy": "readonly"});
+        assert_eq!(
+            parse_ws_autonomy(&readonly),
+            Ok(Some(AutonomyLevel::ReadOnly))
+        );
+        let supervised = serde_json::json!({"autonomy": "supervised"});
+        assert_eq!(
+            parse_ws_autonomy(&supervised),
+            Ok(Some(AutonomyLevel::Supervised))
+        );
+        let bad = serde_json::json!({"autonomy": "yolo"});
+        assert_eq!(parse_ws_autonomy(&bad), Err(()));
+        let not_str = serde_json::json!({"autonomy": 1});
+        assert_eq!(parse_ws_autonomy(&not_str), Err(()));
+    }
+
+    #[test]
+    fn ws_autonomy_ceiling_config_blocks_elevation() {
+        use zeroclaw_config::autonomy::AutonomyLevel;
+        assert_eq!(
+            ws_autonomy_ceiling(AutonomyLevel::Supervised, None),
+            AutonomyLevel::Supervised
+        );
+        assert_eq!(
+            ws_autonomy_ceiling(AutonomyLevel::ReadOnly, None),
+            AutonomyLevel::ReadOnly
+        );
+        assert_eq!(
+            ws_autonomy_ceiling(AutonomyLevel::Full, None),
+            AutonomyLevel::Full
+        );
+    }
+
+    #[test]
+    fn ws_autonomy_ceiling_ordinary_user_cannot_take_full() {
+        use zeroclaw_config::autonomy::AutonomyLevel;
+        let user = zeroclaw_api::UserAttrs::new("chenmin").with_role("普通用户");
+        assert_eq!(
+            ws_autonomy_ceiling(AutonomyLevel::Full, Some(&user)),
+            AutonomyLevel::Supervised
+        );
+        assert_eq!(
+            ws_autonomy_ceiling(AutonomyLevel::ReadOnly, Some(&user)),
+            AutonomyLevel::ReadOnly
+        );
+    }
+
+    #[test]
+    fn ws_autonomy_ceiling_advanced_and_ops_follow_config() {
+        use zeroclaw_config::autonomy::AutonomyLevel;
+        let advanced = zeroclaw_api::UserAttrs::new("liuyang").with_role("高级用户");
+        let ops = zeroclaw_api::UserAttrs::new("ops").with_role("运维");
+        assert_eq!(
+            ws_autonomy_ceiling(AutonomyLevel::Full, Some(&advanced)),
+            AutonomyLevel::Full
+        );
+        assert_eq!(
+            ws_autonomy_ceiling(AutonomyLevel::Supervised, Some(&ops)),
+            AutonomyLevel::Supervised
+        );
+    }
+
+    #[test]
     fn websocket_handler_projects_anthropic_empty_terminal_stream_as_user_error() {
         // This production-shaped fixture exceeds the Linux test harness's
         // default stack; isolate only this test instead of weakening CI-wide
@@ -2004,6 +2253,19 @@ data: {\"type\":\"message_stop\"}\n\n",
             first_chat_message_content(&text).as_deref(),
             Some("hello after an idle keepalive")
         );
+    }
+
+    #[test]
+    fn resolve_workspace_image_markers_joins_relative_paths() {
+        let cwd = Path::new("/ws/session");
+        let out = resolve_workspace_image_markers(
+            "see [IMAGE:uploads/a.png] and [IMAGE:data:image/png;base64,xx]",
+            cwd,
+        );
+        assert!(out.contains("[IMAGE:/ws/session/uploads/a.png]"));
+        assert!(out.contains("[IMAGE:data:image/png;base64,xx]"));
+        let skipped = resolve_workspace_image_markers("nope [IMAGE:../etc/passwd]", cwd);
+        assert_eq!(skipped, "nope [IMAGE:../etc/passwd]");
     }
 
     #[test]
@@ -2376,10 +2638,13 @@ data: {\"type\":\"message_stop\"}\n\n",
         let agent_workspace = config.agent_workspace_dir("web");
         assert!(!agent_workspace.exists());
 
-        let resolved = resolve_ws_session_cwd(None, &config, "web", None).unwrap();
-
-        assert!(agent_workspace.exists());
-        assert_eq!(resolved, agent_workspace.canonicalize().unwrap());
+        let resolved = resolve_ws_session_cwd(None, &config, "web", None, "sess-1").unwrap();
+        let expected = config
+            .agent_session_workspace_dir("web", "sess-1")
+            .canonicalize()
+            .unwrap();
+        assert_eq!(resolved, expected);
+        assert!(expected.starts_with(agent_workspace.canonicalize().unwrap()));
         assert_ne!(resolved, config.data_dir.canonicalize().unwrap());
     }
 
@@ -2405,6 +2670,7 @@ data: {\"type\":\"message_stop\"}\n\n",
             &config,
             "web",
             None,
+            "sess-1",
         )
         .expect_err("explicit missing cwd should be rejected");
 
@@ -2427,18 +2693,26 @@ data: {\"type\":\"message_stop\"}\n\n",
             .agents
             .insert("web".to_string(), AliasedAgentConfig::default());
 
-        let resolved = resolve_ws_session_cwd(None, &config, "web", Some("alice")).unwrap();
-        let expected = config
+        let resolved =
+            resolve_ws_session_cwd(None, &config, "web", Some("alice"), "sess-1").unwrap();
+        let user_ws = config
             .user_workspace_dir("alice", "web")
             .canonicalize()
             .unwrap();
+        let expected = config
+            .user_session_workspace_dir("alice", "web", "sess-1")
+            .canonicalize()
+            .unwrap();
         assert_eq!(resolved, expected);
-        assert!(expected.join("skills").is_dir());
+        assert!(expected.starts_with(&user_ws));
+        assert!(user_ws.join("skills").is_dir());
         assert_ne!(resolved, config.agent_workspace_dir("web"));
+        let other = resolve_ws_session_cwd(None, &config, "web", Some("alice"), "sess-2").unwrap();
+        assert_ne!(resolved, other);
     }
 
     #[test]
-    fn resolve_ws_session_cwd_rejects_path_outside_user_workspace() {
+    fn resolve_ws_session_cwd_ignores_client_cwd_when_frozen() {
         use tempfile::TempDir;
         use zeroclaw_config::schema::{AliasedAgentConfig, Config};
 
@@ -2454,10 +2728,20 @@ data: {\"type\":\"message_stop\"}\n\n",
         let bob = config.user_workspace_dir("bob", "web");
         std::fs::create_dir_all(&bob).unwrap();
 
-        let err =
-            resolve_ws_session_cwd(Some(bob.to_str().unwrap()), &config, "web", Some("alice"))
-                .expect_err("alice must not use bob's workspace");
-        assert!(err.to_string().contains("outside the user workspace"));
+        let resolved = resolve_ws_session_cwd(
+            Some(bob.to_str().unwrap()),
+            &config,
+            "web",
+            Some("alice"),
+            "sess-1",
+        )
+        .unwrap();
+        let expected = config
+            .user_session_workspace_dir("alice", "web", "sess-1")
+            .canonicalize()
+            .unwrap();
+        assert_eq!(resolved, expected);
+        assert!(!resolved.starts_with(bob.canonicalize().unwrap_or(bob)));
     }
 
     #[test]
@@ -2779,5 +3063,43 @@ data: {\"type\":\"message_stop\"}\n\n",
         let (subject, attrs) = authenticate_ws_chat(&state, &headers, &params).unwrap();
         assert_eq!(subject.as_deref(), Some("alice"));
         assert_eq!(attrs.expect("frozen").user_id, "alice");
+    }
+
+    #[test]
+    fn workspace_relative_artifact_strips_user_workspace_prefix() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().join("users/ops/agents/deepseek/workspace");
+        let file = root.join("sessions/s1/login.html");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, b"<html>").unwrap();
+        let artifact = ToolArtifact {
+            path: file.to_string_lossy().into_owned(),
+            uri: String::new(),
+            filename: "login.html".into(),
+            title: "login.html".into(),
+            mime: "text/html".into(),
+            size: 6,
+        };
+        let v = workspace_relative_artifact(&artifact, &root).unwrap();
+        assert_eq!(v["path"], "sessions/s1/login.html");
+        assert_eq!(v["mime"], "text/html");
+        let host = tmp.path().to_str().unwrap();
+        assert!(!v["path"].as_str().unwrap().contains(host));
+    }
+
+    #[test]
+    fn workspace_relative_artifact_drops_paths_outside_root() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().join("workspace");
+        std::fs::create_dir_all(&root).unwrap();
+        let artifact = ToolArtifact {
+            path: "/etc/passwd".into(),
+            uri: String::new(),
+            filename: "passwd".into(),
+            title: "passwd".into(),
+            mime: "text/plain".into(),
+            size: 1,
+        };
+        assert!(workspace_relative_artifact(&artifact, &root).is_none());
     }
 }

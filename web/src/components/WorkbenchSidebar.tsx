@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   ChevronRight,
   Folder,
@@ -6,11 +7,13 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   PenSquare,
+  Settings,
   X,
 } from 'lucide-react';
 import { t } from '@/lib/i18n';
 import { basePath } from '@/lib/basePath';
 import { DEFAULT_FOLDER_ID, type WorkbenchFolder, type WorkbenchSession } from '@/pages/ChatWorkspace';
+import { canOpenDashboard, roleI18nKey } from '@/lib/platformUser';
 
 export interface SessionIndicator {
   streaming: boolean;
@@ -29,7 +32,14 @@ export interface WorkbenchSidebarProps {
   onClose: (sessionId: string) => void;
   onNewFolder: (name: string) => void;
   onSelectFolder: (folderId: string) => void;
+  /** Display name from the embedding platform or mock login. */
+  userName?: string;
+  userRole?: string;
+  userRegion?: string;
+  onSwitchUser?: () => void;
 }
+
+const WORKBENCH_VERSION = '0.6.2';
 
 const CARD =
   'h-9 min-w-0 w-full justify-start gap-3 rounded-[10px] px-3 py-[7.5px] text-left text-sm text-pc-text-muted transition-colors hover:bg-[var(--pc-hover)] hover:text-pc-text';
@@ -49,6 +59,24 @@ function isMacPlatform(): boolean {
   return /Mac|iPhone|iPad|iPod/.test(navigator.platform);
 }
 
+const MINUTE_MS = 60_000;
+const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
+const MONTH_MS = 30 * DAY_MS;
+
+function formatRelativeTime(updatedAt: number | undefined, now: number): string {
+  const diff = Math.max(0, now - (updatedAt ?? now));
+  if (diff > MONTH_MS) return t('workbench.time_months').replace('{n}', String(Math.floor(diff / MONTH_MS)));
+  if (diff > DAY_MS) return t('workbench.time_days').replace('{n}', String(Math.floor(diff / DAY_MS)));
+  if (diff > HOUR_MS) return t('workbench.time_hours').replace('{n}', String(Math.floor(diff / HOUR_MS)));
+  if (diff > MINUTE_MS) return t('workbench.time_minutes').replace('{n}', String(Math.floor(diff / MINUTE_MS)));
+  return t('workbench.time_just_now');
+}
+
+function byNewest(a: WorkbenchSession, b: WorkbenchSession): number {
+  return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
+}
+
 export function WorkbenchSidebar({
   folders,
   sessions,
@@ -61,6 +89,10 @@ export function WorkbenchSidebar({
   onClose,
   onNewFolder,
   onSelectFolder,
+  userName,
+  userRole,
+  userRegion,
+  onSwitchUser,
 }: WorkbenchSidebarProps) {
   const [projectsOpen, setProjectsOpen] = useState(true);
   const [tasksOpen, setTasksOpen] = useState(true);
@@ -71,18 +103,33 @@ export function WorkbenchSidebar({
   const folderCommittedRef = useRef(false);
   const sessionRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const mac = isMacPlatform();
+  const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
     if (creatingFolder) folderInputRef.current?.focus();
   }, [creatingFolder]);
 
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
+
   const closableLast = sessions.length <= 1;
+  const displayName = userName?.trim() || t('workbench.user_fallback');
+  const roleLabel = userRole ? t(roleI18nKey(userRole)) : '';
+  const userMeta = [roleLabel, userRegion?.trim()].filter(Boolean).join(' · ');
+  const userTitle = onSwitchUser
+    ? `${displayName}${userMeta ? ` · ${userMeta}` : ''} — ${t('workbench.switch_user')}`
+    : `${displayName}${userMeta ? ` · ${userMeta}` : ''}`;
+  const userInitial = displayName.slice(0, 1);
+  const showDashboard = canOpenDashboard(userRole);
   const projectFolders = folders.filter((f) => f.id !== DEFAULT_FOLDER_ID);
-  const inboxSessions = sessions.filter(
-    (s) => s.folderId === DEFAULT_FOLDER_ID || !folders.some((f) => f.id === s.folderId),
-  );
+  const inboxSessions = sessions
+    .filter((s) => s.folderId === DEFAULT_FOLDER_ID || !folders.some((f) => f.id === s.folderId))
+    .slice()
+    .sort(byNewest);
   const orderedSessions = [
-    ...projectFolders.flatMap((folder) => sessions.filter((s) => s.folderId === folder.id)),
+    ...projectFolders.flatMap((folder) => sessions.filter((s) => s.folderId === folder.id).slice().sort(byNewest)),
     ...inboxSessions,
   ];
 
@@ -118,6 +165,7 @@ export function WorkbenchSidebar({
         closable={!closableLast}
         nested={nested}
         buttonRef={(el) => { sessionRefs.current[session.id] = el; }}
+        relativeTime={formatRelativeTime(session.updatedAt, now)}
         onSelect={() => onSelect(session.id)}
         onClose={() => onClose(session.id)}
         onKeyDown={(e) => handleSessionKeyDown(e, session.id)}
@@ -146,7 +194,7 @@ export function WorkbenchSidebar({
               <img
                 src={`${basePath}/_app/logo.png`}
                 alt=""
-                className={['size-6 object-cover', collapsed ? 'group-hover/logo:opacity-0' : ''].join(' ')}
+                className={['size-6 object-contain', collapsed ? 'group-hover/logo:opacity-0' : ''].join(' ')}
               />
               {collapsed && (
                 <PanelLeftOpen className="absolute hidden size-4 group-hover/logo:block text-pc-text" />
@@ -235,7 +283,7 @@ export function WorkbenchSidebar({
                   />
                 )}
                 {projectFolders.map((folder) => {
-                  const kids = sessions.filter((s) => s.folderId === folder.id);
+                  const kids = sessions.filter((s) => s.folderId === folder.id).slice().sort(byNewest);
                   const open = folderOpen[folder.id] !== false;
                   return (
                     <div key={folder.id}>
@@ -282,6 +330,66 @@ export function WorkbenchSidebar({
           </section>
         </nav>
       )}
+
+      <div
+        className={[
+          'mt-auto shrink-0 flex flex-col border-t border-pc-border',
+          collapsed ? 'items-center gap-1 p-2' : 'gap-0.5 px-3 py-2',
+        ].join(' ')}
+      >
+        <div className={collapsed ? 'flex flex-col items-center gap-1' : 'flex items-center justify-between gap-2'}>
+          {collapsed ? (
+            <button
+              type="button"
+              onClick={onSwitchUser}
+              disabled={!onSwitchUser}
+              className="inline-flex size-8 shrink-0 items-center justify-center rounded-[10px] text-sm font-medium text-pc-text hover:bg-[var(--pc-hover)] disabled:cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--pc-focus)]"
+              aria-label={userTitle}
+              title={userTitle}
+            >
+              {userInitial}
+            </button>
+          ) : onSwitchUser ? (
+            <button
+              type="button"
+              onClick={onSwitchUser}
+              className="min-w-0 flex-1 truncate rounded-[10px] px-1 py-0.5 text-left hover:bg-[var(--pc-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--pc-focus)]"
+              title={userTitle}
+              aria-label={userTitle}
+            >
+              <span className="block truncate text-sm font-medium text-pc-text">{displayName}</span>
+              {userMeta && (
+                <span className="block truncate text-[11px] leading-4 text-pc-text-muted">{userMeta}</span>
+              )}
+            </button>
+          ) : (
+            <span className="min-w-0 flex-1 truncate px-1" title={userTitle}>
+              <span className="block truncate text-sm font-medium text-pc-text">{displayName}</span>
+              {userMeta && (
+                <span className="block truncate text-[11px] leading-4 text-pc-text-muted">{userMeta}</span>
+              )}
+            </span>
+          )}
+          {showDashboard && (
+            <Link
+              to="/dashboard"
+              className="inline-flex size-8 shrink-0 items-center justify-center rounded-[10px] text-pc-text-muted hover:bg-[var(--pc-hover)] hover:text-pc-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--pc-focus)]"
+              aria-label={t('workbench.open_dashboard')}
+              title={t('workbench.open_dashboard')}
+            >
+              <Settings className="size-4" />
+            </Link>
+          )}
+        </div>
+        <span
+          className={[
+            'tabular-nums text-pc-text-faint',
+            collapsed ? 'text-[9px] leading-none' : 'px-1 text-[10px] leading-4',
+          ].join(' ')}
+        >
+          v{WORKBENCH_VERSION}
+        </span>
+      </div>
     </aside>
   );
 }
@@ -293,6 +401,7 @@ function SessionRow({
   closable,
   nested,
   buttonRef,
+  relativeTime,
   onSelect,
   onClose,
   onKeyDown,
@@ -303,6 +412,7 @@ function SessionRow({
   closable: boolean;
   nested: boolean;
   buttonRef: (el: HTMLButtonElement | null) => void;
+  relativeTime: string;
   onSelect: () => void;
   onClose: () => void;
   onKeyDown: (e: React.KeyboardEvent) => void;
@@ -317,7 +427,6 @@ function SessionRow({
       className={[
         'group/task-card relative flex items-center',
         CARD,
-        'pr-8',
         nested ? 'pl-6' : '',
         active ? 'bg-[var(--pc-hover)] text-pc-text' : '',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--pc-focus)]',
@@ -325,23 +434,28 @@ function SessionRow({
     >
       <StatusDot streaming={indicator?.streaming} unread={indicator?.unread} active={active} />
       <span className="flex-1 min-w-0 truncate">{sessionLabel(session)}</span>
-      <span
-        role="button"
-        tabIndex={-1}
-        aria-label={t('workbench.close_session')}
-        title={t('workbench.close_session')}
-        aria-disabled={!closable}
-        onClick={(e) => {
-          e.stopPropagation();
-          if (closable) onClose();
-        }}
-        className={[
-          'absolute right-1.5 inline-flex items-center justify-center size-6 rounded-md shrink-0',
-          'text-pc-text-muted transition-opacity opacity-0 group-hover/task-card:opacity-100',
-          closable ? 'hover:bg-status-error/15 hover:text-status-error cursor-pointer' : 'cursor-not-allowed',
-        ].join(' ')}
-      >
-        <X className="size-3.5" />
+      <span className="relative ml-1 flex h-6 w-[4.5rem] shrink-0 items-center justify-end">
+        <span className="max-w-full truncate text-[10px] tabular-nums text-pc-text-faint group-hover/task-card:opacity-0">
+          {relativeTime}
+        </span>
+        <span
+          role="button"
+          tabIndex={-1}
+          aria-label={t('workbench.close_session')}
+          title={t('workbench.close_session')}
+          aria-disabled={!closable}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (closable) onClose();
+          }}
+          className={[
+            'absolute inset-y-0 right-0 inline-flex items-center justify-center size-6 rounded-md',
+            'text-pc-text-muted transition-opacity opacity-0 group-hover/task-card:opacity-100',
+            closable ? 'hover:bg-status-error/15 hover:text-status-error cursor-pointer' : 'cursor-not-allowed',
+          ].join(' ')}
+        >
+          <X className="size-3.5" />
+        </span>
       </span>
     </button>
   );

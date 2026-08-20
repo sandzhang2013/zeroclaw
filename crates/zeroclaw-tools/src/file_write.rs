@@ -224,11 +224,24 @@ impl Tool for FileWriteTool {
         }
 
         match tokio::fs::write(&resolved_target, &bytes).await {
-            Ok(()) => Ok(ToolResult {
-                success: true,
-                output: format!("Written {} bytes to {path}", bytes.len()).into(),
-                error: None,
-            }),
+            Ok(()) => {
+                let filename = file_name.to_string_lossy().into_owned();
+                let mime = zeroclaw_api::agent::guess_file_mime(&filename);
+                Ok(ToolResult {
+                    success: true,
+                    output: ToolOutput::json_with_text(
+                        json!({
+                            "written": true,
+                            "path": resolved_target.to_string_lossy(),
+                            "filename": filename,
+                            "mimeType": mime,
+                            "bytes": bytes.len() as u64,
+                        }),
+                        format!("Written {} bytes to {path}", bytes.len()),
+                    ),
+                    error: None,
+                })
+            }
             Err(e) => Ok(ToolResult {
                 success: false,
                 output: ToolOutput::default(),
@@ -332,6 +345,14 @@ mod tests {
             .unwrap();
         assert!(result.success);
         assert!(result.output.contains("8 bytes"));
+        let data = result
+            .output
+            .data()
+            .expect("file_write declares written metadata");
+        assert_eq!(data["written"], true);
+        assert_eq!(data["filename"], "out.txt");
+        assert_eq!(data["mimeType"], "text/plain");
+        assert_eq!(data["bytes"], 8);
 
         let content = tokio::fs::read_to_string(dir.join("out.txt"))
             .await

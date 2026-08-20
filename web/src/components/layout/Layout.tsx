@@ -11,6 +11,7 @@ import { t } from '@/lib/i18n';
 // First-path-segment → i18n title key, so the browser tab/history/bookmark
 // reflects the current page instead of a constant "ZeroClaw".
 const TITLE_KEYS: Record<string, string> = {
+  dashboard: 'nav.dashboard',
   agents: 'nav.agents',
   config: 'nav.config',
   setup: 'nav.config',
@@ -43,6 +44,8 @@ export default function Layout() {
     const first = seg[0];
     let name: string | null;
     if (!first) {
+      name = t('nav.dashboard');
+    } else if (first === 'dashboard') {
       name = t('nav.dashboard');
     } else if (first === 'agent' && seg[1]) {
       name = `${decodeURIComponent(seg[1])} · ${t('nav.group.chat')}`;

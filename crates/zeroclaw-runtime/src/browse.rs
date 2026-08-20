@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
+use zeroclaw_api::agent::guess_file_mime;
 use zeroclaw_config::paths::{RootEscapeError, resolve_under};
 use zeroclaw_config::schema::Config;
 
@@ -159,6 +160,10 @@ pub fn remove_directory(config: &Config, raw: &str) -> Result<(), BrowseError> {
 /// `BrowseError::TooLarge`; the dashboard can offer a CLI hint.
 pub const AGENT_WORKSPACE_READ_CAP: u64 = 4 * 1024 * 1024; // 4 MiB
 
+/// Chat / workbench upload cap. Larger than the dashboard read preview cap
+/// so the agent can still `file_read` in chunks after the bytes land on disk.
+pub const AGENT_WORKSPACE_UPLOAD_CAP: u64 = 20 * 1024 * 1024; // 20 MiB
+
 const AGENT_WORKSPACE_PROTECTED_FILES: &[&str] = &[
     "IDENTITY.md",
     "SOUL.md",
@@ -174,8 +179,11 @@ const AGENT_WORKSPACE_PROTECTED_FILES: &[&str] = &[
 /// session history.
 const AGENT_WORKSPACE_PROTECTED_DIRS: &[&str] = &["sessions"];
 
-fn agent_root(config: &Config, agent_alias: &str) -> PathBuf {
-    config.agent_workspace_dir(agent_alias)
+fn agent_root(config: &Config, agent_alias: &str, user_id: Option<&str>) -> PathBuf {
+    match user_id.filter(|id| !id.is_empty()) {
+        Some(uid) => config.user_workspace_dir(uid, agent_alias),
+        None => config.agent_workspace_dir(agent_alias),
+    }
 }
 
 fn protected_file(rel: &str) -> bool {
@@ -194,7 +202,17 @@ pub fn list_agent_workspace(
     agent_alias: &str,
     raw: &str,
 ) -> Result<BrowseResult, BrowseError> {
-    let mut result = list_under_root(&agent_root(config, agent_alias), raw)?;
+    list_agent_workspace_for_user(config, agent_alias, raw, None)
+}
+
+/// Like [`list_agent_workspace`], scoped to `users/<user_id>/...` when `user_id` is set.
+pub fn list_agent_workspace_for_user(
+    config: &Config,
+    agent_alias: &str,
+    raw: &str,
+    user_id: Option<&str>,
+) -> Result<BrowseResult, BrowseError> {
+    let mut result = list_under_root(&agent_root(config, agent_alias, user_id), raw)?;
     if raw.trim_matches('/').is_empty() {
         for entry in &mut result.entries {
             entry.protected = match entry.kind {
@@ -216,6 +234,16 @@ pub fn make_agent_workspace_directory(
     agent_alias: &str,
     raw: &str,
 ) -> Result<(), BrowseError> {
+    make_agent_workspace_directory_for_user(config, agent_alias, raw, None)
+}
+
+/// Like [`make_agent_workspace_directory`], scoped to the frozen user when set.
+pub fn make_agent_workspace_directory_for_user(
+    config: &Config,
+    agent_alias: &str,
+    raw: &str,
+    user_id: Option<&str>,
+) -> Result<(), BrowseError> {
     let trimmed = raw.trim_matches('/');
     if trimmed.is_empty() {
         return Err(BrowseError::NotFound(raw.to_string()));
@@ -223,7 +251,7 @@ pub fn make_agent_workspace_directory(
     if protected_file(trimmed) {
         return Err(BrowseError::ProtectedFile(trimmed.to_string()));
     }
-    let root = agent_root(config, agent_alias);
+    let root = agent_root(config, agent_alias, user_id);
     let resolved: PathBuf = resolve_under(&root, raw)?;
     if let Ok(meta) = std::fs::metadata(&resolved) {
         if meta.is_dir() {
@@ -244,6 +272,8 @@ pub struct FileReadResult {
     /// True when the bytes look like UTF-8 text. Drives whether the
     /// dashboard renders inline or offers a download.
     pub is_text: bool,
+    /// MIME guessed from the relative path (extension).
+    pub mime: String,
 }
 
 /// Read a file from the agent's workspace. Refuses paths that don't
@@ -253,7 +283,17 @@ pub fn read_agent_workspace_file(
     agent_alias: &str,
     raw: &str,
 ) -> Result<FileReadResult, BrowseError> {
-    let root = agent_root(config, agent_alias);
+    read_agent_workspace_file_for_user(config, agent_alias, raw, None)
+}
+
+/// Like [`read_agent_workspace_file`], scoped to the frozen user when set.
+pub fn read_agent_workspace_file_for_user(
+    config: &Config,
+    agent_alias: &str,
+    raw: &str,
+    user_id: Option<&str>,
+) -> Result<FileReadResult, BrowseError> {
+    let root = agent_root(config, agent_alias, user_id);
     let resolved: PathBuf = resolve_under(&root, raw)?;
     let metadata = match std::fs::metadata(&resolved) {
         Ok(m) => m,
@@ -273,8 +313,10 @@ pub fn read_agent_workspace_file(
     }
     let bytes = std::fs::read(&resolved)?;
     let is_text = std::str::from_utf8(&bytes).is_ok();
+    let rel = raw.trim_matches('/').to_string();
     Ok(FileReadResult {
-        path: raw.trim_matches('/').to_string(),
+        mime: guess_file_mime(&rel),
+        path: rel,
         size: metadata.len(),
         bytes,
         is_text,
@@ -288,6 +330,16 @@ pub fn delete_agent_workspace_path(
     config: &Config,
     agent_alias: &str,
     raw: &str,
+) -> Result<(), BrowseError> {
+    delete_agent_workspace_path_for_user(config, agent_alias, raw, None)
+}
+
+/// Like [`delete_agent_workspace_path`], scoped to the frozen user when set.
+pub fn delete_agent_workspace_path_for_user(
+    config: &Config,
+    agent_alias: &str,
+    raw: &str,
+    user_id: Option<&str>,
 ) -> Result<(), BrowseError> {
     let trimmed = raw.trim_matches('/');
     if trimmed.is_empty() {
@@ -303,7 +355,7 @@ pub fn delete_agent_workspace_path(
             "agents/{agent_alias}/workspace/{trimmed}"
         )));
     }
-    let root = agent_root(config, agent_alias);
+    let root = agent_root(config, agent_alias, user_id);
     let resolved: PathBuf = resolve_under(&root, raw)?;
     let metadata = match std::fs::metadata(&resolved) {
         Ok(m) => m,
@@ -328,6 +380,17 @@ pub fn move_agent_workspace_path(
     agent_alias: &str,
     from: &str,
     to: &str,
+) -> Result<(), BrowseError> {
+    move_agent_workspace_path_for_user(config, agent_alias, from, to, None)
+}
+
+/// Like [`move_agent_workspace_path`], scoped to the frozen user when set.
+pub fn move_agent_workspace_path_for_user(
+    config: &Config,
+    agent_alias: &str,
+    from: &str,
+    to: &str,
+    user_id: Option<&str>,
 ) -> Result<(), BrowseError> {
     let from_trimmed = from.trim_matches('/');
     let to_trimmed = to.trim_matches('/');
@@ -354,7 +417,7 @@ pub fn move_agent_workspace_path(
             }
         )));
     }
-    let root = agent_root(config, agent_alias);
+    let root = agent_root(config, agent_alias, user_id);
     let src: PathBuf = resolve_under(&root, from)?;
     let dst: PathBuf = resolve_under(&root, to)?;
     if !src.exists() {
@@ -370,6 +433,59 @@ pub fn move_agent_workspace_path(
     }
     std::fs::rename(&src, &dst)?;
     Ok(())
+}
+
+/// Result of writing a file into the agent workspace.
+#[derive(Debug, Clone)]
+pub struct FileWriteResult {
+    pub path: String,
+    pub size: u64,
+    pub mime: String,
+}
+
+/// Write bytes to `<workspace>/<raw>`, creating parent directories.
+/// Refuses traversal, protected bootstrap files, and the protected `sessions/`
+/// directory itself (nested session files are allowed). Enforces
+/// [`AGENT_WORKSPACE_UPLOAD_CAP`].
+pub fn write_agent_workspace_file_for_user(
+    config: &Config,
+    agent_alias: &str,
+    raw: &str,
+    bytes: &[u8],
+    user_id: Option<&str>,
+) -> Result<FileWriteResult, BrowseError> {
+    let trimmed = raw.trim_matches('/');
+    if trimmed.is_empty() {
+        return Err(BrowseError::NotFound(raw.to_string()));
+    }
+    if protected_file(trimmed) {
+        return Err(BrowseError::ProtectedFile(trimmed.to_string()));
+    }
+    if protected_dir(trimmed) {
+        return Err(BrowseError::Protected(format!(
+            "agents/{agent_alias}/workspace/{trimmed}"
+        )));
+    }
+    if bytes.len() as u64 > AGENT_WORKSPACE_UPLOAD_CAP {
+        return Err(BrowseError::TooLarge(
+            trimmed.to_string(),
+            AGENT_WORKSPACE_UPLOAD_CAP,
+        ));
+    }
+    let root = agent_root(config, agent_alias, user_id);
+    let resolved: PathBuf = resolve_under(&root, raw)?;
+    if resolved.is_dir() {
+        return Err(BrowseError::NotADirectory(raw.to_string()));
+    }
+    if let Some(parent) = resolved.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&resolved, bytes)?;
+    Ok(FileWriteResult {
+        mime: guess_file_mime(trimmed),
+        path: trimmed.to_string(),
+        size: bytes.len() as u64,
+    })
 }
 
 #[cfg(test)]
@@ -548,6 +664,7 @@ mod tests {
         assert_eq!(r.bytes, b"draft content");
         assert!(r.is_text);
         assert_eq!(r.size, 13);
+        assert_eq!(r.mime, "text/plain");
     }
 
     #[test]
@@ -775,5 +892,118 @@ mod tests {
         let (_dir, cfg) = workspace_fixture();
         let err = make_agent_workspace_directory(&cfg, "alpha", "").unwrap_err();
         assert!(matches!(err, BrowseError::NotFound(_)));
+    }
+
+    #[test]
+    fn list_agent_workspace_for_user_does_not_see_shared_agent_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let session = "51956add-a083-4beb-a3ad-a88347f077de";
+        let shared = dir
+            .path()
+            .join("agents/alpha/workspace/sessions")
+            .join(session);
+        std::fs::create_dir_all(&shared).unwrap();
+        std::fs::write(shared.join("shared.html"), b"nope").unwrap();
+        let user = dir
+            .path()
+            .join("users/ops/agents/alpha/workspace/sessions")
+            .join(session);
+        std::fs::create_dir_all(&user).unwrap();
+        std::fs::write(user.join("login.html"), b"ok").unwrap();
+        let cfg = Config {
+            config_path: dir.path().join("config.toml"),
+            ..Config::default()
+        };
+        let rel = format!("sessions/{session}");
+        let scoped = list_agent_workspace_for_user(&cfg, "alpha", &rel, Some("ops")).unwrap();
+        let names: Vec<_> = scoped.entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["login.html"]);
+        let shared_list = list_agent_workspace(&cfg, "alpha", &rel).unwrap();
+        let shared_names: Vec<_> = shared_list
+            .entries
+            .iter()
+            .map(|e| e.name.as_str())
+            .collect();
+        assert_eq!(shared_names, vec!["shared.html"]);
+        let read = read_agent_workspace_file_for_user(
+            &cfg,
+            "alpha",
+            &format!("{rel}/login.html"),
+            Some("ops"),
+        )
+        .unwrap();
+        assert_eq!(read.bytes, b"ok");
+    }
+
+    #[test]
+    fn write_agent_workspace_file_creates_parents_and_bytes() {
+        let (dir, cfg) = workspace_fixture();
+        let wrote = write_agent_workspace_file_for_user(
+            &cfg,
+            "alpha",
+            "sessions/s1/uploads/report.csv",
+            b"a,b\n1,2\n",
+            None,
+        )
+        .unwrap();
+        assert_eq!(wrote.path, "sessions/s1/uploads/report.csv");
+        assert_eq!(wrote.size, 8);
+        assert_eq!(wrote.mime, "text/csv");
+        let on_disk = std::fs::read(
+            dir.path()
+                .join("agents/alpha/workspace/sessions/s1/uploads/report.csv"),
+        )
+        .unwrap();
+        assert_eq!(on_disk, b"a,b\n1,2\n");
+    }
+
+    #[test]
+    fn write_agent_workspace_file_for_user_stays_in_user_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = Config {
+            config_path: dir.path().join("config.toml"),
+            ..Config::default()
+        };
+        write_agent_workspace_file_for_user(
+            &cfg,
+            "alpha",
+            "sessions/s1/uploads/a.txt",
+            b"hi",
+            Some("ops"),
+        )
+        .unwrap();
+        assert!(
+            dir.path()
+                .join("users/ops/agents/alpha/workspace/sessions/s1/uploads/a.txt")
+                .is_file()
+        );
+        assert!(
+            !dir.path()
+                .join("agents/alpha/workspace/sessions/s1/uploads/a.txt")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn write_agent_workspace_file_refuses_protected_and_escape() {
+        let (_dir, cfg) = workspace_fixture();
+        let err = write_agent_workspace_file_for_user(&cfg, "alpha", "IDENTITY.md", b"x", None)
+            .unwrap_err();
+        assert!(matches!(err, BrowseError::ProtectedFile(_)));
+        let err =
+            write_agent_workspace_file_for_user(&cfg, "alpha", "sessions", b"x", None).unwrap_err();
+        assert!(matches!(err, BrowseError::Protected(_)));
+        let err = write_agent_workspace_file_for_user(&cfg, "alpha", "../escape.txt", b"x", None)
+            .unwrap_err();
+        assert!(matches!(err, BrowseError::Escape(_)));
+    }
+
+    #[test]
+    fn write_agent_workspace_file_enforces_upload_cap() {
+        let (_dir, cfg) = workspace_fixture();
+        let big = vec![b'x'; (AGENT_WORKSPACE_UPLOAD_CAP as usize) + 1];
+        let err = write_agent_workspace_file_for_user(&cfg, "alpha", "uploads/big.bin", &big, None)
+            .unwrap_err();
+        assert!(matches!(err, BrowseError::TooLarge(_, _)));
     }
 }

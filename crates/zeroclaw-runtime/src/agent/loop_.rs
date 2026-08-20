@@ -13962,7 +13962,7 @@ Let me check the result."#;
                 )
             })
             .collect();
-        crate::tools::DeferredMcpToolSet { stubs, registry }
+        crate::tools::DeferredMcpToolSet::new(stubs, registry)
     }
 
     fn always_group(patterns: &[&str]) -> Vec<zeroclaw_config::schema::ToolFilterGroup> {

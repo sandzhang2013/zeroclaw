@@ -8,6 +8,7 @@ use crate::mcp_protocol::McpToolDef;
 use crate::mcp_tool::McpToolWrapper;
 use crate::tool_search::ToolAccessPolicy;
 use zeroclaw_api::tool::{Tool, ToolSpec};
+use zeroclaw_config::policy::SecurityPolicy;
 
 // ── DeferredMcpToolStub ──────────────────────────────────────────────────
 
@@ -53,6 +54,7 @@ pub struct DeferredMcpToolSet {
     pub stubs: Vec<DeferredMcpToolStub>,
     /// Shared registry — exposed for test construction.
     pub registry: Arc<McpRegistry>,
+    security: Option<Arc<SecurityPolicy>>,
 }
 
 impl DeferredMcpToolSet {
@@ -65,7 +67,25 @@ impl DeferredMcpToolSet {
                 stubs.push(DeferredMcpToolStub::new(name, def));
             }
         }
-        Self { stubs, registry }
+        Self {
+            stubs,
+            registry,
+            security: None,
+        }
+    }
+
+    pub fn new(stubs: Vec<DeferredMcpToolStub>, registry: Arc<McpRegistry>) -> Self {
+        Self {
+            stubs,
+            registry,
+            security: None,
+        }
+    }
+
+    /// Attach the live policy so activated wrappers persist MCP images.
+    pub fn with_security(mut self, security: Arc<SecurityPolicy>) -> Self {
+        self.security = Some(security);
+        self
     }
 
     /// All stub names (for rendering in the system prompt).
@@ -103,6 +123,7 @@ impl DeferredMcpToolSet {
         Self {
             stubs: filtered_stubs,
             registry: Arc::clone(&self.registry),
+            security: self.security.clone(),
         }
     }
 
@@ -151,7 +172,10 @@ impl DeferredMcpToolSet {
     /// Activate a stub by name, returning a boxed [`Tool`].
     pub fn activate(&self, name: &str) -> Option<Box<dyn Tool>> {
         self.get_by_name(name).map(|stub| {
-            let wrapper = stub.activate(Arc::clone(&self.registry));
+            let mut wrapper = stub.activate(Arc::clone(&self.registry));
+            if let Some(security) = &self.security {
+                wrapper = wrapper.with_security(Arc::clone(security));
+            }
             Box::new(wrapper) as Box<dyn Tool>
         })
     }
@@ -458,15 +482,7 @@ mod tests {
 
     #[test]
     fn build_deferred_section_empty_when_no_stubs() {
-        let set = DeferredMcpToolSet {
-            stubs: vec![],
-            registry: std::sync::Arc::new(
-                tokio::runtime::Runtime::new()
-                    .unwrap()
-                    .block_on(McpRegistry::connect_all(&[]))
-                    .unwrap(),
-            ),
-        };
+        let set = test_set(vec![]);
         assert!(build_deferred_tools_section(&set).is_empty());
     }
 
@@ -476,15 +492,7 @@ mod tests {
             make_stub("fs__read_file", "Read a file"),
             make_stub("git__status", "Git status"),
         ];
-        let set = DeferredMcpToolSet {
-            stubs,
-            registry: std::sync::Arc::new(
-                tokio::runtime::Runtime::new()
-                    .unwrap()
-                    .block_on(McpRegistry::connect_all(&[]))
-                    .unwrap(),
-            ),
-        };
+        let set = test_set(stubs);
         let section = build_deferred_tools_section(&set);
         assert!(section.contains("<available-deferred-tools>"));
         assert!(section.contains("fs__read_file - Read a file"));
@@ -495,15 +503,7 @@ mod tests {
     #[test]
     fn build_deferred_section_includes_tool_search_instruction() {
         let stubs = vec![make_stub("fs__read_file", "Read a file")];
-        let set = DeferredMcpToolSet {
-            stubs,
-            registry: std::sync::Arc::new(
-                tokio::runtime::Runtime::new()
-                    .unwrap()
-                    .block_on(McpRegistry::connect_all(&[]))
-                    .unwrap(),
-            ),
-        };
+        let set = test_set(stubs);
         let section = build_deferred_tools_section(&set);
         assert!(
             section.contains("tool_search"),
@@ -522,15 +522,7 @@ mod tests {
             make_stub("server_a__create", "Create item"),
             make_stub("server_b__query", "Query records"),
         ];
-        let set = DeferredMcpToolSet {
-            stubs,
-            registry: std::sync::Arc::new(
-                tokio::runtime::Runtime::new()
-                    .unwrap()
-                    .block_on(McpRegistry::connect_all(&[]))
-                    .unwrap(),
-            ),
-        };
+        let set = test_set(stubs);
         let section = build_deferred_tools_section(&set);
         assert!(section.contains("server_a__list"));
         assert!(section.contains("server_a__create"));
@@ -547,15 +539,7 @@ mod tests {
             make_stub("fs__read_file", "Read a file"),
             make_stub("git__status", "Git status"),
         ];
-        let set = DeferredMcpToolSet {
-            stubs,
-            registry: std::sync::Arc::new(
-                tokio::runtime::Runtime::new()
-                    .unwrap()
-                    .block_on(McpRegistry::connect_all(&[]))
-                    .unwrap(),
-            ),
-        };
+        let set = test_set(stubs);
         let exclude: HashSet<String> = ["fs__read_file".to_string()].into_iter().collect();
         let section = build_deferred_tools_section_excluding(&set, None, &exclude);
         assert!(
@@ -568,15 +552,7 @@ mod tests {
     #[test]
     fn build_deferred_section_excluding_all_returns_empty() {
         let stubs = vec![make_stub("fs__read_file", "Read a file")];
-        let set = DeferredMcpToolSet {
-            stubs,
-            registry: std::sync::Arc::new(
-                tokio::runtime::Runtime::new()
-                    .unwrap()
-                    .block_on(McpRegistry::connect_all(&[]))
-                    .unwrap(),
-            ),
-        };
+        let set = test_set(stubs);
         let exclude: HashSet<String> = ["fs__read_file".to_string()].into_iter().collect();
         assert!(build_deferred_tools_section_excluding(&set, None, &exclude).is_empty());
     }
@@ -588,15 +564,7 @@ mod tests {
             make_stub("fs__write_file", "Write a file to disk"),
             make_stub("git__log", "Show git log"),
         ];
-        let set = DeferredMcpToolSet {
-            stubs,
-            registry: std::sync::Arc::new(
-                tokio::runtime::Runtime::new()
-                    .unwrap()
-                    .block_on(McpRegistry::connect_all(&[]))
-                    .unwrap(),
-            ),
-        };
+        let set = test_set(stubs);
 
         // "file read" should rank fs__read_file highest (2 hits vs 1)
         let results = set.search("file read", 5);
@@ -610,15 +578,7 @@ mod tests {
             make_stub("a__one", "Tool one"),
             make_stub("b__two", "Tool two"),
         ];
-        let set = DeferredMcpToolSet {
-            stubs,
-            registry: std::sync::Arc::new(
-                tokio::runtime::Runtime::new()
-                    .unwrap()
-                    .block_on(McpRegistry::connect_all(&[]))
-                    .unwrap(),
-            ),
-        };
+        let set = test_set(stubs);
         assert!(set.get_by_name("a__one").is_some());
         assert!(set.get_by_name("nonexistent").is_none());
     }
@@ -629,15 +589,7 @@ mod tests {
             make_stub("server_a__read_file", "Read a file from disk"),
             make_stub("server_b__read_config", "Read configuration from database"),
         ];
-        let set = DeferredMcpToolSet {
-            stubs,
-            registry: std::sync::Arc::new(
-                tokio::runtime::Runtime::new()
-                    .unwrap()
-                    .block_on(McpRegistry::connect_all(&[]))
-                    .unwrap(),
-            ),
-        };
+        let set = test_set(stubs);
 
         // "read" should match stubs from both servers
         let results = set.search("read", 10);
@@ -663,10 +615,7 @@ mod tests {
             make_stub("fs__read_file", "Read a file"),
             make_stub("git__status", "Git status"),
         ];
-        let set = DeferredMcpToolSet {
-            stubs: stubs.clone(),
-            registry: std::sync::Arc::new(empty_registry()),
-        };
+        let set = test_set(stubs.clone());
         let filtered = set.filter_by_policy(None);
         assert_eq!(filtered.stubs.len(), stubs.len());
     }
@@ -681,10 +630,7 @@ mod tests {
             make_stub("srv__visible", "Visible tool"),
             make_stub("srv__hidden", "Hidden tool"),
         ];
-        let set = DeferredMcpToolSet {
-            stubs,
-            registry: std::sync::Arc::new(empty_registry()),
-        };
+        let set = test_set(stubs);
         let policy = ToolAccessPolicy {
             denied: Some(vec!["srv__hidden".into()]),
             ..ToolAccessPolicy::default()
@@ -708,5 +654,9 @@ mod tests {
             .unwrap()
             .block_on(McpRegistry::connect_all(&[]))
             .unwrap()
+    }
+
+    fn test_set(stubs: Vec<DeferredMcpToolStub>) -> DeferredMcpToolSet {
+        DeferredMcpToolSet::new(stubs, std::sync::Arc::new(empty_registry()))
     }
 }

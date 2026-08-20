@@ -6205,8 +6205,8 @@ mod tests {
             .with_parent_tools(Arc::clone(&parent_tools));
 
         let activated = Arc::new(std::sync::Mutex::new(crate::tools::ActivatedToolSet::new()));
-        let deferred = crate::tools::DeferredMcpToolSet {
-            stubs: vec![{
+        let deferred = crate::tools::DeferredMcpToolSet::new(
+            vec![{
                 let def = zeroclaw_tools::mcp_protocol::McpToolDef {
                     name: "list_projects".to_string(),
                     description: Some("List projects".to_string()),
@@ -6217,12 +6217,12 @@ mod tests {
                     def,
                 )
             }],
-            registry: Arc::new(
+            Arc::new(
                 zeroclaw_tools::mcp_client::McpRegistry::connect_all(&[])
                     .await
                     .unwrap(),
             ),
-        };
+        );
         let handle = Arc::clone(&parent_tools);
         let tool_search = crate::tools::ToolSearchTool::new(deferred, Arc::clone(&activated))
             .with_activation_hook(Arc::new(move |tool| {
