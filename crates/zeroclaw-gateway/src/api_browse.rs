@@ -658,4 +658,189 @@ mod tests {
                 .exists()
         );
     }
+
+    #[tokio::test]
+    async fn workspace_raw_png_is_inline_image() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = trusted_proxy_config(&tmp);
+        let session = "51956add-a083-4beb-a3ad-a88347f077de";
+        let user_dir = config.user_session_workspace_dir("ops", "deepseek", session);
+        std::fs::create_dir_all(&user_dir).unwrap();
+        std::fs::write(user_dir.join("chart.png"), b"\x89PNG").unwrap();
+        let response = handle_agent_workspace_raw(
+            State(test_state(config)),
+            bff_headers("ops", "运维"),
+            AxumPath("deepseek".into()),
+            Query(BrowseQuery {
+                path: Some(format!("sessions/{session}/chart.png")),
+                download: None,
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "image/png"
+        );
+        let disposition = response
+            .headers()
+            .get(header::CONTENT_DISPOSITION)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(
+            disposition.starts_with("inline;"),
+            "raster charts must preview inline: {disposition}"
+        );
+        assert!(
+            response
+                .headers()
+                .get(header::CONTENT_SECURITY_POLICY)
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn workspace_raw_html_download_is_attachment_and_keeps_csp() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = trusted_proxy_config(&tmp);
+        let session = "51956add-a083-4beb-a3ad-a88347f077de";
+        let user_dir = config.user_session_workspace_dir("ops", "deepseek", session);
+        std::fs::create_dir_all(&user_dir).unwrap();
+        std::fs::write(user_dir.join("login.html"), b"<html>ok</html>").unwrap();
+        let response = handle_agent_workspace_raw(
+            State(test_state(config)),
+            bff_headers("ops", "运维"),
+            AxumPath("deepseek".into()),
+            Query(BrowseQuery {
+                path: Some(format!("sessions/{session}/login.html")),
+                download: Some(true),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let disposition = response
+            .headers()
+            .get(header::CONTENT_DISPOSITION)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(disposition.starts_with("attachment;"), "{disposition}");
+        let csp = response
+            .headers()
+            .get(header::CONTENT_SECURITY_POLICY)
+            .expect("html still gets CSP")
+            .to_str()
+            .unwrap();
+        assert!(csp.contains("form-action 'none'"), "{csp}");
+    }
+
+    #[tokio::test]
+    async fn workspace_list_and_upload_reject_path_escape() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = trusted_proxy_config(&tmp);
+        let state = test_state(config);
+        let list = handle_agent_workspace_list(
+            State(state.clone()),
+            bff_headers("ops", "运维"),
+            AxumPath("deepseek".into()),
+            Query(BrowseQuery {
+                path: Some("../etc".into()),
+                download: None,
+            }),
+        )
+        .await;
+        assert_eq!(list.status(), StatusCode::BAD_REQUEST);
+
+        let upload = handle_agent_workspace_upload(
+            State(state.clone()),
+            bff_headers("ops", "运维"),
+            AxumPath("deepseek".into()),
+            Query(BrowseQuery {
+                path: Some("../escape.txt".into()),
+                download: None,
+            }),
+            Bytes::from_static(b"nope"),
+        )
+        .await;
+        assert_eq!(upload.status(), StatusCode::BAD_REQUEST);
+
+        let missing = handle_agent_workspace_upload(
+            State(state),
+            bff_headers("ops", "运维"),
+            AxumPath("deepseek".into()),
+            Query(BrowseQuery {
+                path: None,
+                download: None,
+            }),
+            Bytes::from_static(b"nope"),
+        )
+        .await;
+        assert_eq!(missing.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn workspace_raw_uppercase_svg_is_still_attachment() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = trusted_proxy_config(&tmp);
+        let session = "51956add-a083-4beb-a3ad-a88347f077de";
+        let user_dir = config.user_session_workspace_dir("ops", "deepseek", session);
+        std::fs::create_dir_all(&user_dir).unwrap();
+        std::fs::write(user_dir.join("Chart.SVG"), b"<svg></svg>").unwrap();
+        let response = handle_agent_workspace_raw(
+            State(test_state(config)),
+            bff_headers("ops", "运维"),
+            AxumPath("deepseek".into()),
+            Query(BrowseQuery {
+                path: Some(format!("sessions/{session}/Chart.SVG")),
+                download: None,
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "application/octet-stream"
+        );
+        assert!(
+            response
+                .headers()
+                .get(header::CONTENT_DISPOSITION)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with("attachment;")
+        );
+    }
+
+    #[test]
+    fn is_untrusted_svg_matches_mime_and_extension() {
+        assert!(is_untrusted_svg("image/svg+xml", "a.png"));
+        assert!(is_untrusted_svg("IMAGE/SVG", "a.png"));
+        assert!(is_untrusted_svg("application/octet-stream", "chart.SVG"));
+        assert!(!is_untrusted_svg("image/png", "chart.png"));
+    }
+
+    #[test]
+    fn safe_download_name_strips_path_and_cjk() {
+        assert!(!safe_download_name("../../a.png").contains('/'));
+        assert!(safe_download_name("../../a.png").ends_with("a.png"));
+        assert_eq!(
+            safe_download_name("报告.html"),
+            ".html",
+            "non-ascii names drop to the leftover extension"
+        );
+        assert_eq!(safe_download_name("报告"), "file");
+        assert_eq!(safe_download_name(""), "file");
+    }
 }

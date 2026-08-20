@@ -161,6 +161,19 @@ mod tests {
     }
 
     #[test]
+    fn compact_u8_round_trips_and_unknown_falls_back_to_supervised() {
+        for level in [
+            AutonomyLevel::ReadOnly,
+            AutonomyLevel::Supervised,
+            AutonomyLevel::Full,
+        ] {
+            assert_eq!(AutonomyLevel::from_u8(level.as_u8()), level);
+        }
+        assert_eq!(AutonomyLevel::from_u8(1), AutonomyLevel::Supervised);
+        assert_eq!(AutonomyLevel::from_u8(99), AutonomyLevel::Supervised);
+    }
+
+    #[test]
     fn delegation_default_is_forbidden() {
         assert_eq!(DelegationPolicy::default().mode, DelegationMode::Forbidden);
         assert!(!DelegationPolicy::default().permits());

@@ -4079,6 +4079,46 @@ mod tests {
     }
 
     #[test]
+    fn live_autonomy_without_attach_is_a_noop() {
+        let p = SecurityPolicy {
+            autonomy: AutonomyLevel::Supervised,
+            ..SecurityPolicy::default()
+        };
+        p.set_live_autonomy(AutonomyLevel::ReadOnly);
+        assert_eq!(p.effective_autonomy(), AutonomyLevel::Supervised);
+        assert!(p.can_act());
+    }
+
+    #[test]
+    fn live_autonomy_cannot_raise_a_readonly_snapshot() {
+        let mut p = readonly_policy();
+        p.attach_live_autonomy();
+        p.set_live_autonomy(AutonomyLevel::Full);
+        assert_eq!(p.effective_autonomy(), AutonomyLevel::ReadOnly);
+        assert!(!p.can_act());
+        assert!(
+            p.enforce_tool_operation(ToolOperation::Act, "file_write")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn live_autonomy_is_shared_across_cloned_policies() {
+        let mut p = SecurityPolicy {
+            autonomy: AutonomyLevel::Full,
+            ..SecurityPolicy::default()
+        };
+        p.attach_live_autonomy();
+        let clone = p.clone();
+        p.set_live_autonomy(AutonomyLevel::ReadOnly);
+        assert_eq!(clone.effective_autonomy(), AutonomyLevel::ReadOnly);
+        assert!(!clone.can_act());
+        clone.set_live_autonomy(AutonomyLevel::Supervised);
+        assert_eq!(p.effective_autonomy(), AutonomyLevel::Supervised);
+        assert!(p.can_act());
+    }
+
+    #[test]
     fn enforce_tool_operation_read_allowed_in_readonly_mode() {
         let p = readonly_policy();
         assert!(

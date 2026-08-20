@@ -1,6 +1,6 @@
-import type { SessionMessageRow } from '@/types/api';
-import { generateUUID } from '@/lib/uuid';
-import type { ToolArtifactInfo } from '@/lib/artifactKind';
+import type { SessionMessageRow } from '../types/api.ts';
+import { generateUUID } from './uuid.ts';
+import type { ToolArtifactInfo } from './artifactKind.ts';
 
 const MAX_MESSAGES = 100;
 const PREFIX = 'zeroclaw_chat_history_v1:';

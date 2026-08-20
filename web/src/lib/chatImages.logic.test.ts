@@ -67,3 +67,36 @@ test('extractMcpToolImages walks nested content and mime_type', () => {
   assert.equal(looksLikeChatImages(raw), true);
   assert.equal(looksLikeChatImages('{"ok":true}'), false);
 });
+
+test('extractImageMarkers drops urls, empty markers, and windows paths', () => {
+  assert.deepEqual(extractImageMarkers('[IMAGE:http://evil/a.png]'), []);
+  assert.deepEqual(extractImageMarkers('[IMAGE:https://evil/a.png]'), []);
+  assert.deepEqual(extractImageMarkers('[IMAGE:]'), []);
+  assert.deepEqual(extractImageMarkers('[IMAGE:uploads\\a.png]'), []);
+  assert.deepEqual(extractImageMarkers('[IMAGE:data:text/html;base64,PHNjcmlwdD4=]'), []);
+  assert.equal(looksLikeChatImages('[IMAGE:uploads/a.png]'), true);
+  assert.equal(looksLikeChatImages('hello'), false);
+  assert.equal(looksLikeChatImages(undefined), false);
+});
+
+test('extractMcpToolImages skips svg even when mixed with png', () => {
+  const raw = JSON.stringify({
+    content: [
+      { type: 'image', mimeType: 'image/svg+xml', data: 'PHN2Zz4=' },
+      { type: 'image', mimeType: 'image/png', data: 'QQ==' },
+    ],
+  });
+  const imgs = extractMcpToolImages(raw);
+  assert.equal(imgs.length, 1);
+  if (imgs[0]?.kind === 'data') {
+    assert.match(imgs[0].src, /^data:image\/png;base64,/);
+  }
+  const alreadyUri = JSON.stringify({
+    content: [{ type: 'image', mimeType: 'image/png', data: 'data:image/png;base64,QQ==' }],
+  });
+  assert.equal(extractMcpToolImages(alreadyUri).length, 1);
+  assert.equal(extractMcpToolText('not-json'), '');
+  assert.equal(extractMcpToolText('[1,2]'), '');
+  assert.equal(extractToolImages(undefined).length, 0);
+  assert.equal(extractToolImages('see [IMAGE:uploads/a.png]').length, 1);
+});

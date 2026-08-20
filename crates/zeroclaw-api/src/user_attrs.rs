@@ -221,4 +221,37 @@ mod tests {
             })
             .await;
     }
+
+    #[test]
+    fn role_helpers_match_canonical_chinese_names_only() {
+        assert!(UserAttrs::new("ops").with_role(ROLE_OPS).is_ops());
+        assert!(UserAttrs::new("liu").with_role(ROLE_ADVANCED).is_advanced());
+        assert!(
+            !UserAttrs::new("ops").with_role("ops").is_ops(),
+            "English aliases are frontend-only; BFF must send 运维"
+        );
+        assert!(!UserAttrs::new("liu").with_role("advanced").is_advanced());
+        assert!(!UserAttrs::new("chen").with_role(ROLE_NORMAL).is_ops());
+        assert!(!UserAttrs::new("chen").with_role(ROLE_NORMAL).is_advanced());
+        assert!(!UserAttrs::new("anon").is_ops());
+        assert!(!UserAttrs::new("anon").is_advanced());
+    }
+
+    #[test]
+    fn normalize_user_id_allows_colon_but_rejects_control_chars() {
+        assert_eq!(normalize_user_id("liu:yang").unwrap(), "liu:yang");
+        assert_eq!(
+            normalize_user_id("alice\n").unwrap(),
+            "alice",
+            "trim strips a trailing newline before the control-char check"
+        );
+        assert!(matches!(
+            normalize_user_id("ali\nce"),
+            Err(UserIdError::Unsafe)
+        ));
+        assert!(matches!(
+            normalize_user_id("alice\0"),
+            Err(UserIdError::Unsafe)
+        ));
+    }
 }

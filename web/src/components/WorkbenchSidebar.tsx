@@ -7,6 +7,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   PenSquare,
+  Pencil,
   Settings,
   X,
 } from 'lucide-react';
@@ -14,6 +15,7 @@ import { t } from '@/lib/i18n';
 import { basePath } from '@/lib/basePath';
 import { DEFAULT_FOLDER_ID, type WorkbenchFolder, type WorkbenchSession } from '@/pages/ChatWorkspace';
 import { canOpenDashboard, roleI18nKey } from '@/lib/platformUser';
+import { sanitizeSessionTitle, sessionDisplayTitle } from '@/lib/workbenchSession';
 
 export interface SessionIndicator {
   streaming: boolean;
@@ -30,6 +32,7 @@ export interface WorkbenchSidebarProps {
   onNewSession: () => void;
   onSelect: (sessionId: string) => void;
   onClose: (sessionId: string) => void;
+  onRename: (sessionId: string, name: string) => void;
   onNewFolder: (name: string) => void;
   onSelectFolder: (folderId: string) => void;
   /** Display name from the embedding platform or mock login. */
@@ -49,9 +52,7 @@ function folderLabel(folder: WorkbenchFolder): string {
 }
 
 function sessionLabel(session: WorkbenchSession): string {
-  if (session.title?.trim()) return session.title.trim();
-  if (session.taskId === '__default__') return t('workbench.default_session');
-  return session.taskId;
+  return sessionDisplayTitle(session, t('workbench.default_session'));
 }
 
 function isMacPlatform(): boolean {
@@ -87,6 +88,7 @@ export function WorkbenchSidebar({
   onNewSession,
   onSelect,
   onClose,
+  onRename,
   onNewFolder,
   onSelectFolder,
   userName,
@@ -101,6 +103,10 @@ export function WorkbenchSidebar({
   const [folderDraft, setFolderDraft] = useState('');
   const folderInputRef = useRef<HTMLInputElement>(null);
   const folderCommittedRef = useRef(false);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
+  const renameInputRef = useRef<HTMLInputElement>(null);
+  const renameCommittedRef = useRef(false);
   const sessionRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const mac = isMacPlatform();
   const [now, setNow] = useState(() => Date.now());
@@ -108,6 +114,13 @@ export function WorkbenchSidebar({
   useEffect(() => {
     if (creatingFolder) folderInputRef.current?.focus();
   }, [creatingFolder]);
+
+  useEffect(() => {
+    if (renamingId) {
+      renameInputRef.current?.focus();
+      renameInputRef.current?.select();
+    }
+  }, [renamingId]);
 
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 30_000);
@@ -142,6 +155,27 @@ export function WorkbenchSidebar({
     setCreatingFolder(false);
   }
 
+  function startRename(session: WorkbenchSession) {
+    renameCommittedRef.current = false;
+    setRenamingId(session.id);
+    setRenameDraft(sessionLabel(session));
+  }
+
+  function cancelRename() {
+    renameCommittedRef.current = true;
+    setRenamingId(null);
+    setRenameDraft('');
+  }
+
+  function submitRename() {
+    if (renameCommittedRef.current || !renamingId) return;
+    renameCommittedRef.current = true;
+    const name = sanitizeSessionTitle(renameDraft);
+    if (name) onRename(renamingId, name);
+    setRenamingId(null);
+    setRenameDraft('');
+  }
+
   function handleSessionKeyDown(e: React.KeyboardEvent, sessionId: string) {
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
     e.preventDefault();
@@ -164,10 +198,17 @@ export function WorkbenchSidebar({
         indicator={indicators[session.id]}
         closable={!closableLast}
         nested={nested}
+        renaming={renamingId === session.id}
+        renameDraft={renameDraft}
+        renameInputRef={renameInputRef}
         buttonRef={(el) => { sessionRefs.current[session.id] = el; }}
         relativeTime={formatRelativeTime(session.updatedAt, now)}
         onSelect={() => onSelect(session.id)}
         onClose={() => onClose(session.id)}
+        onStartRename={() => startRename(session)}
+        onRenameDraft={setRenameDraft}
+        onSubmitRename={submitRename}
+        onCancelRename={cancelRename}
         onKeyDown={(e) => handleSessionKeyDown(e, session.id)}
       />
     );
@@ -400,10 +441,17 @@ function SessionRow({
   indicator,
   closable,
   nested,
+  renaming,
+  renameDraft,
+  renameInputRef,
   buttonRef,
   relativeTime,
   onSelect,
   onClose,
+  onStartRename,
+  onRenameDraft,
+  onSubmitRename,
+  onCancelRename,
   onKeyDown,
 }: {
   session: WorkbenchSession;
@@ -411,18 +459,64 @@ function SessionRow({
   indicator?: SessionIndicator;
   closable: boolean;
   nested: boolean;
+  renaming: boolean;
+  renameDraft: string;
+  renameInputRef: React.RefObject<HTMLInputElement | null>;
   buttonRef: (el: HTMLButtonElement | null) => void;
   relativeTime: string;
   onSelect: () => void;
   onClose: () => void;
+  onStartRename: () => void;
+  onRenameDraft: (value: string) => void;
+  onSubmitRename: () => void;
+  onCancelRename: () => void;
   onKeyDown: (e: React.KeyboardEvent) => void;
 }) {
+  if (renaming) {
+    return (
+      <div className={['px-0', nested ? 'pl-4' : ''].join(' ')}>
+        <input
+          ref={renameInputRef}
+          value={renameDraft}
+          aria-label={t('workbench.rename_session')}
+          onChange={(e) => onRenameDraft(e.target.value)}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              onSubmitRename();
+            }
+            if (e.key === 'Escape') {
+              e.preventDefault();
+              onCancelRename();
+            }
+          }}
+          onBlur={onSubmitRename}
+          placeholder={t('workbench.session_name_placeholder')}
+          className="w-full h-9 px-3 text-sm rounded-[10px] border border-pc-border bg-pc-input text-pc-text placeholder:text-pc-text-faint focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--pc-focus)]"
+        />
+      </div>
+    );
+  }
+
   return (
     <button
       ref={buttonRef}
       type="button"
       onClick={onSelect}
-      onKeyDown={onKeyDown}
+      onDoubleClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onStartRename();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'F2') {
+          e.preventDefault();
+          onStartRename();
+          return;
+        }
+        onKeyDown(e);
+      }}
       title={sessionLabel(session)}
       className={[
         'group/task-card relative flex items-center',
@@ -438,23 +532,37 @@ function SessionRow({
         <span className="max-w-full truncate text-[10px] tabular-nums text-pc-text-faint group-hover/task-card:opacity-0">
           {relativeTime}
         </span>
-        <span
-          role="button"
-          tabIndex={-1}
-          aria-label={t('workbench.close_session')}
-          title={t('workbench.close_session')}
-          aria-disabled={!closable}
-          onClick={(e) => {
-            e.stopPropagation();
-            if (closable) onClose();
-          }}
-          className={[
-            'absolute inset-y-0 right-0 inline-flex items-center justify-center size-6 rounded-md',
-            'text-pc-text-muted transition-opacity opacity-0 group-hover/task-card:opacity-100',
-            closable ? 'hover:bg-status-error/15 hover:text-status-error cursor-pointer' : 'cursor-not-allowed',
-          ].join(' ')}
-        >
-          <X className="size-3.5" />
+        <span className="absolute inset-y-0 right-0 inline-flex items-center justify-end gap-0.5 opacity-0 group-hover/task-card:opacity-100">
+          <span
+            role="button"
+            tabIndex={-1}
+            aria-label={t('workbench.rename_session')}
+            title={t('workbench.rename_session')}
+            onClick={(e) => {
+              e.stopPropagation();
+              onStartRename();
+            }}
+            className="inline-flex items-center justify-center size-6 rounded-md text-pc-text-muted hover:bg-[var(--pc-hover)] hover:text-pc-text cursor-pointer"
+          >
+            <Pencil className="size-3.5" />
+          </span>
+          <span
+            role="button"
+            tabIndex={-1}
+            aria-label={t('workbench.close_session')}
+            title={t('workbench.close_session')}
+            aria-disabled={!closable}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (closable) onClose();
+            }}
+            className={[
+              'inline-flex items-center justify-center size-6 rounded-md text-pc-text-muted',
+              closable ? 'hover:bg-status-error/15 hover:text-status-error cursor-pointer' : 'cursor-not-allowed',
+            ].join(' ')}
+          >
+            <X className="size-3.5" />
+          </span>
         </span>
       </span>
     </button>

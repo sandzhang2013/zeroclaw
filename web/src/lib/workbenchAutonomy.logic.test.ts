@@ -9,6 +9,8 @@ import {
   clampWorkbenchAutonomy,
   maxAutonomyForRole,
   autonomyLevelsUpTo,
+  loadWorkbenchAutonomy,
+  saveWorkbenchAutonomy,
 } from './workbenchAutonomy.ts';
 
 test('parseWorkbenchAutonomy accepts runtime wire values', () => {
@@ -46,4 +48,44 @@ test('ordinary users cannot pick full; advanced and ops can', () => {
   assert.equal(clampWorkbenchAutonomy('full', 'supervised'), 'supervised');
   assert.equal(clampWorkbenchAutonomy('readonly', 'supervised'), 'readonly');
   assert.deepEqual(autonomyLevelsUpTo('supervised'), ['readonly', 'supervised']);
+});
+
+test('clampWorkbenchAutonomy never raises and keeps equal levels', () => {
+  const levels = ['readonly', 'supervised', 'full'] as const;
+  for (const level of levels) {
+    for (const max of levels) {
+      const clamped = clampWorkbenchAutonomy(level, max);
+      const rank = { readonly: 0, supervised: 1, full: 2 };
+      assert.ok(rank[clamped] <= rank[max], `${level} vs ${max} -> ${clamped}`);
+      if (rank[level] <= rank[max]) assert.equal(clamped, level);
+    }
+  }
+});
+
+test('unknown roles follow the ordinary-user cap; advanced aliases do not', () => {
+  assert.equal(maxAutonomyForRole('admin'), 'supervised');
+  assert.equal(maxAutonomyForRole('user'), 'supervised');
+  assert.equal(maxAutonomyForRole('advanced'), 'full');
+  assert.equal(maxAutonomyForRole('运维'), 'full');
+  assert.deepEqual(autonomyLevelsUpTo('readonly'), ['readonly']);
+  assert.deepEqual(autonomyLevelsUpTo('full'), ['readonly', 'supervised', 'full']);
+});
+
+test('autonomyStorageKey keeps colon scopes and load/save round-trip', () => {
+  assert.match(autonomyStorageKey('deepseek:abc-1'), /deepseek:abc-1$/);
+  const store = new Map<string, string>();
+  Object.defineProperty(globalThis, 'localStorage', {
+    value: {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        store.set(key, value);
+      },
+    },
+    configurable: true,
+  });
+  saveWorkbenchAutonomy('s1', 'readonly');
+  assert.equal(loadWorkbenchAutonomy('s1'), 'readonly');
+  assert.equal(loadWorkbenchAutonomy('missing'), DEFAULT_WORKBENCH_AUTONOMY);
+  assert.equal(parseWorkbenchAutonomy(null), DEFAULT_WORKBENCH_AUTONOMY);
+  assert.equal(parseWorkbenchAutonomy(1), DEFAULT_WORKBENCH_AUTONOMY);
 });

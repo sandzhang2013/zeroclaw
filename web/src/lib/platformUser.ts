@@ -106,10 +106,11 @@ function readInjectedUser(): PlatformUser | null {
 export function parseMockUserCookie(cookieHeader: string | undefined | null): PlatformUser | null {
   if (!cookieHeader) return null;
   const match = /(?:^|;\s*)zeroclaw_mock_user=([^;]*)/.exec(cookieHeader);
-  if (!match) return null;
-  let userId = match[1];
+  const encoded = match?.[1];
+  if (!encoded) return null;
+  let userId: string;
   try {
-    userId = decodeURIComponent(userId);
+    userId = decodeURIComponent(encoded);
   } catch {
     return null;
   }

@@ -678,6 +678,15 @@ fn user_session_workspace_dir_nests_under_user_and_session() {
     assert!(bob_a.ends_with("users/bob/agents/default/workspace/sessions/sess-a"));
     assert_ne!(alice_a, alice_b);
     assert_ne!(alice_a, bob_a);
+    let shared = config.agent_session_workspace_dir("default", "sess-a");
+    assert!(
+        !alice_a.starts_with(&shared),
+        "user session dir must not nest under the shared agent session"
+    );
+    assert!(
+        !shared.components().any(|c| c.as_os_str() == "users"),
+        "shared agent session must stay outside users/"
+    );
 }
 
 #[test]

@@ -1903,6 +1903,10 @@ mod tests {
         assert_eq!(parse_ws_autonomy(&bad), Err(()));
         let not_str = serde_json::json!({"autonomy": 1});
         assert_eq!(parse_ws_autonomy(&not_str), Err(()));
+        let null = serde_json::json!({"autonomy": serde_json::Value::Null});
+        assert_eq!(parse_ws_autonomy(&null), Ok(None));
+        let array = serde_json::json!({"autonomy": ["full"]});
+        assert_eq!(parse_ws_autonomy(&array), Err(()));
     }
 
     #[test]
@@ -1947,6 +1951,22 @@ mod tests {
         );
         assert_eq!(
             ws_autonomy_ceiling(AutonomyLevel::Supervised, Some(&ops)),
+            AutonomyLevel::Supervised
+        );
+    }
+
+    #[test]
+    fn ws_autonomy_ceiling_english_role_alias_is_not_ops() {
+        use zeroclaw_config::autonomy::AutonomyLevel;
+        let english_ops = zeroclaw_api::UserAttrs::new("ops").with_role("ops");
+        assert_eq!(
+            ws_autonomy_ceiling(AutonomyLevel::Full, Some(&english_ops)),
+            AutonomyLevel::Supervised,
+            "BFF must send 运维; English ops must not skip the ordinary-user cap"
+        );
+        let english_advanced = zeroclaw_api::UserAttrs::new("liu").with_role("advanced");
+        assert_eq!(
+            ws_autonomy_ceiling(AutonomyLevel::Full, Some(&english_advanced)),
             AutonomyLevel::Supervised
         );
     }
@@ -2266,6 +2286,24 @@ data: {\"type\":\"message_stop\"}\n\n",
         assert!(out.contains("[IMAGE:data:image/png;base64,xx]"));
         let skipped = resolve_workspace_image_markers("nope [IMAGE:../etc/passwd]", cwd);
         assert_eq!(skipped, "nope [IMAGE:../etc/passwd]");
+    }
+
+    #[test]
+    fn resolve_workspace_image_markers_leaves_urls_and_unclosed_markers() {
+        let cwd = Path::new("/ws/session");
+        let urls = resolve_workspace_image_markers(
+            "a [IMAGE:https://cdn.example/a.png] b [IMAGE:http://x/y.png]",
+            cwd,
+        );
+        assert!(urls.contains("[IMAGE:https://cdn.example/a.png]"));
+        assert!(urls.contains("[IMAGE:http://x/y.png]"));
+        assert!(!urls.contains("/ws/session/https"));
+        let abs = resolve_workspace_image_markers("[IMAGE:/etc/passwd]", cwd);
+        assert_eq!(abs, "[IMAGE:/etc/passwd]");
+        let unclosed = resolve_workspace_image_markers("keep [IMAGE:uploads/a.png", cwd);
+        assert_eq!(unclosed, "keep [IMAGE:uploads/a.png");
+        let empty = resolve_workspace_image_markers("[IMAGE:]", cwd);
+        assert_eq!(empty, "[IMAGE:]");
     }
 
     #[test]

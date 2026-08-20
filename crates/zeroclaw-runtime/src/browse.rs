@@ -1006,4 +1006,48 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, BrowseError::TooLarge(_, _)));
     }
+
+    #[test]
+    fn read_agent_workspace_file_for_user_does_not_see_another_user() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = Config {
+            config_path: dir.path().join("config.toml"),
+            ..Config::default()
+        };
+        write_agent_workspace_file_for_user(
+            &cfg,
+            "alpha",
+            "sessions/s1/secret.txt",
+            b"ops-only",
+            Some("ops"),
+        )
+        .unwrap();
+        let err = read_agent_workspace_file_for_user(
+            &cfg,
+            "alpha",
+            "sessions/s1/secret.txt",
+            Some("liuyang"),
+        )
+        .unwrap_err();
+        assert!(matches!(err, BrowseError::NotFound(_)));
+        let escaped = read_agent_workspace_file_for_user(
+            &cfg,
+            "alpha",
+            "../users/ops/agents/alpha/workspace/sessions/s1/secret.txt",
+            Some("liuyang"),
+        )
+        .unwrap_err();
+        assert!(matches!(escaped, BrowseError::Escape(_)));
+    }
+
+    #[test]
+    fn read_agent_workspace_file_guesses_svg_as_octet_stream() {
+        let (_dir, cfg) = workspace_fixture();
+        let root = cfg.agent_workspace_dir("alpha");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("icon.svg"), b"<svg></svg>").unwrap();
+        let read = read_agent_workspace_file(&cfg, "alpha", "icon.svg").unwrap();
+        assert_eq!(read.mime, "application/octet-stream");
+        assert!(read.is_text);
+    }
 }

@@ -1,6 +1,6 @@
 import { memo, useState, useEffect, useRef, useCallback } from 'react';
 import { Navigate, useParams } from 'react-router-dom';
-import { ArrowUp, Square, User, AlertCircle, Copy, Check, X, Trash2, Minimize2, Maximize2, ChevronDown, Wrench, PanelRightClose, PanelRightOpen, Plus, Mic, Loader2 } from 'lucide-react';
+import { ArrowUp, Square, User, AlertCircle, Copy, Check, X, Trash2, Minimize2, Maximize2, ChevronDown, Wrench, PanelRightClose, PanelRightOpen, Plus, Mic, Loader2, Pencil } from 'lucide-react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { AgentProvider, useAgent, type ChatMessage } from '@/contexts/AgentContext';
@@ -41,6 +41,7 @@ import { isVisualArtifact } from '@/lib/artifactKind';
 import { canvasPreviewFromToolCall } from '@/lib/canvasFrame';
 import { extractMcpToolText, extractToolImages, looksLikeChatImages, stripImageMarkers } from '@/lib/chatImages';
 import { ChatImagePreview } from '@/components/ChatImagePreview';
+import { sanitizeSessionTitle } from '@/lib/workbenchSession';
 import { basePath } from '@/lib/basePath';
 
 const DRAFT_KEY_PREFIX = 'agent-chat';
@@ -164,6 +165,7 @@ export function AgentChatInner({
   agentAlias,
   onStatus,
   sessionTitle,
+  onRenameSession,
   rightPanelCollapsed,
   onToggleRightPanel,
   initialPrompt,
@@ -176,6 +178,7 @@ export function AgentChatInner({
   agentAlias: string;
   onStatus?: (s: AgentChatStatus) => void;
   sessionTitle?: string;
+  onRenameSession?: (name: string) => void;
   rightPanelCollapsed?: boolean;
   onToggleRightPanel?: () => void;
   initialPrompt?: string;
@@ -208,7 +211,7 @@ export function AgentChatInner({
     sessionId,
   } = useAgent();
 
-  const { draft, saveDraft, clearDraft } = useDraft(`${DRAFT_KEY_PREFIX}.${agentAlias}`);
+  const { draft, clearDraft } = useDraft(`${DRAFT_KEY_PREFIX}.${agentAlias}`);
   const [input, setInput] = useState(draft);
   const persistAutonomyScope = autonomyScope ?? sessionId;
   const maxAutonomy = maxAutonomyForRole(userRole);
@@ -248,12 +251,30 @@ export function AgentChatInner({
   const attachmentsRef = useRef(attachments);
   attachmentsRef.current = attachments;
   const [dragOver, setDragOver] = useState(false);
+  const [renamingTitle, setRenamingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState('');
+  const titleInputRef = useRef<HTMLInputElement>(null);
   const [attachHint, setAttachHint] = useState<string | null>(null);
 
-  // Persist draft to in-memory store so it survives route changes
   useEffect(() => {
-    saveDraft(input);
-  }, [input, saveDraft]);
+    if (renamingTitle) {
+      titleInputRef.current?.focus();
+      titleInputRef.current?.select();
+    }
+  }, [renamingTitle]);
+
+  function startTitleRename() {
+    if (!onRenameSession) return;
+    setTitleDraft(sessionTitle?.trim() || '');
+    setRenamingTitle(true);
+  }
+
+  function submitTitleRename() {
+    if (!renamingTitle) return;
+    const next = sanitizeSessionTitle(titleDraft);
+    setRenamingTitle(false);
+    if (next && onRenameSession) onRenameSession(next);
+  }
 
   // Report live status up to the workbench (sidebar indicators + session title).
   useEffect(() => {
@@ -668,9 +689,44 @@ export function AgentChatInner({
         <div className="flex items-center gap-3 flex-1 min-w-0 overflow-hidden">
           <AgentAvatar className="h-9 w-9" />
           <div className="flex flex-col min-w-0 flex-1 overflow-hidden">
-            <h2 className="text-sm font-semibold min-w-0 truncate text-pc-text" title={sessionTitle?.trim() || agentAlias}>
-              {sessionTitle?.trim() || agentAlias}
-            </h2>
+            {renamingTitle ? (
+              <input
+                ref={titleInputRef}
+                value={titleDraft}
+                aria-label={t('workbench.rename_session')}
+                onChange={(e) => setTitleDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    submitTitleRename();
+                  }
+                  if (e.key === 'Escape') {
+                    e.preventDefault();
+                    setRenamingTitle(false);
+                  }
+                }}
+                onBlur={submitTitleRename}
+                placeholder={t('workbench.session_name_placeholder')}
+                className="h-7 w-full max-w-md rounded-md border border-pc-border bg-pc-input px-2 text-sm font-semibold text-pc-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--pc-focus)]"
+              />
+            ) : (
+              <div className="flex min-w-0 items-center gap-1">
+                <h2 className="text-sm font-semibold min-w-0 truncate text-pc-text" title={sessionTitle?.trim() || agentAlias}>
+                  {sessionTitle?.trim() || agentAlias}
+                </h2>
+                {onRenameSession && (
+                  <button
+                    type="button"
+                    onClick={startTitleRename}
+                    aria-label={t('workbench.rename_session')}
+                    title={t('workbench.rename_session')}
+                    className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-pc-text-muted hover:bg-[var(--pc-hover)] hover:text-pc-text"
+                  >
+                    <Pencil className="size-3.5" />
+                  </button>
+                )}
+              </div>
+            )}
             {sessionTitle?.trim() && sessionTitle.trim() !== agentAlias && (
               <p className="text-xs text-pc-text-muted truncate">{agentAlias}</p>
             )}

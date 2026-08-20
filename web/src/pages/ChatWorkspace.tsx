@@ -19,6 +19,7 @@ import {
   maxAutonomyForRole,
   type WorkbenchAutonomy,
 } from '@/lib/workbenchAutonomy';
+import { sanitizeSessionTitle } from '@/lib/workbenchSession';
 
 const SIDEBAR_COLLAPSED_KEY = 'zeroclaw-workbench-sidebar-collapsed';
 const RIGHT_COLLAPSED_KEY = 'zeroclaw-workbench-right-collapsed';
@@ -323,7 +324,7 @@ export default function ChatWorkspace({
       taskId,
       folderId,
       updatedAt: stampNow(),
-      title: titleSource.slice(0, 48),
+      title: sanitizeSessionTitle(titleSource) ?? undefined,
     };
     const capped = clampWorkbenchAutonomy(autonomy, maxAutonomyForRole(userRole));
     saveWorkbenchAutonomy(session.id, capped);
@@ -331,6 +332,14 @@ export default function ChatWorkspace({
     setSessions((prev) => [...prev, session]);
     setActiveSessionId(session.id);
   }, [activeAlias, activeFolderId, folders, userRole]);
+
+  const renameSession = useCallback((sessionId: string, name: string) => {
+    const title = sanitizeSessionTitle(name);
+    if (!title) return;
+    setSessions((list) => list.map((sess) => (
+      sess.id === sessionId ? { ...sess, title } : sess
+    )));
+  }, []);
 
   const closeSession = useCallback((sessionId: string) => {
     setSessions((prev) => {
@@ -421,6 +430,7 @@ export default function ChatWorkspace({
         onNewSession={newSession}
         onSelect={selectSession}
         onClose={closeSession}
+        onRename={renameSession}
         onNewFolder={newFolder}
         onSelectFolder={setActiveFolderId}
         userName={userName}
@@ -462,6 +472,7 @@ export default function ChatWorkspace({
                   <AgentChatInner
                     agentAlias={session.agentAlias}
                     sessionTitle={session.title}
+                    onRenameSession={(name) => renameSession(session.id, name)}
                     onStatus={onStatusFor(session.id)}
                     rightPanelCollapsed={rightCollapsed}
                     onToggleRightPanel={toggleRight}

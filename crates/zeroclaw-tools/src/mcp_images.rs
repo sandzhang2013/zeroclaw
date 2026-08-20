@@ -420,4 +420,152 @@ mod tests {
         assert_eq!(stripped, "趋势图");
         assert!(!stripped.contains(TINY_PNG));
     }
+
+    #[test]
+    fn writes_jpeg_gif_webp_and_data_uri_png() {
+        let dir = tempfile::tempdir().unwrap();
+        for (mime, label) in [
+            ("image/jpeg", "jpg"),
+            ("image/jpg", "jpg"),
+            ("image/gif", "gif"),
+            ("image/webp", "webp"),
+        ] {
+            let raw = serde_json::to_string(&json!({
+                "content": [{ "type": "image", "mimeType": mime, "data": TINY_PNG }]
+            }))
+            .unwrap();
+            let out = materialize_mcp_images(&raw, dir.path(), "trend")
+                .unwrap_or_else(|| panic!("{mime} should persist"));
+            assert!(
+                out.as_str().contains(&format!(".{label}]")),
+                "{mime} -> {label}: {}",
+                out.as_str()
+            );
+        }
+        let data_uri = serde_json::to_string(&json!({
+            "content": [{
+                "type": "image",
+                "data": format!("data:image/png;base64,{TINY_PNG}")
+            }]
+        }))
+        .unwrap();
+        let out = materialize_mcp_images(&data_uri, dir.path(), "uri").expect("data uri png");
+        assert!(out.as_str().contains("[IMAGE:charts/"));
+        assert!(!out.as_str().contains(TINY_PNG));
+    }
+
+    #[test]
+    fn mixed_svg_and_png_saves_only_the_raster() {
+        let raw = serde_json::to_string(&json!({
+            "content": [
+                { "type": "image", "mimeType": "image/svg+xml", "data": "PHN2Zz4=" },
+                { "type": "image", "mimeType": "image/png", "data": TINY_PNG }
+            ]
+        }))
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let out = materialize_mcp_images(&raw, dir.path(), "mixed").expect("png remains");
+        assert_eq!(out.as_str().matches("[IMAGE:charts/").count(), 1);
+        assert!(!out.as_str().contains("PHN2Zz4="));
+        let written = std::fs::read_dir(dir.path().join(CHARTS_DIR))
+            .unwrap()
+            .count();
+        assert_eq!(written, 1);
+    }
+
+    #[test]
+    fn invalid_base64_and_empty_data_are_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        let bad = serde_json::to_string(&json!({
+            "content": [{ "type": "image", "mimeType": "image/png", "data": "not-base64!!" }]
+        }))
+        .unwrap();
+        assert!(materialize_mcp_images(&bad, dir.path(), "trend").is_none());
+        let empty = serde_json::to_string(&json!({
+            "content": [{ "type": "image", "mimeType": "image/png", "data": "   " }]
+        }))
+        .unwrap();
+        assert!(materialize_mcp_images(&empty, dir.path(), "trend").is_none());
+        assert!(
+            mcp_history_without_images(&empty).is_none(),
+            "whitespace-only data is not an image part"
+        );
+        assert!(
+            mcp_history_without_images(&bad).is_some(),
+            "undecodable image payloads must still be stripped from history"
+        );
+        assert!(
+            mcp_history_without_images("{\"content\":[{\"type\":\"text\",\"text\":\"ok\"}]}")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn mime_with_charset_and_nested_result_still_persist() {
+        let raw = serde_json::to_string(&json!({
+            "result": {
+                "content": [{
+                    "type": "image",
+                    "mime_type": "image/png; charset=binary",
+                    "data": TINY_PNG
+                }]
+            }
+        }))
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let out = materialize_mcp_images(&raw, dir.path(), "nested").expect("nested png");
+        assert!(out.as_str().contains("[IMAGE:charts/"));
+    }
+
+    #[test]
+    fn tool_stem_strips_path_like_names_and_eight_images_are_not_truncated() {
+        let dir = tempfile::tempdir().unwrap();
+        let one = serde_json::to_string(&json!({
+            "content": [{ "type": "image", "mimeType": "image/png", "data": TINY_PNG }]
+        }))
+        .unwrap();
+        let out = materialize_mcp_images(&one, dir.path(), "../../evil__trend chart!")
+            .expect("sanitized stem");
+        assert!(
+            out.as_str().contains("[IMAGE:charts/trendchart-")
+                || out.as_str().contains("[IMAGE:charts/trend")
+        );
+        let marker = out.as_str();
+        assert!(!marker.contains(".."));
+        assert!(!marker.contains("evil"));
+
+        let content: Vec<serde_json::Value> = (0..MAX_IMAGES_PER_CALL)
+            .map(|_| json!({ "type": "image", "mimeType": "image/png", "data": TINY_PNG }))
+            .collect();
+        let exact = serde_json::to_string(&json!({ "content": content })).unwrap();
+        let capped = materialize_mcp_images(&exact, dir.path(), "exact").expect("exact cap");
+        assert_eq!(
+            capped.as_str().matches("[IMAGE:charts/").count(),
+            MAX_IMAGES_PER_CALL
+        );
+        assert!(
+            !capped.as_str().contains("Only the first"),
+            "exactly 8 images must not show a truncation notice"
+        );
+    }
+
+    #[test]
+    fn history_strip_keeps_caption_when_nothing_was_saved() {
+        let raw = serde_json::to_string(&json!({
+            "content": [
+                { "type": "text", "text": "趋势图" },
+                { "type": "image", "mimeType": "image/svg+xml", "data": "PHN2Zz4=" }
+            ]
+        }))
+        .unwrap();
+        assert_eq!(mcp_history_without_images(&raw).as_deref(), Some("趋势图"));
+        let no_caption = serde_json::to_string(&json!({
+            "content": [{ "type": "image", "mimeType": "image/png", "data": TINY_PNG }]
+        }))
+        .unwrap();
+        assert_eq!(
+            mcp_history_without_images(&no_caption).as_deref(),
+            Some("Tool returned a chart, but it was not saved to the workspace.")
+        );
+    }
 }

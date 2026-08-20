@@ -9,6 +9,8 @@ import {
   safeUploadFileName,
   sessionUploadWorkspacePath,
   uniqueUploadFileName,
+  CHAT_UPLOAD_MAX_BYTES,
+  CHAT_UPLOAD_MAX_FILES,
 } from './chatUpload.ts';
 
 test('safeUploadFileName strips paths and keeps CJK', () => {
@@ -56,5 +58,33 @@ test('displayUploadMessage shows filenames only', () => {
 
 test('isVisionImage rejects svg', () => {
   assert.equal(isVisionImage('image/svg+xml', 'a.svg'), false);
+  assert.equal(isVisionImage('image/svg', 'a.png'), false);
+  assert.equal(isVisionImage('', 'chart.SVG'), false);
   assert.equal(isVisionImage('image/png', 'a.png'), true);
+});
+
+test('safeUploadFileName and unique names cover hidden files and empty input', () => {
+  assert.equal(safeUploadFileName(''), 'file');
+  assert.equal(safeUploadFileName('...env'), '_env');
+  assert.equal(safeUploadFileName('a'.repeat(200)).length, 120);
+  assert.equal(uniqueUploadFileName([], 'ok.csv'), 'ok.csv');
+  assert.equal(uniqueUploadFileName(['stem'], 'stem'), 'stem-2');
+});
+
+test('composeUploadMessage is files-only when the prompt is empty', () => {
+  const msg = composeUploadMessage('  ', [
+    { cwdRel: 'uploads/p.jpg', filename: 'p.jpg', mime: 'image/jpeg' },
+  ]);
+  assert.match(msg, /^p\.jpg/);
+  assert.match(msg, /\[IMAGE:uploads\/p\.jpg\]/);
+  assert.equal(composeUploadMessage('hi', []).trim(), 'hi');
+  assert.equal(CHAT_UPLOAD_MAX_FILES, 8);
+  assert.equal(CHAT_UPLOAD_MAX_BYTES, 20 * 1024 * 1024);
+});
+
+test('displayUploadMessage strips session-qualified upload bullets', () => {
+  assert.equal(
+    displayUploadMessage('看\n\n- sessions/s1/uploads/a.csv'),
+    '看\n\na.csv',
+  );
 });

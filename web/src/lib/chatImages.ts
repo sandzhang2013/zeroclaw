@@ -17,8 +17,8 @@ export function extractImageMarkers(text: string): ExtractedChatImage[] {
   for (const match of text.matchAll(IMAGE_MARKER_RE)) {
     const inner = (match[1] ?? '').trim();
     if (!inner) continue;
-    if (inner.startsWith('data:image/')) {
-      if (isSvgMimeOrPath(inner)) continue;
+    if (inner.startsWith('data:')) {
+      if (!inner.startsWith('data:image/') || isSvgMimeOrPath(inner)) continue;
       out.push({ kind: 'data', src: inner });
       continue;
     }

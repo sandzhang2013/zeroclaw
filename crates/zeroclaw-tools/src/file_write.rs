@@ -363,6 +363,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn file_write_html_declares_html_mime_and_written_flag() {
+        let dir = std::env::temp_dir().join("zeroclaw_test_file_write_html_artifact");
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+
+        let tool = test_tool(dir.clone());
+        let result = tool
+            .execute(json!({"path": "login.html", "content": "<html>ok</html>"}))
+            .await
+            .unwrap();
+        assert!(result.success);
+        let data = result.output.data().expect("written metadata");
+        assert_eq!(data["written"], true);
+        assert_eq!(data["filename"], "login.html");
+        assert_eq!(data["mimeType"], "text/html");
+        assert_eq!(data["bytes"], "<html>ok</html>".len());
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
     async fn file_write_creates_parent_dirs() {
         let dir = std::env::temp_dir().join("zeroclaw_test_file_write_nested");
         let _ = tokio::fs::remove_dir_all(&dir).await;

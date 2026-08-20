@@ -36,3 +36,26 @@ test('parseToolArtifact rejects host paths and traversal', () => {
   assert.equal(ok?.path, 'sessions/s1/login.html');
   assert.equal(ok?.title, '登录页');
 });
+
+test('artifactKind treats every svg mime as non-preview even with a png name', () => {
+  assert.equal(artifactKind('image/svg', 'chart.png'), 'other');
+  assert.equal(artifactKind('IMAGE/SVG+XML', 'chart.png'), 'other');
+  assert.equal(artifactKind('text/html; charset=utf-8', 'x'), 'html');
+  assert.equal(artifactKind('', 'page.HTM'), 'html');
+  assert.equal(artifactKind('', 'shot.jpeg'), 'image');
+  assert.equal(artifactKind('', 'shot.webp'), 'image');
+  assert.equal(artifactKind('application/vnd.ms-excel', 'a.csv'), 'office');
+  assert.equal(artifactKind('', 'deck.ppt'), 'office');
+  assert.equal(artifactKind('', 'deck.pptx'), 'office');
+});
+
+test('parseToolArtifact fills filename from path and drops windows paths', () => {
+  assert.equal(parseToolArtifact({ path: 'C:\\Windows\\secret.png' }), undefined);
+  const ok = parseToolArtifact({ path: 'sessions/s1/a.png', size: Number.NaN });
+  assert.equal(ok?.filename, 'a.png');
+  assert.equal(ok?.title, 'a.png');
+  assert.equal(ok?.size, 0);
+  assert.equal(parseToolArtifact({ path: '', filename: 'a.png' }), undefined);
+  assert.equal(parseToolArtifact({ path: '  ', filename: 'a.png' }), undefined);
+  assert.equal(isVisualArtifact({ path: 'a.htm', filename: 'a.htm', title: 'a', mime: '', size: 1 }), true);
+});

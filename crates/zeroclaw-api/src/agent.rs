@@ -282,5 +282,13 @@ mod tool_artifact_tests {
         assert_eq!(guess_file_mime("r.pdf"), "application/pdf");
         assert!(guess_file_mime("t.docx").contains("wordprocessingml"));
         assert_eq!(guess_file_mime("x.bin"), "application/octet-stream");
+        assert_eq!(guess_file_mime("a.htm"), "text/html");
+        assert_eq!(guess_file_mime("p.jpeg"), "image/jpeg");
+        assert_eq!(guess_file_mime("p.gif"), "image/gif");
+        assert_eq!(guess_file_mime("p.webp"), "image/webp");
+        assert!(guess_file_mime("a.xlsx").contains("spreadsheetml"));
+        assert!(guess_file_mime("a.pptx").contains("presentationml"));
+        assert_eq!(guess_file_mime("legacy.doc"), "application/msword");
+        assert_eq!(guess_file_mime("noext"), "application/octet-stream");
     }
 }

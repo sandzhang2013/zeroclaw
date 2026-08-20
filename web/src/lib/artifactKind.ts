@@ -20,7 +20,7 @@ export function artifactKind(mime: string, filename: string): ArtifactKind {
   const m = (mime || '').toLowerCase();
   const ext = extOf(filename);
   if (m.startsWith('text/html') || ext === 'html' || ext === 'htm') return 'html';
-  if (m === 'image/svg+xml' || ext === 'svg') return 'other';
+  if (m.startsWith('image/svg') || m.includes('svg+xml') || ext === 'svg') return 'other';
   if (m.startsWith('image/') || ['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext)) {
     return 'image';
   }

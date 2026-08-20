@@ -620,6 +620,37 @@ mod tests {
         assert!(!mgr.needs_approval("file_write"));
     }
 
+    #[test]
+    fn supervised_always_ask_survives_a_client_full_request() {
+        let mgr = ApprovalManager::from_risk_profile(&supervised_config());
+        mgr.set_autonomy_level(AutonomyLevel::Full);
+        assert!(
+            mgr.needs_approval("shell"),
+            "always_ask must still prompt after a clamped full overlay"
+        );
+        assert_eq!(mgr.configured_autonomy(), AutonomyLevel::Supervised);
+    }
+
+    #[test]
+    fn derive_for_risk_profile_uses_the_target_ceiling_and_fresh_allowlist() {
+        let parent = ApprovalManager::from_risk_profile(&full_config());
+        parent.record_decision(
+            "file_write",
+            &serde_json::json!({"path": "x"}),
+            &ApprovalResponse::Always,
+            "cli",
+        );
+        let derived = parent.derive_for_risk_profile(&supervised_config());
+        assert_eq!(derived.configured_autonomy(), AutonomyLevel::Supervised);
+        assert!(
+            derived.needs_approval("file_write"),
+            "Always grants must not transfer to a derived agent"
+        );
+        assert!(derived.needs_approval("shell"));
+        assert!(!derived.needs_approval("file_read"));
+        assert!(parent.is_non_interactive() == derived.is_non_interactive());
+    }
+
     // ── session allowlist ────────────────────────────────────
 
     #[test]

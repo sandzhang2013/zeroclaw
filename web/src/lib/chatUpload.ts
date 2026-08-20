@@ -32,8 +32,9 @@ export function cwdRelativeUploadPath(filename: string): string {
 
 export function isVisionImage(mime: string, filename: string): boolean {
   const m = (mime || '').toLowerCase();
-  if (m.startsWith('image/') && m !== 'image/svg+xml') return true;
   const ext = filename.split('.').pop()?.toLowerCase() ?? '';
+  if (m.startsWith('image/svg') || m.includes('svg+xml') || ext === 'svg') return false;
+  if (m.startsWith('image/')) return true;
   return VISION_EXT.has(ext);
 }
 
