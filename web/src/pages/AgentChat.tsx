@@ -15,7 +15,7 @@ import {
   type CommandSpec,
 } from '@/lib/slashCommands';
 import ToolCallCard from '@/components/ToolCallCard';
-import { ArtifactCard, HtmlSrcDocPreview } from '@/components/ArtifactCard';
+import { ArtifactCard } from '@/components/ArtifactCard';
 import ApprovalBanner from '@/components/ApprovalBanner';
 import { AutonomySelect } from '@/components/AutonomySelect';
 import { uploadAgentWorkspaceFile } from '@/lib/api';
@@ -37,9 +37,9 @@ import {
   uniqueUploadFileName,
 } from '@/lib/chatUpload';
 import { splitChatHtmlBlocks } from '@/lib/chatHtmlPreview';
-import { isVisualArtifact } from '@/lib/artifactKind';
-import { canvasPreviewFromToolCall } from '@/lib/canvasFrame';
-import { extractMcpToolText, extractToolImages, looksLikeChatImages, stripImageMarkers } from '@/lib/chatImages';
+import { artifactKind } from '@/lib/artifactKind';
+import { groupIllustratedBubbles, shouldAttachStreamingToGroup } from '@/lib/chatIllustrated';
+import { extractMcpToolText, extractToolImages, stripImageMarkers } from '@/lib/chatImages';
 import { ChatImagePreview } from '@/components/ChatImagePreview';
 import { sanitizeSessionTitle } from '@/lib/workbenchSession';
 import { basePath } from '@/lib/basePath';
@@ -795,43 +795,52 @@ export function AgentChatInner({
           </div>
         )}
 
-        {messages
-          .filter((msg) => showToolActivity || !msg.toolCall || isVisualArtifact(msg.toolCall.artifact) || !!canvasPreviewFromToolCall(msg.toolCall) || looksLikeChatImages(msg.toolCall.output))
-          .map((msg, idx) => (
-            <MessageItem
-              key={msg.id}
-              msg={msg}
-              idx={idx}
-              compact={compact}
-              showToolActivity={showToolActivity}
-              isCopied={copiedId === msg.id}
-              onCopy={handleCopy}
-              onDelete={handleDeleteMessage}
-            />
-          ))}
-
-        {typing && (
-          <div className="flex items-start gap-3 animate-fade-in">
-            <AgentAvatar className="h-8 w-8" />
-            {streamingContent || streamingThinking ? (
-              <div className="min-w-0 flex-1 rounded-[var(--radius-lg)] px-4 py-3 border border-pc-border bg-pc-elevated text-pc-text">
-                {streamingThinking && (
-                  <details className="mb-2" open={!streamingContent}>
-                    <summary className="text-xs cursor-pointer select-none text-pc-text-muted">{t('agentchat.thinking')}{!streamingContent && '...'}</summary>
-                    <pre className="text-xs mt-1 whitespace-pre-wrap break-words leading-relaxed overflow-auto max-h-60 p-2 rounded-[var(--radius-sm)] text-pc-text-muted bg-pc-code">{streamingThinking}</pre>
-                  </details>
-                )}
-                {streamingContent && <p className="text-sm whitespace-pre-wrap break-words leading-relaxed">{streamingContent}</p>}
-              </div>
-            ) : (
-              <div className="rounded-[var(--radius-lg)] px-4 py-3 border border-pc-border bg-pc-elevated flex items-center gap-1.5">
-                <span className="bounce-dot w-1.5 h-1.5 rounded-full bg-pc-accent" />
-                <span className="bounce-dot w-1.5 h-1.5 rounded-full bg-pc-accent" />
-                <span className="bounce-dot w-1.5 h-1.5 rounded-full bg-pc-accent" />
-              </div>
-            )}
-          </div>
-        )}
+        {(() => {
+          const bubbles = groupIllustratedBubbles(messages, showToolActivity);
+          const last = bubbles.at(-1);
+          const streamInLast = Boolean(typing && shouldAttachStreamingToGroup(last));
+          return (
+            <>
+              {bubbles.map((items, idx) => (
+                <MessageItem
+                  key={items.map((m) => m.id).join(':')}
+                  items={items}
+                  idx={idx}
+                  compact={compact}
+                  showToolActivity={showToolActivity}
+                  isCopied={items.some((m) => copiedId === m.id)}
+                  onCopy={handleCopy}
+                  onDelete={handleDeleteMessage}
+                  streaming={streamInLast && idx === bubbles.length - 1
+                    ? { content: streamingContent, thinking: streamingThinking }
+                    : null}
+                />
+              ))}
+              {typing && !streamInLast && (
+                <div className="flex items-start gap-3 animate-fade-in">
+                  <AgentAvatar className="h-8 w-8" />
+                  {streamingContent || streamingThinking ? (
+                    <div className="min-w-0 flex-1 rounded-[var(--radius-lg)] px-4 py-3 border border-pc-border bg-pc-elevated text-pc-text">
+                      {streamingThinking && (
+                        <details className="mb-2" open={!streamingContent}>
+                          <summary className="text-xs cursor-pointer select-none text-pc-text-muted">{t('agentchat.thinking')}{!streamingContent && '...'}</summary>
+                          <pre className="text-xs mt-1 whitespace-pre-wrap break-words leading-relaxed overflow-auto max-h-60 p-2 rounded-[var(--radius-sm)] text-pc-text-muted bg-pc-code">{streamingThinking}</pre>
+                        </details>
+                      )}
+                      {streamingContent && <p className="text-sm whitespace-pre-wrap break-words leading-relaxed">{streamingContent}</p>}
+                    </div>
+                  ) : (
+                    <div className="rounded-[var(--radius-lg)] px-4 py-3 border border-pc-border bg-pc-elevated flex items-center gap-1.5">
+                      <span className="bounce-dot w-1.5 h-1.5 rounded-full bg-pc-accent" />
+                      <span className="bounce-dot w-1.5 h-1.5 rounded-full bg-pc-accent" />
+                      <span className="bounce-dot w-1.5 h-1.5 rounded-full bg-pc-accent" />
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          );
+        })()}
 
         <div ref={messagesEndRef} />
       </div>
@@ -1077,17 +1086,18 @@ function stripServerTimestamp(content: string): string {
 // `isCopied` rather than the parent's full copiedId so only the affected
 // row re-renders when the copy indicator flips. See #5125.
 interface MessageItemProps {
-  msg: ChatMessage;
+  items?: ChatMessage[];
   idx: number;
   compact: boolean;
   showToolActivity: boolean;
   isCopied: boolean;
   onCopy: (id: string, content: string) => void;
   onDelete: (id: string) => void;
+  streaming?: { content: string; thinking: string } | null;
 }
 
 function ChatMarkdown({ content, compact }: { content: string; compact: boolean }) {
-  const { markdown, htmlBlocks } = splitChatHtmlBlocks(stripImageMarkers(content));
+  const { markdown } = splitChatHtmlBlocks(stripImageMarkers(content));
   const images = extractToolImages(content);
   return (
     <>
@@ -1096,33 +1106,81 @@ function ChatMarkdown({ content, compact }: { content: string; compact: boolean 
           <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{markdown}</ReactMarkdown>
         </div>
       ) : null}
-      {htmlBlocks.map((html, i) => (
-        <HtmlSrcDocPreview key={i} html={html} />
-      ))}
       <ChatImagePreview images={images} />
     </>
   );
 }
 
-const MessageItem = memo(function MessageItem({
+function messageDisplayText(msg: ChatMessage | undefined): string {
+  if (!msg) return '';
+  const cleanContent = msg.local || msg.ephemeral ? msg.content : stripServerTimestamp(msg.content);
+  const withoutUpload = msg.role === 'user' ? displayUploadMessage(cleanContent) : cleanContent;
+  if (msg.role !== 'agent') return withoutUpload;
+  return splitChatHtmlBlocks(stripImageMarkers(withoutUpload)).markdown;
+}
+
+function MessageBody({
   msg,
+  compact,
+  showToolActivity,
+  hideImageCaption,
+}: {
+  msg: ChatMessage;
+  compact: boolean;
+  showToolActivity: boolean;
+  hideImageCaption: boolean;
+}) {
+  const shownContent = messageDisplayText(msg);
+  const isUser = msg.role === 'user';
+  const userLong = isUser && (shownContent.includes('\n') || shownContent.length > 40);
+  if (msg.toolCall) {
+    const imageArtifact = msg.toolCall.artifact
+      && artifactKind(msg.toolCall.artifact.mime, msg.toolCall.artifact.filename) === 'image'
+      ? msg.toolCall.artifact
+      : undefined;
+    return (
+      <>
+        {showToolActivity && <ToolCallCard toolCall={msg.toolCall} />}
+        {imageArtifact && (
+          <div className={showToolActivity ? 'mt-2' : ''}>
+            <ArtifactCard artifact={imageArtifact} />
+          </div>
+        )}
+        {!imageArtifact && (
+          <ChatImagePreview
+            images={extractToolImages(msg.toolCall.output)}
+            caption={hideImageCaption ? undefined : extractMcpToolText(msg.toolCall.output ?? '')}
+          />
+        )}
+      </>
+    );
+  }
+  if (msg.markdown) {
+    return <ChatMarkdown content={shownContent} compact={compact} />;
+  }
+  return (
+    <p className={`${compact ? 'text-xs' : 'text-sm'} whitespace-pre-wrap break-words leading-relaxed ${isUser ? (userLong ? 'text-left' : 'text-right') : ''}`}>{shownContent}</p>
+  );
+}
+
+const MessageItem = memo(function MessageItem({
+  items,
   idx,
   compact,
   showToolActivity,
   isCopied,
   onCopy,
   onDelete,
+  streaming,
 }: MessageItemProps) {
-  // Locally-composed user input and locally-generated command output are
-  // verbatim and never carry the gateway's `[timestamp]` prefix, so don't strip
-  // them (that would clip a message starting with a bracketed datetime). Only
-  // server-sourced messages can be prefixed.
-  const cleanContent = msg.local || msg.ephemeral ? msg.content : stripServerTimestamp(msg.content);
-  const shownContent = msg.role === 'user' ? displayUploadMessage(cleanContent) : cleanContent;
-  const canvas = canvasPreviewFromToolCall(msg.toolCall);
-
+  const rows = items ?? [];
+  const msg = rows[0];
+  if (!msg) return null;
+  const shownContent = rows.map(messageDisplayText).filter((text) => text.trim()).join('\n\n');
+  const groupHasProse = rows.some((row) => !row.toolCall && messageDisplayText(row).trim());
   const isUser = msg.role === 'user';
   const userLong = isUser && (shownContent.includes('\n') || shownContent.length > 40);
+  const stamp = rows.at(-1) ?? msg;
 
   return (
     <div
@@ -1150,38 +1208,44 @@ const MessageItem = memo(function MessageItem({
               : 'bg-pc-elevated border-pc-border'
           }`}
         >
-          {msg.thinking && (
-            <details className="mb-2">
-              <summary className="text-xs cursor-pointer select-none text-pc-text-muted">{t('agentchat.thinking')}</summary>
-              <pre className="text-xs mt-1 whitespace-pre-wrap break-words leading-relaxed overflow-auto max-h-60 p-2 rounded-[var(--radius-sm)] text-pc-text-muted bg-pc-code">{msg.thinking}</pre>
-            </details>
-          )}
-          {msg.toolCall ? (
-            <>
-              {showToolActivity && <ToolCallCard toolCall={msg.toolCall} />}
-              {isVisualArtifact(msg.toolCall.artifact) && msg.toolCall.artifact && (
-                <div className={showToolActivity ? 'mt-2' : ''}>
-                  <ArtifactCard artifact={msg.toolCall.artifact} />
-                </div>
-              )}
-              {canvas && (
-                <HtmlSrcDocPreview
-                  html={canvas.content}
-                  title={canvas.canvasId}
+          <div className="space-y-2">
+            {rows.map((row) => (
+              <div key={row.id}>
+                {row.thinking && (
+                  <details className="mb-2">
+                    <summary className="text-xs cursor-pointer select-none text-pc-text-muted">{t('agentchat.thinking')}</summary>
+                    <pre className="text-xs mt-1 whitespace-pre-wrap break-words leading-relaxed overflow-auto max-h-60 p-2 rounded-[var(--radius-sm)] text-pc-text-muted bg-pc-code">{row.thinking}</pre>
+                  </details>
+                )}
+                <MessageBody
+                  msg={row}
+                  compact={compact}
+                  showToolActivity={showToolActivity}
+                  hideImageCaption={groupHasProse}
                 />
-              )}
-              {!isVisualArtifact(msg.toolCall.artifact) && (
-                <ChatImagePreview
-                  images={extractToolImages(msg.toolCall.output)}
-                  caption={extractMcpToolText(msg.toolCall.output ?? '')}
-                />
-              )}
-            </>
-          ) : msg.markdown ? (
-            <ChatMarkdown content={shownContent} compact={compact} />
-          ) : (
-            <p className={`${compact ? 'text-xs' : 'text-sm'} whitespace-pre-wrap break-words leading-relaxed ${isUser ? (userLong ? 'text-left' : 'text-right') : ''}`}>{shownContent}</p>
-          )}
+              </div>
+            ))}
+            {streaming && (streaming.thinking || streaming.content) && (
+              <div>
+                {streaming.thinking && (
+                  <details className="mb-2" open={!streaming.content}>
+                    <summary className="text-xs cursor-pointer select-none text-pc-text-muted">{t('agentchat.thinking')}{!streaming.content && '...'}</summary>
+                    <pre className="text-xs mt-1 whitespace-pre-wrap break-words leading-relaxed overflow-auto max-h-60 p-2 rounded-[var(--radius-sm)] text-pc-text-muted bg-pc-code">{streaming.thinking}</pre>
+                  </details>
+                )}
+                {streaming.content && (
+                  <p className={`${compact ? 'text-xs' : 'text-sm'} whitespace-pre-wrap break-words leading-relaxed`}>{streaming.content}</p>
+                )}
+              </div>
+            )}
+            {streaming && !streaming.thinking && !streaming.content && (
+              <div className="flex items-center gap-1.5">
+                <span className="bounce-dot w-1.5 h-1.5 rounded-full bg-pc-accent" />
+                <span className="bounce-dot w-1.5 h-1.5 rounded-full bg-pc-accent" />
+                <span className="bounce-dot w-1.5 h-1.5 rounded-full bg-pc-accent" />
+              </div>
+            )}
+          </div>
         </div>
         <div
           className={[
@@ -1191,7 +1255,7 @@ const MessageItem = memo(function MessageItem({
           ].join(' ')}
         >
           <span className="px-1 text-[10px] tabular-nums text-pc-text-faint whitespace-nowrap">
-            {msg.timestamp.toLocaleString(undefined, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
+            {stamp.timestamp.toLocaleString(undefined, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
           </span>
           <button
             onClick={() => onCopy(msg.id, shownContent)}
@@ -1205,7 +1269,9 @@ const MessageItem = memo(function MessageItem({
             )}
           </button>
           <button
-            onClick={() => onDelete(msg.id)}
+            onClick={() => {
+              for (const row of rows) onDelete(row.id);
+            }}
             aria-label={t('agent.delete_message')}
             className="p-1 rounded-[var(--radius-sm)] text-pc-text-muted hover:text-status-error transition-colors"
           >

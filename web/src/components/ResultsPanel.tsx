@@ -15,9 +15,11 @@ import {
   ApiError,
   listAgentWorkspace,
   readAgentWorkspaceFile,
+  workspaceRawUrl,
   type BrowseEntry,
 } from '@/lib/api';
-import { ArtifactCard, HtmlSrcDocPreview } from '@/components/ArtifactCard';
+import { ArtifactCard, ArtifactDownloadControl, HtmlSrcDocPreview, downloadUtf8File } from '@/components/ArtifactCard';
+import { htmlPreviewSrcDoc, splitChatHtmlBlocks } from '@/lib/chatHtmlPreview';
 import { artifactKind, isVisualArtifact, type ToolArtifactInfo } from '@/lib/artifactKind';
 import type { CanvasFramePreview } from '@/lib/canvasFrame';
 import { canvasPreviewFromToolCall } from '@/lib/canvasFrame';
@@ -58,8 +60,15 @@ function pathUnderSessionRoot(path: string, root: string): { rel: string; name: 
   return null;
 }
 
+type ResultsPreview =
+  | { kind: 'canvas'; canvas: CanvasFramePreview }
+  | { kind: 'images'; images: ExtractedChatImage[]; caption: string }
+  | { kind: 'html'; html: string; title?: string };
+
 function latestResultsPreview(
   messages: Array<{
+    role?: string;
+    content?: string;
     toolCall?: {
       name?: string;
       args?: unknown;
@@ -68,9 +77,10 @@ function latestResultsPreview(
       artifact?: ToolArtifactInfo;
     };
   }>,
-): { kind: 'canvas'; canvas: CanvasFramePreview } | { kind: 'images'; images: ExtractedChatImage[]; caption: string } | null {
+): ResultsPreview | null {
   for (let i = messages.length - 1; i >= 0; i--) {
-    const toolCall = messages[i]?.toolCall;
+    const msg = messages[i];
+    const toolCall = msg?.toolCall;
     const canvas = canvasPreviewFromToolCall(toolCall);
     if (canvas) return { kind: 'canvas', canvas };
     const images = extractToolImages(toolCall?.output);
@@ -78,12 +88,19 @@ function latestResultsPreview(
       return { kind: 'images', images, caption: extractMcpToolText(toolCall?.output ?? '') };
     }
     const artifact = toolCall?.artifact;
-    if (artifact && isVisualArtifact(artifact) && artifactKind(artifact.mime, artifact.filename) === 'image') {
+    if (artifact && artifactKind(artifact.mime, artifact.filename) === 'image') {
       return {
         kind: 'images',
         images: [{ kind: 'path', path: artifact.path }],
         caption: extractMcpToolText(toolCall?.output ?? '') || artifact.title,
       };
+    }
+    if (artifact && artifactKind(artifact.mime, artifact.filename) === 'html') {
+      return null;
+    }
+    if (!toolCall && msg?.role === 'agent' && msg?.content) {
+      const html = splitChatHtmlBlocks(msg.content).htmlBlocks.at(-1);
+      if (html) return { kind: 'html', html };
     }
   }
   return null;
@@ -187,7 +204,7 @@ function TabButton({
 function ResultsList({
   preview,
 }: {
-  preview: { kind: 'canvas'; canvas: CanvasFramePreview } | { kind: 'images'; images: ExtractedChatImage[]; caption: string } | null;
+  preview: ResultsPreview | null;
 }) {
   const { messages, typing } = useAgent();
   const [openId, setOpenId] = useState<string | null>(null);
@@ -209,14 +226,50 @@ function ResultsList({
 
   const running = typing || items.some((item) => item.running);
 
+  const htmlDownload = preview?.kind === 'canvas'
+    ? {
+      filename: `${preview.canvas.canvasId}.${preview.canvas.contentType === 'svg' ? 'svg' : 'html'}`,
+      save: () => {
+        const svg = preview.canvas.contentType === 'svg';
+        downloadUtf8File(
+          `${preview.canvas.canvasId}.${svg ? 'svg' : 'html'}`,
+          svg ? preview.canvas.content : htmlPreviewSrcDoc(preview.canvas.content),
+          svg ? 'image/svg+xml' : 'text/html',
+        );
+      },
+    }
+    : preview?.kind === 'html'
+      ? {
+        filename: 'report.html',
+        save: () => downloadUtf8File('report.html', htmlPreviewSrcDoc(preview.html), 'text/html'),
+      }
+      : null;
+
   return (
     <div className="flex min-h-0 flex-1 flex-col" role="tabpanel" aria-labelledby="workbench-right-tab-results">
-      {preview?.kind === 'canvas' && (
-        <div className="h-56 shrink-0 overflow-hidden border-b border-pc-border bg-white">
+      {preview?.kind === 'canvas' && htmlDownload && (
+        <div className="flex h-56 shrink-0 flex-col overflow-hidden border-b border-pc-border bg-white">
+          <div className="flex shrink-0 items-center gap-2 border-b border-pc-border bg-pc-surface px-2 py-1">
+            <span className="min-w-0 flex-1 truncate text-[11px] text-pc-text-muted">{htmlDownload.filename}</span>
+            <ArtifactDownloadControl filename={htmlDownload.filename} labeled onClick={htmlDownload.save} />
+          </div>
           <HtmlSrcDocPreview
             html={preview.canvas.content}
             title={preview.canvas.canvasId}
-            className="block h-full w-full border-0 bg-white"
+            className="block min-h-0 w-full flex-1 border-0 bg-white"
+          />
+        </div>
+      )}
+      {preview?.kind === 'html' && htmlDownload && (
+        <div className="flex h-56 shrink-0 flex-col overflow-hidden border-b border-pc-border bg-white">
+          <div className="flex shrink-0 items-center gap-2 border-b border-pc-border bg-pc-surface px-2 py-1">
+            <span className="min-w-0 flex-1 truncate text-[11px] text-pc-text-muted">{htmlDownload.filename}</span>
+            <ArtifactDownloadControl filename={htmlDownload.filename} labeled onClick={htmlDownload.save} />
+          </div>
+          <HtmlSrcDocPreview
+            html={preview.html}
+            title={preview.title}
+            className="block min-h-0 w-full flex-1 border-0 bg-white"
           />
         </div>
       )}
@@ -460,12 +513,12 @@ function ArtifactsList({ lastArtifact }: { lastArtifact: ToolArtifactInfo | null
         ) : (
           <ul className="p-2">
             {entries.map((entry) => (
-              <li key={`${entry.kind}:${entry.name}`}>
+              <li key={`${entry.kind}:${entry.name}`} className="flex items-center gap-0.5">
                 <button
                   type="button"
                   onClick={() => (entry.kind === 'dir' ? openDir(entry.name) : void openFile(entry.name, entry.size))}
                   className={[
-                    'flex w-full items-center gap-2 rounded-[10px] px-2 py-2 text-left text-sm hover:bg-[var(--pc-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--pc-focus)]',
+                    'flex min-w-0 flex-1 items-center gap-2 rounded-[10px] px-2 py-2 text-left text-sm hover:bg-[var(--pc-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--pc-focus)]',
                     previewName === entry.name ? 'bg-[var(--pc-hover)]' : '',
                   ].join(' ')}
                 >
@@ -481,6 +534,16 @@ function ArtifactsList({ lastArtifact }: { lastArtifact: ToolArtifactInfo | null
                     </span>
                   )}
                 </button>
+                {entry.kind === 'file' && (
+                  <ArtifactDownloadControl
+                    href={workspaceRawUrl(
+                      agentAlias,
+                      rel ? `${root}/${rel}/${entry.name}` : `${root}/${entry.name}`,
+                      true,
+                    )}
+                    filename={entry.name}
+                  />
+                )}
               </li>
             ))}
           </ul>
@@ -495,8 +558,20 @@ function ArtifactsList({ lastArtifact }: { lastArtifact: ToolArtifactInfo | null
             onToggleExpand={() => setExpanded((v) => !v)}
           />
         ) : previewName ? (
-          <div className="min-h-0 flex-1 overflow-y-auto p-3">
-            <p className="mb-2 truncate text-xs font-medium text-pc-text">{previewName}</p>
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+            <div className="flex shrink-0 items-center gap-2 border-b border-pc-border px-3 py-1.5">
+              <p className="min-w-0 flex-1 truncate text-xs font-medium text-pc-text">{previewName}</p>
+              <ArtifactDownloadControl
+                href={workspaceRawUrl(
+                  agentAlias,
+                  rel ? `${root}/${rel}/${previewName}` : `${root}/${previewName}`,
+                  true,
+                )}
+                filename={previewName}
+                labeled
+              />
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-3">
             {previewBinary ? (
               <p className="text-xs text-pc-text-muted">{t('workbench.artifacts_binary')}</p>
             ) : previewText == null ? (
@@ -506,6 +581,7 @@ function ArtifactsList({ lastArtifact }: { lastArtifact: ToolArtifactInfo | null
                 {previewText}
               </pre>
             )}
+            </div>
           </div>
         ) : (
           <div className="flex min-h-0 flex-1 items-center justify-center text-center text-pc-text-muted">

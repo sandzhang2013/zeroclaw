@@ -5,6 +5,69 @@ import { artifactKind, type ToolArtifactInfo } from '@/lib/artifactKind';
 import { htmlPreviewSrcDoc, HTML_PREVIEW_SANDBOX } from '@/lib/chatHtmlPreview';
 import { t } from '@/lib/i18n';
 
+export function downloadUtf8File(filename: string, content: string, mime: string): void {
+  const blob = new Blob([content], { type: `${mime};charset=utf-8` });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.rel = 'noopener';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+const downloadControlClass =
+  'inline-flex h-7 shrink-0 items-center gap-1 rounded-[8px] px-1.5 text-pc-text-muted hover:bg-[var(--pc-hover)] hover:text-pc-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--pc-focus)]';
+
+export function ArtifactDownloadControl({
+  href,
+  filename,
+  labeled = false,
+  onClick,
+}: {
+  href?: string;
+  filename: string;
+  labeled?: boolean;
+  onClick?: () => void;
+}) {
+  const body = (
+    <>
+      <Download className="size-3.5" />
+      {labeled ? <span className="text-[11px]">{t('workbench.artifact_download')}</span> : null}
+    </>
+  );
+  if (href) {
+    return (
+      <a
+        href={href}
+        download={filename}
+        className={downloadControlClass}
+        aria-label={t('workbench.artifact_download')}
+        title={t('workbench.artifact_download')}
+        onClick={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => e.stopPropagation()}
+      >
+        {body}
+      </a>
+    );
+  }
+  return (
+    <button
+      type="button"
+      className={downloadControlClass}
+      aria-label={t('workbench.artifact_download')}
+      title={t('workbench.artifact_download')}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick?.();
+      }}
+      onDoubleClick={(e) => e.stopPropagation()}
+    >
+      {body}
+    </button>
+  );
+}
+
 /** Sandboxed preview for HTML the model put in a chat fence (trend charts, etc.). */
 export function HtmlSrcDocPreview({
   html,
@@ -98,16 +161,11 @@ export function ArtifactCard({
             {expanded ? <X className="size-3.5" /> : <Maximize2 className="size-3.5" />}
           </button>
         )}
-        <a
+        <ArtifactDownloadControl
           href={downloadHref}
-          download={artifact.filename}
-          onDoubleClick={(e) => e.stopPropagation()}
-          className="inline-flex size-7 items-center justify-center rounded-[8px] text-pc-text-muted hover:bg-[var(--pc-hover)] hover:text-pc-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--pc-focus)]"
-          aria-label={t('workbench.artifact_download')}
-          title={t('workbench.artifact_download')}
-        >
-          <Download className="size-3.5" />
-        </a>
+          filename={artifact.filename}
+          labeled={fill || expanded}
+        />
       </div>
       {kind === 'html' && (
         iframeFill ? (
