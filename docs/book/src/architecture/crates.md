@@ -78,7 +78,7 @@ Pairing is required by default; `[gateway.allow_public_bind = true]` enables bin
 
 ### `hbcdcagent-bff`
 
-Separate login/reverse-proxy binary for the 数智疾控 workbench host. It talks to the user-center OpenAPI, then injects `trusted_proxy` headers into loopback ZeroClaw. It does **not** link `zeroclaw-*` crates. See [Platform BFF](../developing/hbcdcagent-bff.md) and [ADR-015](./decisions/ADR-015-hbcdcagent-bff.md).
+Separate login/reverse-proxy binary for the 数智疾控 workbench host. It talks to the user-center OpenAPI, then injects `trusted_proxy` headers into loopback ZeroClaw. It does **not** link `zeroclaw-*` crates. See [Platform BFF](../developing/hbcdcagent-bff.md) and [ADR-016](./decisions/ADR-016-hbcdcagent-bff.md).
 
 ### `zeroclaw-tools`
 
@@ -149,10 +149,6 @@ Derive macros for config schema, tool registration, and channel registration. Sa
 ### `zerocode`
 
 Terminal UI, built as a separate app under `apps/zerocode/`. It is its own workspace member with no `zeroclaw-*` crate dependency (see [Docs & Translations → zerocode strings](../maintainers/docs-and-translations.md) for its independent i18n catalogue).
-
-### `aardvark-sys`, `robot-kit`
-
-Specialised hardware support used by the `hardware` submodule. Out-of-scope unless you're bringing up specific peripherals.
 
 ## Feature flags
 

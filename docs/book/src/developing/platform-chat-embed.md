@@ -191,7 +191,7 @@ directly. The BFF must:
 
 When the workbench cannot share the portal origin, run
 [`hbcdcagent-bff`](./hbcdcagent-bff.md) on the workbench host
-([ADR-015](../architecture/decisions/ADR-015-hbcdcagent-bff.md)). Do not
+([ADR-016](../architecture/decisions/ADR-016-hbcdcagent-bff.md)). Do not
 put user-center secrets in the daemon.
 
 After the embed ships, a product page iframes

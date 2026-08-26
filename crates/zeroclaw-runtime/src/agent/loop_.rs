@@ -158,6 +158,26 @@ pub use super::history::{
 /// Matches the channel-side constant in `channels/mod.rs`.
 const AUTOSAVE_MIN_MESSAGE_CHARS: usize = 20;
 
+/// The single autosave decision for a turn's user-side text, shared by both
+/// store sites in this file so the gates cannot drift apart.
+///
+/// Order matters for meaning, not correctness: the origin gate
+/// (`should_autosave_origin`) is the load-bearing check — scheduled and
+/// parent-composed origins are known internal synthetic producers, whatever
+/// their text looks like. The content filter remains as a backstop for
+/// synthetic shapes that arrive on autosave-eligible origins (e.g. replayed
+/// histories).
+fn should_autosave_user_message(
+    auto_save: bool,
+    origin: zeroclaw_api::ingress::TurnOrigin,
+    content: &str,
+) -> bool {
+    auto_save
+        && zeroclaw_memory::should_autosave_origin(origin)
+        && content.chars().count() >= AUTOSAVE_MIN_MESSAGE_CHARS
+        && !zeroclaw_memory::should_skip_autosave_content(content)
+}
+
 pub(crate) const MAX_INTERACTIVE_INPUT_BYTES: usize = 1024 * 1024; // 1 MiB
 
 /// Result of [`read_capped_line`].
@@ -612,6 +632,7 @@ pub(crate) fn build_system_prompt_for_turn(
     inject_memory: bool,
     show_tool_calls: bool,
     thinking_prefix: Option<&str>,
+    shell_profile: Option<&zeroclaw_api::runtime_traits::ShellProfile>,
 ) -> Result<String> {
     let native_tools = model_provider
         .capabilities_for_model(model_name)
@@ -652,6 +673,7 @@ pub(crate) fn build_system_prompt_for_turn(
         max_system_prompt_chars,
         inject_memory,
         show_tool_calls,
+        shell_profile,
     );
 
     if expose_text_tool_protocol {
@@ -982,11 +1004,13 @@ pub(crate) use super::turn::{
     maybe_inject_channel_delivery_defaults, resolve_display_text,
 };
 pub use super::turn::{
-    DraftEvent, LoopKnobs, MaxIterationBehavior, ModelSwitchCallback, ModelSwitchRequested,
-    PROGRESS_MIN_INTERVAL_MS, ProgressEvent, ResolvedAgentExecution, ResolvedIo,
-    ResolvedModelAccess, ResolvedRuntimeKnobs, SopStepReassembly, StreamDelta, ToolLoop,
-    ToolLoopCancelled, drain_steering_messages, is_model_switch_requested, is_tool_loop_cancelled,
-    run_tool_call_loop, scrub_credentials,
+    DRAFT_PLACEHOLDER, DraftEvent, LoopKnobs, MaxIterationBehavior, ModelSwitchCallback,
+    ModelSwitchRequested, PROGRESS_MIN_INTERVAL_MS, ProgressEvent, REASONING_FULL_PREFIX,
+    ResolvedAgentExecution, ResolvedIo, ResolvedModelAccess, ResolvedRuntimeKnobs,
+    SopStepReassembly, StreamDelta, THINKING_STATUS_PREFIX, ToolLoop, ToolLoopCancelled,
+    drain_steering_messages, is_model_switch_requested, is_thinking_status_text,
+    is_tool_loop_cancelled, run_tool_call_loop, scrub_credentials, thinking_status_label_round,
+    thinking_status_round, thinking_status_text,
 };
 
 /// Build the tool instruction block for the system prompt so the LLM knows
@@ -1698,6 +1722,7 @@ pub async fn run(
             true,
             config.channels.show_tool_calls,
             None,
+            runtime.shell_profile().as_ref(),
         )?;
 
         // ── Approval manager (supervised mode) ───────────────────────
@@ -1792,6 +1817,7 @@ pub async fn run(
                 true,
                 config.channels.show_tool_calls,
                 thinking_params.system_prompt_prefix.as_deref(),
+                runtime.shell_profile().as_ref(),
             )?;
 
             let excluded_tool_names: HashSet<&str> =
@@ -1817,11 +1843,9 @@ pub async fn run(
                 return Ok(final_output);
             }
 
-            // Auto-save user message to memory (skip short/trivial messages)
-            if config.memory.auto_save
-                && effective_msg.chars().count() >= AUTOSAVE_MIN_MESSAGE_CHARS
-                && !zeroclaw_memory::should_skip_autosave_content(&effective_msg)
-            {
+            // Auto-save user message to memory (skip autonomous origins
+            // and short/trivial or synthetic messages).
+            if should_autosave_user_message(config.memory.auto_save, origin, &effective_msg) {
                 let user_key = autosave_memory_key("user_msg");
                 let store_start = std::time::Instant::now();
                 let store_result = mem
@@ -1913,6 +1937,7 @@ pub async fn run(
                         true,
                         config.channels.show_tool_calls,
                         thinking_params.system_prompt_prefix.as_deref(),
+                        runtime.shell_profile().as_ref(),
                     )?;
                 }
                 match zeroclaw_api::NATIVE_THINKING_OVERRIDE
@@ -2335,11 +2360,9 @@ pub async fn run(
                     continue;
                 }
 
-                // Auto-save conversation turns (skip short/trivial messages)
-                if config.memory.auto_save
-                    && effective_input.chars().count() >= AUTOSAVE_MIN_MESSAGE_CHARS
-                    && !zeroclaw_memory::should_skip_autosave_content(&effective_input)
-                {
+                // Auto-save conversation turns (skip autonomous origins
+                // and short/trivial or synthetic messages).
+                if should_autosave_user_message(config.memory.auto_save, origin, &effective_input) {
                     let user_key = autosave_memory_key("user_msg");
                     let store_start = std::time::Instant::now();
                     let store_result = mem
@@ -2421,6 +2444,18 @@ pub async fn run(
                                 print!("{text}");
                                 let _ = std::io::stdout().flush();
                             }
+                            StreamDelta::Reasoning(_) => {}
+                            tool_event @ (StreamDelta::ToolStart { .. }
+                            | StreamDelta::ToolComplete { .. }) => {
+                                if let Some(text) = tool_event.legacy_status() {
+                                    if is_tty {
+                                        let _ = write!(std::io::stderr(), "\x1b[2m{text}\x1b[0m");
+                                    } else {
+                                        eprint!("{text}");
+                                    }
+                                    let _ = std::io::stderr().flush();
+                                }
+                            }
                         }
                     }
                 });
@@ -2458,6 +2493,7 @@ pub async fn run(
                             true,
                             config.channels.show_tool_calls,
                             thinking_params.system_prompt_prefix.as_deref(),
+                            runtime.shell_profile().as_ref(),
                         )?;
                     }
                     match zeroclaw_api::NATIVE_THINKING_OVERRIDE
@@ -3193,6 +3229,7 @@ pub async fn process_message(
                 eff_max_system_prompt_chars,
                 false,
                 config.channels.show_tool_calls,
+                runtime.shell_profile().as_ref(),
             );
         if expose_text_tool_protocol {
             system_prompt.push_str(&build_tool_instructions_for_names(
@@ -3380,6 +3417,64 @@ mod tests {
         save_interactive_session_history, seed_channel_handles, truncate_tool_result,
     };
 
+    /// One decision, four gates. The origin gate is the load-bearing one:
+    /// the heartbeat session-context shape defeats the content filter (it no
+    /// longer starts with `[Heartbeat Task`), and only the origin check
+    /// stops it. Interactive remains autosave-eligible for that same text,
+    /// which pins that the fix keys on trusted caller provenance, not on
+    /// smarter content sniffing or human-authorship detection.
+    #[test]
+    fn autosave_decision_keys_on_origin_before_content() {
+        use zeroclaw_api::ingress::TurnOrigin;
+
+        let leaked_heartbeat_shape = "[Recent conversation history — use this for context \
+             when composing your message] (last message ~5 minutes ago)\nUser: how was the \
+             deploy?\n\n[Heartbeat Task | high] check the build";
+
+        assert!(
+            !should_autosave_user_message(true, TurnOrigin::Daemon, leaked_heartbeat_shape),
+            "a heartbeat turn must not autosave its synthetic prompt, whatever its shape"
+        );
+        assert!(
+            !should_autosave_user_message(true, TurnOrigin::Cron, "[cron:job-1 build] check"),
+            "cron prompts stay suppressed (origin now, prefix as backstop)"
+        );
+        assert!(
+            !should_autosave_user_message(true, TurnOrigin::SubTurn, leaked_heartbeat_shape),
+            "known parent-composed sub-turn text is not autosave-eligible"
+        );
+
+        assert!(
+            should_autosave_user_message(true, TurnOrigin::Interactive, leaked_heartbeat_shape),
+            "interactive provenance remains autosave-eligible regardless of prompt shape"
+        );
+        assert!(
+            should_autosave_user_message(
+                true,
+                TurnOrigin::Channel,
+                "please remember I prefer staged rollouts"
+            ),
+            "channel provenance remains autosave-eligible even when a peer may be automated"
+        );
+
+        assert!(
+            !should_autosave_user_message(false, TurnOrigin::Interactive, leaked_heartbeat_shape),
+            "auto_save off wins over everything"
+        );
+        assert!(
+            !should_autosave_user_message(true, TurnOrigin::Interactive, "short msg"),
+            "the length floor is unchanged"
+        );
+        assert!(
+            !should_autosave_user_message(
+                true,
+                TurnOrigin::Interactive,
+                "[cron:job-1 build] check the build status now"
+            ),
+            "the content backstop still filters synthetic shapes on user origins"
+        );
+    }
+
     use crate::agent::history::{DEFAULT_MAX_HISTORY_MESSAGES, InteractiveSessionState};
     use crate::agent::tool_execution::{ToolDispatchContext, execute_one_tool};
     use parking_lot::RwLock;
@@ -3507,7 +3602,13 @@ mod tests {
             "schedule": { "kind": "every", "every_ms": 60000 }
         });
 
-        maybe_inject_channel_delivery_defaults("cron_add", &mut args, "dingtalk", Some("chat-42"));
+        maybe_inject_channel_delivery_defaults(
+            "cron_add",
+            &mut args,
+            "dingtalk",
+            None,
+            Some("chat-42"),
+        );
 
         assert_eq!(
             args["delivery"],
@@ -3527,7 +3628,13 @@ mod tests {
             "schedule": { "kind": "every", "every_ms": 60000 }
         });
 
-        maybe_inject_channel_delivery_defaults("cron_add", &mut args, "webhook", Some("thread-42"));
+        maybe_inject_channel_delivery_defaults(
+            "cron_add",
+            &mut args,
+            "webhook",
+            None,
+            Some("thread-42"),
+        );
 
         assert!(
             args.get("delivery").is_none(),
@@ -10167,7 +10274,12 @@ This is an example, not an invocation."#;
             deltas.iter().all(|delta| match delta {
                 StreamDelta::Status(text) | StreamDelta::Text(text) =>
                     !text.contains("private chain of thought") && !text.contains("<think>"),
-                StreamDelta::Lifecycle(_) => true,
+                StreamDelta::Reasoning(text) => {
+                    !text.contains("private chain of thought") && !text.contains("<think>")
+                }
+                StreamDelta::ToolStart { .. }
+                | StreamDelta::ToolComplete { .. }
+                | StreamDelta::Lifecycle(_) => true,
             }),
             "draft deltas must not expose inline think tags: {deltas:?}"
         );
@@ -10266,6 +10378,8 @@ This is an example, not an invocation."#;
                 StreamDelta::Text(text) => {
                     visible_deltas.push_str(&text);
                 }
+                StreamDelta::Reasoning(_) => {}
+                StreamDelta::ToolStart { .. } | StreamDelta::ToolComplete { .. } => {}
             }
         }
 
@@ -10358,6 +10472,8 @@ This is an example, not an invocation."#;
                 StreamDelta::Text(text) => {
                     visible_deltas.push_str(&text);
                 }
+                StreamDelta::Reasoning(_) => {}
+                StreamDelta::ToolStart { .. } | StreamDelta::ToolComplete { .. } => {}
             }
         }
 
@@ -10531,6 +10647,7 @@ This is an example, not an invocation."#;
             Some(&tx),
             None, // event_tx
             false,
+            zeroclaw_config::schema::StreamReasoningMode::Status,
         )
         .await
         .expect("streaming should finish");
@@ -10617,6 +10734,7 @@ This is an example, not an invocation."#;
             Some(&tx),
             None, // event_tx
             false,
+            zeroclaw_config::schema::StreamReasoningMode::Status,
         )
         .await
         .expect("streaming should finish");
@@ -10654,6 +10772,7 @@ This is an example, not an invocation."#;
             Some(&tx),
             None, // event_tx
             false,
+            zeroclaw_config::schema::StreamReasoningMode::Status,
         )
         .await
         .expect("streaming should finish");
@@ -10694,6 +10813,7 @@ This is an example, not an invocation."#;
             Some(&tx),
             None, // event_tx
             false,
+            zeroclaw_config::schema::StreamReasoningMode::Status,
         )
         .await
         .expect("streaming should finish");
@@ -10734,6 +10854,7 @@ This is an example, not an invocation."#;
             Some(&tx),
             None, // event_tx
             false,
+            zeroclaw_config::schema::StreamReasoningMode::Status,
         )
         .await
         .expect("streaming should finish");
@@ -10818,6 +10939,7 @@ This is an example, not an invocation."#;
             Some(&tx),
             None, // event_tx
             false,
+            zeroclaw_config::schema::StreamReasoningMode::Status,
         )
         .await
         .expect("streaming should finish");
@@ -10900,6 +11022,7 @@ This is an example, not an invocation."#;
             Some(&tx),
             None, // event_tx
             false,
+            zeroclaw_config::schema::StreamReasoningMode::Status,
         )
         .await
         .expect("streaming should finish");
@@ -10985,6 +11108,7 @@ This is an example, not an invocation."#;
             Some(&tx),
             None, // event_tx
             false,
+            zeroclaw_config::schema::StreamReasoningMode::Status,
         )
         .await
         .expect("streaming should finish");
@@ -11073,6 +11197,7 @@ This is an example, not an invocation."#;
             Some(&tx),
             None, // event_tx
             false,
+            zeroclaw_config::schema::StreamReasoningMode::Status,
         )
         .await
         .expect("streaming should finish");
@@ -11156,6 +11281,7 @@ This is an example, not an invocation."#;
             Some(&tx),
             None, // event_tx
             false,
+            zeroclaw_config::schema::StreamReasoningMode::Status,
         )
         .await
         .expect("streaming should finish");
@@ -11242,6 +11368,7 @@ This is an example, not an invocation."#;
             Some(&tx),
             None, // event_tx
             false,
+            zeroclaw_config::schema::StreamReasoningMode::Status,
         )
         .await
         .expect("streaming should finish");
@@ -11344,6 +11471,8 @@ This is an example, not an invocation."#;
                 StreamDelta::Text(text) => {
                     visible_deltas.push_str(&text);
                 }
+                StreamDelta::Reasoning(_) => {}
+                StreamDelta::ToolStart { .. } | StreamDelta::ToolComplete { .. } => {}
             }
         }
 
@@ -11701,6 +11830,7 @@ This is an example, not an invocation."#;
             Some(&tx),
             None, // event_tx
             true,
+            zeroclaw_config::schema::StreamReasoningMode::Status,
         )
         .await
         .expect("streaming should finish");
@@ -11816,6 +11946,8 @@ This is an example, not an invocation."#;
                 StreamDelta::Text(text) => {
                     visible_deltas.push_str(&text);
                 }
+                StreamDelta::Reasoning(_) => {}
+                StreamDelta::ToolStart { .. } | StreamDelta::ToolComplete { .. } => {}
             }
         }
 
@@ -13139,6 +13271,7 @@ Let me check the result."#;
             true,
             false,
             None,
+            None,
         )
         .expect("startup prompt should build");
         assert!(startup_prompt.contains(NATIVE_TOOLS_TASK_FRAMING));
@@ -13170,6 +13303,7 @@ Let me check the result."#;
             usize::MAX,
             true,
             false,
+            None,
             None,
         )
         .expect("no-tools turn prompt should build");
@@ -13205,6 +13339,7 @@ Let me check the result."#;
             usize::MAX,
             true,
             false,
+            None,
             None,
         )
         .expect("tools turn prompt should build");
@@ -13272,6 +13407,7 @@ Let me check the result."#;
             usize::MAX,
             true,
             false,
+            None,
             None,
         )
         .expect("compact-mode text prompt should build");
@@ -13536,6 +13672,7 @@ Let me check the result."#;
             None,
             None, // event_tx
             false,
+            zeroclaw_config::schema::StreamReasoningMode::Status,
         )
         .await
         .expect("streaming should succeed");
@@ -13630,6 +13767,7 @@ Let me check the result."#;
             None,
             None, // event_tx
             false,
+            zeroclaw_config::schema::StreamReasoningMode::Status,
         )
         .await
         .expect("streaming should succeed");
@@ -14237,8 +14375,12 @@ Let me check the result."#;
         let all_deltas: String = deltas
             .iter()
             .map(|d| match d {
-                StreamDelta::Status(t) | StreamDelta::Text(t) => t.as_str(),
-                StreamDelta::Lifecycle(_) => "",
+                StreamDelta::Status(t) | StreamDelta::Text(t) => t.clone(),
+                StreamDelta::Reasoning(_) => String::new(),
+                StreamDelta::ToolStart { .. } | StreamDelta::ToolComplete { .. } => {
+                    d.legacy_status().unwrap_or_default()
+                }
+                StreamDelta::Lifecycle(_) => String::new(),
             })
             .collect();
 
@@ -14416,129 +14558,6 @@ Let me check the result."#;
         assert_eq!(summary.request_count, 1);
         assert_eq!(summary.total_tokens, 1_200);
         assert!(summary.session_cost_usd > 0.0);
-    }
-
-    /// The local budget gate rejects the turn before any provider request is
-    /// made, so the user must not be told the agent is waiting on a model.
-    /// `WaitingOnModel` is announced by `announce_llm_request`, which must run
-    /// after `enforce_tool_loop_budget`, never before it.
-    #[tokio::test]
-    async fn budget_rejection_emits_no_waiting_on_model_lifecycle() {
-        use super::{
-            TOOL_LOOP_COST_TRACKING_CONTEXT, ToolLoop, ToolLoopCostTrackingContext,
-            run_tool_call_loop,
-        };
-        use crate::agent::turn::events::StreamDelta;
-        use crate::cost::CostTracker;
-        use crate::observability::noop::NoopObserver;
-        use std::collections::HashMap;
-        use zeroclaw_api::channel::ProgressEvent;
-
-        let turn_id = uuid::Uuid::new_v4().to_string();
-        // If the gate were bypassed this provider would answer, so a passing
-        // assertion cannot be explained by the provider simply not replying.
-        let model_provider = ScriptedModelProvider {
-            responses: Arc::new(Mutex::new(VecDeque::from([ChatResponse {
-                text: Some("done".to_string()),
-                tool_calls: Vec::new(),
-                usage: None,
-                reasoning_content: None,
-            }]))),
-            capabilities: ProviderCapabilities::default(),
-        };
-        let observer = NoopObserver;
-        let workspace = tempfile::TempDir::new().unwrap();
-        let cost_config = zeroclaw_config::schema::CostConfig {
-            enabled: true,
-            daily_limit_usd: 0.01,
-            ..zeroclaw_config::schema::CostConfig::default()
-        };
-        let tracker = Arc::new(CostTracker::new(cost_config, workspace.path()).unwrap());
-        // Put the tracker over its daily limit before the turn starts.
-        tracker
-            .record_usage(zeroclaw_config::cost::TokenUsage {
-                model: "mock-model".to_string(),
-                input_tokens: 1,
-                output_tokens: 1,
-                cached_input_tokens: 0,
-                total_tokens: 2,
-                cost_usd: 5.0,
-                pricing_available: true,
-                timestamp: chrono::Utc::now(),
-            })
-            .unwrap();
-
-        let ctx = ToolLoopCostTrackingContext::new(Arc::clone(&tracker), Arc::new(HashMap::new()));
-        let mut history = vec![ChatMessage::system("test"), ChatMessage::user("hello")];
-        let (delta_tx, mut delta_rx) = tokio::sync::mpsc::channel(16);
-
-        let result = TOOL_LOOP_COST_TRACKING_CONTEXT
-            .scope(
-                Some(ctx),
-                run_tool_call_loop(ToolLoop {
-                    parent_agent_alias: None,
-                    sop_reassembly: None,
-                    exec: ResolvedAgentExecution {
-                        model_access: ResolvedModelAccess {
-                            model_provider: &model_provider,
-                            provider_name: "mock-provider",
-                            model: "mock-model",
-                            temperature: Some(0.0),
-                        },
-                        tools_registry: &[],
-                        observer: &observer,
-                        silent: true,
-                        approval: None,
-                        multimodal_config: &zeroclaw_config::schema::MultimodalConfig::default(),
-                        config: None,
-                        max_tool_iterations: 2,
-                        hooks: None,
-                        excluded_tools: &[],
-                        dedup_exempt_tools: &[],
-                        activated_tools: None,
-                        model_switch_callback: None,
-                        pacing: &zeroclaw_config::schema::PacingConfig::default(),
-                        strict_tool_parsing: false,
-                        parallel_tools: false,
-                        max_tool_result_chars: 0,
-                        context_token_budget: 0,
-                        receipt_generator: None,
-                        knobs: &LoopKnobs::default(),
-                    },
-                    history: &mut history,
-                    channel_name: "test",
-                    channel_reply_target: None,
-                    cancellation_token: None,
-                    on_delta: Some(delta_tx),
-                    shared_budget: None,
-                    channel: None,
-                    collected_receipts: None,
-                    event_tx: None,
-                    steering: None,
-                    new_messages_out: None,
-                    image_cache: None,
-                    memory: None,
-                    ingress: IngressContext::sub_turn(),
-                    agent_alias: None,
-                    turn_id: &turn_id,
-                }),
-            )
-            .await;
-
-        assert!(
-            result.is_err(),
-            "an exhausted budget must reject the turn, got {result:?}"
-        );
-        let mut lifecycle = Vec::new();
-        while let Ok(delta) = delta_rx.try_recv() {
-            if let StreamDelta::Lifecycle(event) = delta {
-                lifecycle.push(event);
-            }
-        }
-        assert!(
-            !lifecycle.contains(&ProgressEvent::WaitingOnModel),
-            "a budget-rejected turn never calls the provider, so it must not announce a model wait: {lifecycle:?}"
-        );
     }
 
     #[tokio::test]
@@ -14783,14 +14802,16 @@ Let me check the result."#;
     }
 
     #[tokio::test]
-    async fn cost_tracking_enforces_budget() {
+    async fn budget_rejection_emits_no_waiting_on_model_lifecycle() {
         use super::{
             TOOL_LOOP_COST_TRACKING_CONTEXT, ToolLoop, ToolLoopCostTrackingContext,
             run_tool_call_loop,
         };
+        use crate::agent::turn::events::StreamDelta;
         use crate::cost::CostTracker;
         use crate::observability::noop::NoopObserver;
         use std::collections::HashMap;
+        use zeroclaw_api::channel::ProgressEvent;
 
         let turn_id = uuid::Uuid::new_v4().to_string();
         let model_provider =
@@ -14823,6 +14844,7 @@ Let me check the result."#;
         pricing.insert("mock-provider".to_string(), model_pricing);
         let ctx = ToolLoopCostTrackingContext::new(Arc::clone(&tracker), Arc::new(pricing));
         let mut history = vec![ChatMessage::system("test"), ChatMessage::user("hello")];
+        let (delta_tx, mut delta_rx) = tokio::sync::mpsc::channel(16);
 
         let err = TOOL_LOOP_COST_TRACKING_CONTEXT
             .scope(
@@ -14861,7 +14883,7 @@ Let me check the result."#;
                     channel_name: "test",
                     channel_reply_target: None,
                     cancellation_token: None,
-                    on_delta: None,
+                    on_delta: Some(delta_tx),
                     shared_budget: None,
                     channel: None,
                     collected_receipts: None,
@@ -14883,6 +14905,16 @@ Let me check the result."#;
         assert!(
             err.to_string().contains("Budget exceeded"),
             "error should mention budget: {err}"
+        );
+        let mut lifecycle = Vec::new();
+        while let Ok(delta) = delta_rx.try_recv() {
+            if let StreamDelta::Lifecycle(event) = delta {
+                lifecycle.push(event);
+            }
+        }
+        assert!(
+            !lifecycle.contains(&ProgressEvent::WaitingOnModel),
+            "a budget-rejected turn never calls the provider, so it must not announce a model wait: {lifecycle:?}"
         );
     }
 

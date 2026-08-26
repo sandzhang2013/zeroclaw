@@ -6,7 +6,7 @@ workbench host in front of loopback ZeroClaw.
 
 Chinese plan (background, stack choice, rollout, tests):
 `docs/分析/数智疾控BFF实施方案.md`.
-Decision record: [ADR-015](../architecture/decisions/ADR-015-hbcdcagent-bff.md).
+Decision record: [ADR-016](../architecture/decisions/ADR-016-hbcdcagent-bff.md).
 
 Local development still uses Vite `injectBffIdentity` and the mock-user
 cookie. Do not treat that as production login.

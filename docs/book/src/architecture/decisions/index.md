@@ -30,7 +30,8 @@ Accepted ADRs are immutable. If the architecture changes, write a new ADR and ma
 | [ADR-012](./ADR-012-generation-scoped-live-config-apply.md) | proposed | Live config application uses canonical generations and target-specific results. |
 | [ADR-013](./ADR-013-key-source-authority.md) | proposed | Master key acquisition uses one configured key-source authority. |
 | [ADR-014](./ADR-014-platform-chat-embed.md) | proposed | Platform pages embed only the chat pane; workbench sessions stay shared. |
-| [ADR-015](./ADR-015-hbcdcagent-bff.md) | accepted | User-center login runs in `hbcdcagent-bff`, not in ZeroClaw. |
+| [ADR-015](./ADR-015-unified-capability-catalog.md) | proposed | The unified capability catalog is a read-only projection over package, capability, implementation, configuration, and runtime owners. |
+| [ADR-016](./ADR-016-hbcdcagent-bff.md) | accepted | User-center login runs in `hbcdcagent-bff`, not in ZeroClaw. |
 
 ADR-006 and ADR-007 are implementation-gated roadmap decisions from [FND-002](../../foundations/fnd-002-documentation-standards.md). Their target directions are recorded, but they remain proposed until the acceptance boundaries in each record ship.
 
@@ -41,3 +42,5 @@ ADR-012 remains proposed until canonical config publication, generation-scoped r
 ADR-013 remains proposed until the canonical key-source boundary, safe file compatibility, configured fail-closed selection, and a supported non-file source meet the acceptance gates in the record.
 
 ADR-014 remains proposed until the chat embed route, route-scoped framing allowlist, and workbench-visible embed sessions meet the acceptance gates in the record.
+
+ADR-015 remains proposed until unified catalog projections preserve source-of-truth evidence, artifact provenance, compatibility bridges, and the rule that visibility cannot grant invocation authority.
