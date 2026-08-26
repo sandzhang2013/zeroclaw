@@ -12,6 +12,16 @@ FROM ${ZEROCLAW_BASE_NODE} AS web-node
 
 FROM ${ZEROCLAW_BASE_RUST_BOOKWORM} AS web-builder
 WORKDIR /app
+# Route crates.io through rsproxy so in-container cargo does not hit crates.io
+# directly (network to crates.io is blocked/unreliable on some build hosts).
+RUN mkdir -p /usr/local/cargo && \
+    printf '%s\n' \
+      '[source.crates-io]' \
+      'replace-with = "rsproxy-sparse"' \
+      '' \
+      '[source.rsproxy-sparse]' \
+      'registry = "sparse+https://rsproxy.cn/index/"' \
+      > /usr/local/cargo/config.toml
 COPY --from=web-node /usr/local/bin/node /usr/local/bin/node
 COPY --from=web-node /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
@@ -52,6 +62,16 @@ RUN --mount=type=cache,id=zeroclaw-cargo-registry,target=/usr/local/cargo/regist
 FROM ${ZEROCLAW_BASE_RUST_BOOKWORM} AS builder
 
 WORKDIR /app
+# Route crates.io through rsproxy so in-container cargo does not hit crates.io
+# directly (network to crates.io is blocked/unreliable on some build hosts).
+RUN mkdir -p /usr/local/cargo && \
+    printf '%s\n' \
+      '[source.crates-io]' \
+      'replace-with = "rsproxy-sparse"' \
+      '' \
+      '[source.rsproxy-sparse]' \
+      'registry = "sparse+https://rsproxy.cn/index/"' \
+      > /usr/local/cargo/config.toml
 # >>> generated:docker-features-arg by `cargo generate installers` - do not edit <<<
 ARG ZEROCLAW_CARGO_FLAGS="--no-default-features --features acp-bridge,agent-runtime,channel-acp-server,channel-discord,channel-email,channel-filesystem,channel-lark,channel-matrix,channel-telegram,channel-webhook,gateway,observability-prometheus,schema-export,whatsapp-web"
 # >>> end generated:docker-features-arg <<<

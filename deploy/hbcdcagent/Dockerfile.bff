@@ -1,8 +1,19 @@
 # syntax=docker/dockerfile:1.7-labs
 # BFF 独立镜像。构建机需能拉 rust:1.96-bookworm（或已 docker load）。
-ARG ZEROCLAW_BASE_RUST_BOOKWORM=rust:1.96-bookworm
+# digest 与 dev/ci/container-base-images.toml 的 base-arg-rust-bookworm 保持一致，保证离线可复现。
+ARG ZEROCLAW_BASE_RUST_BOOKWORM=rust:1.96-bookworm@sha256:a339861ae23e9abb272cea45dfafde21760d2ce6577a70f8a926153677902663
 FROM ${ZEROCLAW_BASE_RUST_BOOKWORM} AS builder
 WORKDIR /app
+# Route crates.io through rsproxy so in-container cargo does not hit crates.io
+# directly (network to crates.io is blocked/unreliable on some build hosts).
+RUN mkdir -p /usr/local/cargo && \
+    printf '%s\n' \
+      '[source.crates-io]' \
+      'replace-with = "rsproxy-sparse"' \
+      '' \
+      '[source.rsproxy-sparse]' \
+      'registry = "sparse+https://rsproxy.cn/index/"' \
+      > /usr/local/cargo/config.toml
 RUN apt-get update && apt-get install -y --no-install-recommends pkg-config g++ \
     && rm -rf /var/lib/apt/lists/*
 COPY Cargo.toml Cargo.lock ./

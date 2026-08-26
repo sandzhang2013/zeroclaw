@@ -82,6 +82,9 @@ credentials.json
 .worktrees/
 .zeroclaw/*
 
+# Offline deploy bundle (multi-GB image tars produced by deploy/hbcdcagent/build-offline.sh)
+dist-offline/
+
 # Claude Code project settings (machine-specific directory config)
 .claude/settings.json
 
