@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState, useCallback } from 'react';
 import type { ApprovalDecision, PendingApproval, WsMessage } from '@/types/api';
 import { WebSocketClient, getOrCreateSessionId, resolveTaskSessionId } from '@/lib/ws';
+import { persistSessionId } from '@/lib/sessionId';
 import { generateUUID } from '@/lib/uuid';
 import { t } from '@/lib/i18n';
 import { getProp, putProp, resolveAliasSource, listProps, getStatus, getSessionMessages, abortSession, deleteSession } from '@/lib/api';
@@ -121,13 +122,16 @@ export interface AgentProviderProps {
    * task-specific session ID; otherwise falls back to the default per-agent
    * session. */
   taskId?: string;
+  /** Frozen workbench identity. Used only as a localStorage key prefix so
+   * mock-user switches do not reuse another user's gateway session UUID. */
+  userId?: string;
   children: React.ReactNode;
 }
 
-export function AgentProvider({ agentAlias, taskId, children }: AgentProviderProps) {
+export function AgentProvider({ agentAlias, taskId, userId, children }: AgentProviderProps) {
   const sessionIdRef = useRef(
-    taskId ? resolveTaskSessionId(agentAlias, taskId) ?? getOrCreateSessionId(agentAlias)
-            : getOrCreateSessionId(agentAlias),
+    taskId ? resolveTaskSessionId(agentAlias, taskId) ?? getOrCreateSessionId(agentAlias, userId)
+            : getOrCreateSessionId(agentAlias, userId),
   );
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
     const persisted = loadChatHistory(sessionIdRef.current);
@@ -149,6 +153,7 @@ export function AgentProvider({ agentAlias, taskId, children }: AgentProviderPro
   const [contextInputTokens, setContextInputTokens] = useState<number | null>(null);
 
   const wsRef = useRef<WebSocketClient | null>(null);
+  const reconnectRef = useRef<() => void>(() => {});
   // Canonical per-turn stream state. Every production transition that mutates
   // it goes through reduceTurnFrame, which is exercised directly by the
   // frame-sequence regression suite.
@@ -479,6 +484,21 @@ export function AgentProvider({ agentAlias, taskId, children }: AgentProviderPro
       }
 
       case 'error':
+        if (msg.code === 'SESSION_FORBIDDEN') {
+          const nextId = generateUUID();
+          sessionIdRef.current = nextId;
+          persistSessionId(agentAlias, nextId, userId);
+          localMessageMutationVersionRef.current += 1;
+          setMessages([]);
+          setError(t('agent.session_forbidden'));
+          setTyping(false);
+          foldTurnStream({ type: 'error' });
+          setStreamingContent('');
+          setStreamingThinking('');
+          setPendingApproval(null);
+          reconnectRef.current();
+          break;
+        }
         const friendlyMessage = friendlyAgentError(msg.message);
         localMessageMutationVersionRef.current += 1;
         setMessages((prev) => [
@@ -502,7 +522,7 @@ export function AgentProvider({ agentAlias, taskId, children }: AgentProviderPro
         setPendingApproval(null);
         break;
     }
-  }, [foldTurnStream]);
+  }, [agentAlias, foldTurnStream, userId]);
 
   // Wire up a WebSocketClient instance with version-guarded callbacks.
   const attachSocketCallbacks = useCallback((ws: WebSocketClient) => {
@@ -567,6 +587,22 @@ export function AgentProvider({ agentAlias, taskId, children }: AgentProviderPro
       handleWsMessage(msg);
     };
   }, [handleWsMessage]);
+
+  const reconnectClient = useCallback(() => {
+    const oldWs = wsRef.current;
+    if (oldWs) {
+      oldWs.onOpen = null;
+      oldWs.onClose = null;
+      oldWs.onError = null;
+      oldWs.onMessage = null;
+      oldWs.disconnect();
+    }
+    const ws = new WebSocketClient({ agentAlias, sessionId: sessionIdRef.current });
+    wsRef.current = ws;
+    attachSocketCallbacks(ws);
+    ws.connect();
+  }, [agentAlias, attachSocketCallbacks]);
+  reconnectRef.current = reconnectClient;
 
   // WebSocket bound to the configured agent. Re-keys (via the outer
   // <AgentProvider key={alias}>) when the alias changes.

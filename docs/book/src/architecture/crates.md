@@ -76,6 +76,10 @@ HTTP/WebSocket gateway. Exposes the runtime over:
 
 Pairing is required by default; `[gateway.allow_public_bind = true]` enables binding to `0.0.0.0`.
 
+### `hbcdcagent-bff`
+
+Separate login/reverse-proxy binary for the 数智疾控 workbench host. It talks to the user-center OpenAPI, then injects `trusted_proxy` headers into loopback ZeroClaw. It does **not** link `zeroclaw-*` crates. See [Platform BFF](../developing/hbcdcagent-bff.md) and [ADR-015](./decisions/ADR-015-hbcdcagent-bff.md).
+
 ### `zeroclaw-tools`
 
 Callable tools the agent invokes. Not to be confused with CLI `zeroclaw` subcommands.

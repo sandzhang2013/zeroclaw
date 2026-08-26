@@ -120,7 +120,7 @@ function latestMessageArtifact(
  * Right-hand workbench pane: tool results plus files written in this session.
  */
 export function ResultsPanel() {
-  const [tab, setTab] = useState<RightTab>('results');
+  const [tab, setTab] = useState<RightTab>('artifacts');
   const { messages } = useAgent();
   const resultCount = useMemo(
     () => messages.filter((m) => m.toolCall).length,
@@ -131,8 +131,8 @@ export function ResultsPanel() {
   const lastArtifactPath = lastArtifact?.path ?? '';
 
   useEffect(() => {
-    if (lastPreview) setTab('results');
-    else if (lastArtifactPath) setTab('artifacts');
+    if (lastArtifactPath) setTab('artifacts');
+    else if (lastPreview) setTab('results');
   }, [lastPreview, lastArtifactPath]);
 
   return (
@@ -147,21 +147,21 @@ export function ResultsPanel() {
           style={{ background: 'color-mix(in srgb, var(--pc-text-primary) 8%, transparent)' }}
         >
           <TabButton
+            id="artifacts"
+            active={tab === 'artifacts'}
+            label={t('workbench.tab_artifacts')}
+            onClick={() => setTab('artifacts')}
+          />
+          <TabButton
             id="results"
             active={tab === 'results'}
             label={t('workbench.tab_results')}
             count={resultCount}
             onClick={() => setTab('results')}
           />
-          <TabButton
-            id="artifacts"
-            active={tab === 'artifacts'}
-            label={t('workbench.tab_artifacts')}
-            onClick={() => setTab('artifacts')}
-          />
         </div>
       </div>
-      {tab === 'results' ? <ResultsList preview={lastPreview} /> : <ArtifactsList lastArtifact={lastArtifact} />}
+      {tab === 'artifacts' ? <ArtifactsList lastArtifact={lastArtifact} /> : <ResultsList preview={lastPreview} />}
     </aside>
   );
 }

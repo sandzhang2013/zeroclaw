@@ -1,0 +1,65 @@
+# 数智疾控：BFF 对外 :50001，daemon 只在 compose 网内。
+# 用法见 docs/分析/数智疾控Docker离线部署手册.md
+
+services:
+  daemon:
+    image: hbcdcagent-daemon:local
+    restart: unless-stopped
+    environment:
+      ZEROCLAW_gateway__host: "0.0.0.0"
+      ZEROCLAW_gateway__port: "42617"
+      ZEROCLAW_gateway__path_prefix: "/hbcdcagent"
+      ZEROCLAW_gateway__trusted_proxy: "true"
+      ZEROCLAW_gateway__trusted_proxy_secret: "${ZEROCLAW_gateway__trusted_proxy_secret}"
+      ZEROCLAW_gateway__allow_public_bind: "true"
+    volumes:
+      - zeroclaw-data:/zeroclaw-data
+    expose:
+      - "42617"
+    networks:
+      - hbcdcagent
+    healthcheck:
+      test: ["CMD", "zeroclaw", "status", "--format=exit-code"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  bff:
+    image: hbcdcagent-bff:local
+    restart: unless-stopped
+    depends_on:
+      - daemon
+    environment:
+      HBCDCAGENT_BFF_LISTEN: "0.0.0.0:50001"
+      HBCDCAGENT_BFF_UPSTREAM: "http://daemon:42617"
+      HBCDCAGENT_BFF_PUBLIC_ORIGIN: "${HBCDCAGENT_BFF_PUBLIC_ORIGIN:-http://88.8.130.150:50001}"
+      HBCDCAGENT_BFF_COOKIE_SECURE: "${HBCDCAGENT_BFF_COOKIE_SECURE:-false}"
+      ZEROCLAW_gateway__trusted_proxy_secret: "${ZEROCLAW_gateway__trusted_proxy_secret}"
+      USER_CENTER_BASE_URL: "${USER_CENTER_BASE_URL}"
+      USER_CENTER_APP_ID: "${USER_CENTER_APP_ID}"
+      USER_CENTER_APP_KEY: "${USER_CENTER_APP_KEY}"
+      USER_CENTER_APP_SECRET: "${USER_CENTER_APP_SECRET}"
+      USER_CENTER_SIGN_TYPE: "${USER_CENTER_SIGN_TYPE:-MD5}"
+      USER_CENTER_LOGIN_URL: "${USER_CENTER_LOGIN_URL:-}"
+      USER_CENTER_CLIENT_ID: "${USER_CENTER_CLIENT_ID:-}"
+      USER_CENTER_REALM: "${USER_CENTER_REALM:-}"
+      USER_CENTER_TERMINAL: "${USER_CENTER_TERMINAL:-Web}"
+      HBCDCAGENT_BFF_OPS_USER_IDS: "${HBCDCAGENT_BFF_OPS_USER_IDS:-}"
+    ports:
+      - "50001:50001"
+    networks:
+      - hbcdcagent
+    healthcheck:
+      test: ["CMD", "hbcdcagent-bff"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      disable: true
+
+networks:
+  hbcdcagent:
+    driver: bridge
+
+volumes:
+  zeroclaw-data:

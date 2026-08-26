@@ -196,3 +196,4 @@ API endpoints still work, only the HTML/JS bundle is missing. Build it
 - [Environment variables](../reference/env-vars.md): full schema-mirror grammar
 - [Gateway HTTP API](./api.md): what the dashboard talks to
 - [Building the web dashboard](../developing/web.md): `cargo web` subcommands and what gets generated
+- [Platform chat embed](../developing/platform-chat-embed.md): iframe of the conversation only, not this dashboard

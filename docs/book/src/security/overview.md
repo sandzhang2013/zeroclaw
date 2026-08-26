@@ -8,3 +8,4 @@ Each agent runs under a risk profile and a runtime profile it references; see [A
 - [Autonomy levels](./autonomy.md): the coarse-grained ReadOnly / Supervised / Full knob.
 - [Sandboxing](./sandboxing.md): OS-level isolation backends per platform.
 - [Tool receipts](./tool-receipts.md): HMAC evidence for successful tool results, passed back in-band with the conversation.
+- [Platform chat embed](../developing/platform-chat-embed.md): only `/embed/chat` may be iframed; ops HTML stays deny-framed.

@@ -372,9 +372,18 @@ function PairingDialog({
 
 function AppContent() {
   const { isAuthenticated, requiresPairing, loading, pair, logout } = useAuth();
+  const location = useLocation();
   const [locale, setLocaleState] = useState(loadLocale());
   const draftStore = useDraftStore();
   setLocale(locale as Locale);
+  // Vite workbench uses the local BFF cookie, not device pairing. Skip the
+  // pairing gate in `npm run dev` and on `/workbench` so a LAN origin like
+  // http://192.168.1.107:5174/workbench is not blocked. The gateway dashboard
+  // on :42617 still requires pairing.
+  const skipPairing =
+    import.meta.env.DEV ||
+    location.pathname === "/workbench" ||
+    location.pathname.startsWith("/workbench/");
 
   const setAppLocale = (newLocale: string) => {
     setLocaleState(newLocale);
@@ -388,7 +397,7 @@ function AppContent() {
     return () => window.removeEventListener("zeroclaw-unauthorized", logout);
   }, [logout]);
 
-  if (loading) {
+  if (loading && !skipPairing) {
     return (
       <div
         className="min-h-screen flex items-center justify-center"
@@ -410,7 +419,7 @@ function AppContent() {
     );
   }
 
-  if (!isAuthenticated && requiresPairing) {
+  if (!skipPairing && !isAuthenticated && requiresPairing) {
     return <PairingDialog onPair={pair} />;
   }
 

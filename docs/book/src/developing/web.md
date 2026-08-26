@@ -76,3 +76,13 @@ and `structuredClone()`.
 - Edge 111+
 - Firefox 113+
 - Safari 16.2+
+
+## Platform embedding
+
+The workbench conversation can be hosted on other platform pages. That
+contract is [Platform chat embed](./platform-chat-embed.md)
+([ADR-014](../architecture/decisions/ADR-014-platform-chat-embed.md)). The
+ops dashboard itself stays deny-framed.
+
+Production identity for the 数智疾控 workbench is the separate
+[Platform BFF](./hbcdcagent-bff.md), not Vite `injectBffIdentity`.

@@ -11,14 +11,12 @@ pub const ROLE_ADVANCED: &str = "高级用户";
 pub const ROLE_OPS: &str = "运维";
 
 /// Identity keys the model must never supply (stripped from MCP tool args).
-pub const MODEL_IDENTITY_ARG_KEYS: &[&str] = &[
-    "user_id",
-    "region",
-    "role",
-    "org",
-    "organization",
-    "_zeroclaw_user",
-];
+pub const MODEL_IDENTITY_ARG_KEYS: &[&str] =
+    &["user_id", "role", "org", "organization", "_zeroclaw_user"];
+
+/// Geographic args bound from frozen BFF identity for non-ops MCP calls.
+/// Also stripped from model args for non-ops before the frozen region is written.
+pub const GEO_ARG_KEYS: &[&str] = &["region", "city", "cities"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UserIdError {
@@ -115,6 +113,59 @@ impl UserAttrs {
         }
     }
 
+    /// Schema property names that carry geography (`region`, `city`).
+    #[must_use]
+    pub fn geo_keys_from_schema(schema: &serde_json::Value) -> Vec<String> {
+        let Some(props) = schema.get("properties").and_then(|p| p.as_object()) else {
+            return Vec::new();
+        };
+        GEO_ARG_KEYS
+            .iter()
+            .filter(|key| props.contains_key(**key))
+            .map(|key| (*key).to_string())
+            .collect()
+    }
+
+    /// After stripping model identity, bind non-ops MCP args to the frozen region.
+    ///
+    /// Ops keep header-only identity so they can query any area. A normal user
+    /// without a frozen region fails closed instead of sending an unscoped
+    /// `getcase`. Legacy pairing (`mcp_identity() == Ok(None)`) is unchanged.
+    pub fn bind_mcp_tool_args(
+        args: &mut serde_json::Value,
+        geo_schema_keys: &[String],
+    ) -> Result<(), &'static str> {
+        Self::strip_identity_args(args);
+        match mcp_identity() {
+            Err(msg) => Err(msg),
+            Ok(None) => Ok(()),
+            Ok(Some(attrs)) => {
+                if attrs.is_ops() {
+                    return Ok(());
+                }
+                if let serde_json::Value::Object(map) = args {
+                    for key in GEO_ARG_KEYS {
+                        map.remove(*key);
+                    }
+                }
+                let region = attrs
+                    .region
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty());
+                let Some(region) = region else {
+                    return Err("MCP call refused: missing frozen user region");
+                };
+                if let serde_json::Value::Object(map) = args {
+                    for key in geo_schema_keys {
+                        map.insert(key.clone(), serde_json::Value::String(region.to_string()));
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+
     /// Transport-only identity object. Never merge into model-visible tool args.
     #[must_use]
     pub fn transport_json(&self) -> serde_json::Value {
@@ -182,6 +233,17 @@ mod tests {
     }
 
     #[test]
+    fn geo_keys_from_schema_includes_cities() {
+        let schema = serde_json::json!({
+            "properties": { "cities": { "type": "string" }, "year": { "type": "integer" } }
+        });
+        assert_eq!(
+            UserAttrs::geo_keys_from_schema(&schema),
+            vec!["cities".to_string()]
+        );
+    }
+
+    #[test]
     fn strip_identity_args_removes_model_keys() {
         let mut args = serde_json::json!({
             "user_id": "bob",
@@ -190,8 +252,73 @@ mod tests {
         });
         UserAttrs::strip_identity_args(&mut args);
         assert_eq!(args["query"], "flu");
+        assert_eq!(args["region"], "北京");
         assert!(args.get("user_id").is_none());
-        assert!(args.get("region").is_none());
+    }
+
+    #[tokio::test]
+    async fn bind_mcp_tool_args_forces_frozen_region_for_normal_user() {
+        crate::TOOL_LOOP_USER_ATTRS
+            .scope(
+                Some(
+                    UserAttrs::new("chenmin")
+                        .with_role(ROLE_NORMAL)
+                        .with_region("武汉市"),
+                ),
+                async {
+                    let mut args = serde_json::json!({
+                        "region": "宜昌市",
+                        "city": "宜昌市",
+                        "cities": "宜昌市,孝感市",
+                        "start_date": "2022-01-01"
+                    });
+                    let keys = vec![
+                        "region".to_string(),
+                        "city".to_string(),
+                        "cities".to_string(),
+                    ];
+                    UserAttrs::bind_mcp_tool_args(&mut args, &keys).unwrap();
+                    assert_eq!(args["region"], "武汉市");
+                    assert_eq!(args["city"], "武汉市");
+                    assert_eq!(args["cities"], "武汉市");
+                    assert_eq!(args["start_date"], "2022-01-01");
+                },
+            )
+            .await;
+    }
+
+    #[tokio::test]
+    async fn bind_mcp_tool_args_refuses_normal_user_without_region() {
+        crate::TOOL_LOOP_USER_ATTRS
+            .scope(
+                Some(UserAttrs::new("chenmin").with_role(ROLE_NORMAL)),
+                async {
+                    let mut args = serde_json::json!({ "region": "宜昌市" });
+                    let keys = vec!["region".to_string()];
+                    let err = UserAttrs::bind_mcp_tool_args(&mut args, &keys).unwrap_err();
+                    assert!(err.contains("missing frozen user region"));
+                },
+            )
+            .await;
+    }
+
+    #[tokio::test]
+    async fn bind_mcp_tool_args_does_not_force_region_for_ops() {
+        crate::TOOL_LOOP_USER_ATTRS
+            .scope(
+                Some(
+                    UserAttrs::new("ops")
+                        .with_role(ROLE_OPS)
+                        .with_region("全省"),
+                ),
+                async {
+                    let mut args = serde_json::json!({ "region": "宜昌市" });
+                    let keys = vec!["region".to_string()];
+                    UserAttrs::bind_mcp_tool_args(&mut args, &keys).unwrap();
+                    assert_eq!(args["region"], "宜昌市");
+                },
+            )
+            .await;
     }
 
     #[test]

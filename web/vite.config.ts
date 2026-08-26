@@ -5,6 +5,12 @@ import { defineConfig, type ProxyOptions } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { parseMockUserCookie } from "./src/lib/platformUser.ts";
+import {
+  DEFAULT_WEB_PREFIX,
+  normalizeWebPrefix,
+  rewriteDevAppAssetUrl,
+  stripWebPrefix,
+} from "./src/lib/webPrefix.ts";
 
 const gatewayHost = process.env.ZEROCLAW_GATEWAY_HOST ?? "127.0.0.1";
 const gatewayPort = process.env.ZEROCLAW_GATEWAY_PORT ?? "42617";
@@ -29,6 +35,12 @@ const IDENTITY_HEADERS = [
   "x-user-org",
 ] as const;
 
+/** Default Vite public prefix. Empty `ZEROCLAW_WEB_BASE` opts back to `/`. */
+function servePrefix(): string {
+  const raw = process.env.ZEROCLAW_WEB_BASE;
+  return normalizeWebPrefix(raw === undefined ? DEFAULT_WEB_PREFIX : raw);
+}
+
 function utf8Header(value: string): string {
   return Buffer.from(value, "utf8").toString("latin1");
 }
@@ -47,11 +59,14 @@ function injectBffIdentity(proxyReq: ClientRequest, req: IncomingMessage): void 
   if (user.org) proxyReq.setHeader("X-User-Org", utf8Header(user.org));
 }
 
-function gatewayProxy(ws = false): ProxyOptions {
+function gatewayProxy(prefix: string, ws = false): ProxyOptions {
   return {
     target: gatewayTarget,
     changeOrigin: true,
     ws,
+    rewrite: prefix
+      ? (requestPath) => stripWebPrefix(requestPath, prefix)
+      : undefined,
     configure(proxy) {
       proxy.on("proxyReq", (proxyReq, req) => {
         injectBffIdentity(proxyReq, req);
@@ -63,59 +78,136 @@ function gatewayProxy(ws = false): ProxyOptions {
   };
 }
 
-export default defineConfig(({ command }) => ({
-  base: command === "serve" ? "/" : "/_app/",
-  plugins: [
-    react(),
-    tailwindcss(),
-    // Dev-only: the production gateway serves static assets under `/_app/*` by
-    // stripping that prefix and reading from `web/dist/` (see
-    // crates/zeroclaw-gateway/src/static_files.rs). Vite dev doesn't know about
-    // that prefix and would 404 on `/_app/logo.png`, so mirror the gateway's
-    // strip-prefix behaviour here. Keeps `${basePath}/_app/...` URLs in the SPA
-    // working identically in dev and prod without copying assets into a
-    // `public/_app/` mirror.
-    {
-      name: "zeroclaw-dev-app-prefix",
-      apply: "serve",
-      configureServer(server) {
-        server.middlewares.use((req, _res, next) => {
-          if (req.url?.startsWith("/_app/")) {
-            req.url = req.url.slice("/_app".length);
-          }
-          next();
-        });
+const GATEWAY_PROXY_KEYS: Array<{ key: string; ws?: boolean }> = [
+  { key: "/api" },
+  { key: "^/acp(?:\\?.*)?$", ws: true },
+  { key: "/ws", ws: true },
+  { key: "/admin" },
+  { key: "/health" },
+  { key: "/metrics" },
+  // Exact-match pairing so `/pair` does not swallow the SPA route `/pairing`.
+  { key: "^/pair(?:/code)?(?:\\?.*)?$" },
+  { key: "/webhook" },
+  { key: "/whatsapp" },
+  { key: "/linq" },
+  { key: "/nextcloud-talk" },
+  { key: "/hooks" },
+];
+
+function prefixProxyKey(key: string, prefix: string): string {
+  if (!prefix) return key;
+  if (key.startsWith("^")) {
+    return `^${prefix}${key.slice(1)}`;
+  }
+  return `${prefix}${key}`;
+}
+
+function buildProxy(prefix: string): Record<string, ProxyOptions> {
+  const proxy: Record<string, ProxyOptions> = {};
+  for (const { key, ws } of GATEWAY_PROXY_KEYS) {
+    proxy[key] = gatewayProxy(prefix, Boolean(ws));
+    if (prefix) {
+      proxy[prefixProxyKey(key, prefix)] = gatewayProxy(prefix, Boolean(ws));
+    }
+  }
+  return proxy;
+}
+
+const SPA_REDIRECT_PREFIXES = [
+  "/workbench",
+  "/dashboard",
+  "/agents",
+  "/agent",
+  "/config",
+  "/logs",
+  "/doctor",
+  "/pairing",
+  "/quickstart",
+  "/skills",
+  "/sops",
+  "/runs",
+  "/tools",
+  "/cron",
+  "/integrations",
+  "/canvas",
+  "/acp-console",
+  "/setup",
+  "/memory",
+];
+
+export default defineConfig(({ command }) => {
+  const prefix = command === "serve" ? servePrefix() : "";
+  return {
+    base: command === "serve" ? `${prefix || ""}/` : "/_app/",
+    plugins: [
+      react(),
+      tailwindcss(),
+      // Dev-only: the production gateway serves static assets under `/_app/*` by
+      // stripping that prefix and reading from `web/dist/` (see
+      // crates/zeroclaw-gateway/src/static_files.rs). Vite dev doesn't know about
+      // that prefix and would 404 on `/_app/logo.png`, so mirror the gateway's
+      // strip-prefix behaviour here. Keeps `${basePath}/_app/...` URLs in the SPA
+      // working identically in dev and prod without copying assets into a
+      // `public/_app/` mirror.
+      {
+        name: "zeroclaw-dev-app-prefix",
+        apply: "serve",
+        configureServer(server) {
+          server.middlewares.use((req, res, next) => {
+            const raw = req.url ?? "/";
+            const qIndex = raw.indexOf("?");
+            const pathname = qIndex >= 0 ? raw.slice(0, qIndex) : raw;
+            const search = qIndex >= 0 ? raw.slice(qIndex) : "";
+
+            if (prefix) {
+              if (pathname === "/" || pathname === "") {
+                res.writeHead(302, { Location: `${prefix}/workbench${search}` });
+                res.end();
+                return;
+              }
+              if (
+                !pathname.startsWith(`${prefix}/`) &&
+                pathname !== prefix &&
+                SPA_REDIRECT_PREFIXES.some(
+                  (route) => pathname === route || pathname.startsWith(`${route}/`),
+                )
+              ) {
+                res.writeHead(302, { Location: `${prefix}${pathname}${search}` });
+                res.end();
+                return;
+              }
+            }
+
+            const rewritten = rewriteDevAppAssetUrl(req.url ?? "/", prefix);
+            if (rewritten !== req.url) {
+              req.url = rewritten;
+            }
+            next();
+          });
+        },
+        transformIndexHtml(html) {
+          if (!prefix) return html;
+          const jsonPrefix = JSON.stringify(prefix);
+          const withBase = html.replace(
+            "<head>",
+            `<head><script>window.__ZEROCLAW_BASE__=${jsonPrefix};</script>`,
+          );
+          return withBase.replaceAll('href="/_app/', `href="${prefix}/_app/`);
+        },
+      },
+    ],
+    resolve: {
+      alias: {
+        "@": path.resolve(__dirname, "./src"),
       },
     },
-  ],
-  resolve: {
-    alias: {
-      "@": path.resolve(__dirname, "./src"),
+    build: {
+      outDir: "dist",
+      target: ["chrome111", "edge111", "firefox113", "safari16.2"],
     },
-  },
-  build: {
-    outDir: "dist",
-    target: ["chrome111", "edge111", "firefox113", "safari16.2"],
-  },
-  server: {
-    allowedHosts,
-    proxy: {
-      "/api": gatewayProxy(),
-      "^/acp(?:\\?.*)?$": gatewayProxy(true),
-      "/ws": gatewayProxy(true),
-      "/admin": gatewayProxy(),
-      "/health": gatewayProxy(),
-      "/metrics": gatewayProxy(),
-      // Exact-match the gateway pairing endpoints (/pair, /pair/code) so the
-      // prefix doesn't swallow the client route /pairing — a bare "/pair" key
-      // proxies /pairing to the gateway, which serves its own built UI and
-      // breaks a refresh on the pairing page (same fix as the /acp regex above).
-      "^/pair(?:/code)?(?:\\?.*)?$": gatewayProxy(),
-      "/webhook": gatewayProxy(),
-      "/whatsapp": gatewayProxy(),
-      "/linq": gatewayProxy(),
-      "/nextcloud-talk": gatewayProxy(),
-      "/hooks": gatewayProxy(),
+    server: {
+      allowedHosts,
+      proxy: buildProxy(prefix),
     },
-  },
-}));
+  };
+});

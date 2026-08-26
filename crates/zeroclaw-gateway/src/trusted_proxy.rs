@@ -120,9 +120,18 @@ pub fn require_user_principal(
     }
 }
 
+/// True when the request already carries a non-empty BFF secret header.
+/// Empty or whitespace-only values do not count — those must fall through
+/// to pairing so a blank `X-Auth-Secret` cannot recurse through
+/// [`require_ops_auth`] / [`super::api::require_auth`].
+#[must_use]
+pub fn has_bff_secret(headers: &HeaderMap) -> bool {
+    header_str(headers, HEADER_AUTH_SECRET).is_some()
+}
+
 /// Config / logs / org-skill writes. Pairing still works; BFF 运维 also works.
 pub fn require_ops_auth(state: &AppState, headers: &HeaderMap) -> Result<(), AuthError> {
-    if trusted_proxy_enabled(state) && header_str(headers, HEADER_AUTH_SECRET).is_some() {
+    if trusted_proxy_enabled(state) && has_bff_secret(headers) {
         let (principal, _) = require_trusted_proxy(state, headers)?;
         if principal.roles.iter().any(|r| r == ROLE_OPS) {
             return Ok(());
@@ -244,6 +253,13 @@ mod tests {
             ]),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn empty_auth_secret_is_not_a_bff_secret() {
+        assert!(!has_bff_secret(&headers(&[(HEADER_AUTH_SECRET, "   ")])));
+        assert!(!has_bff_secret(&HeaderMap::new()));
+        assert!(has_bff_secret(&headers(&[(HEADER_AUTH_SECRET, "s3cret")])));
     }
 
     #[test]

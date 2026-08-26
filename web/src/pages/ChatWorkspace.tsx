@@ -463,6 +463,7 @@ export default function ChatWorkspace({
               <AgentProvider
                 key={session.id}
                 agentAlias={session.agentAlias}
+                userId={userId}
                 taskId={session.taskId === '__default__' ? undefined : session.taskId}
               >
                 <div

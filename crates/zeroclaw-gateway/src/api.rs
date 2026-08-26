@@ -1,5 +1,7 @@
 //! REST API handlers for the web dashboard.
-//! All `/api/*` routes require bearer token authentication (PairingGuard).
+//! Ops `/api/*` routes accept a pairing bearer token, or BFF `X-Auth-Secret`
+//! plus `X-User-Role: 运维` when `gateway.trusted_proxy` is on. User-facing
+//! routes (status, sessions, chat) use [`crate::trusted_proxy::require_user_principal`].
 
 use super::AppState;
 use axum::{
@@ -35,13 +37,23 @@ pub(crate) fn extract_bearer_token(headers: &HeaderMap) -> Option<&str> {
         .and_then(|auth| auth.strip_prefix("Bearer "))
 }
 
-/// Verify bearer token against PairingGuard. Returns error response if unauthorized.
+/// Verify pairing bearer token, or BFF 运维 identity when trusted-proxy is on.
+/// Returns error response if unauthorized.
 pub(crate) fn require_auth(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
     if !state.pairing.require_pairing() {
         return Ok(());
+    }
+
+    // Workbench ops dashboard has no pairing token; the Vite/BFF proxy
+    // injects X-Auth-Secret + X-User-*. Treat that as equivalent to pairing
+    // so /dashboard can load without POST /pair. Non-ops BFF users get 403.
+    if crate::trusted_proxy::trusted_proxy_enabled(state)
+        && crate::trusted_proxy::has_bff_secret(headers)
+    {
+        return crate::trusted_proxy::require_ops_auth(state, headers);
     }
 
     let token = extract_bearer_token(headers).unwrap_or("");
@@ -243,7 +255,8 @@ pub async fn handle_api_status(
     headers: HeaderMap,
     Query(query): Query<StatusQuery>,
 ) -> impl IntoResponse {
-    if let Err(e) = require_auth(&state, &headers) {
+    // Workbench (any BFF user) and the ops dashboard both read this.
+    if let Err(e) = crate::trusted_proxy::require_user_principal(&state, &headers) {
         return e.into_response();
     }
 
@@ -3278,6 +3291,91 @@ pub(crate) mod tests {
         assert!(result.is_err(), "empty bearer token must be rejected");
         let (status, _) = result.unwrap_err();
         assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    fn pairing_on_bff_state(tmp: &tempfile::TempDir) -> AppState {
+        let mut state = test_state(trusted_proxy_config(tmp));
+        state.pairing = Arc::new(PairingGuard::new(true, &[]));
+        state
+    }
+
+    #[test]
+    fn require_auth_accepts_bff_ops_when_trusted_proxy() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let state = pairing_on_bff_state(&tmp);
+        require_auth(&state, &bff_headers("ops", zeroclaw_api::ROLE_OPS)).unwrap();
+    }
+
+    #[test]
+    fn require_auth_forbids_bff_normal_user_when_trusted_proxy() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let state = pairing_on_bff_state(&tmp);
+        let err = require_auth(&state, &bff_headers("alice", "普通用户")).unwrap_err();
+        assert_eq!(err.0, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn api_status_accepts_bff_user_when_trusted_proxy() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let state = pairing_on_bff_state(&tmp);
+        let response = handle_api_status(
+            State(state),
+            bff_headers("alice", "普通用户"),
+            Query(StatusQuery { agent: None }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn api_status_rejects_missing_identity_when_pairing_and_trusted_proxy() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let state = pairing_on_bff_state(&tmp);
+        let response = handle_api_status(
+            State(state),
+            HeaderMap::new(),
+            Query(StatusQuery { agent: None }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn api_cost_accepts_bff_ops_when_trusted_proxy() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let state = pairing_on_bff_state(&tmp);
+        let response = handle_api_cost(
+            State(state),
+            bff_headers("ops", zeroclaw_api::ROLE_OPS),
+            Query(CostQuery {
+                from: None,
+                to: None,
+                agent: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn api_cost_forbids_bff_normal_user_when_trusted_proxy() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let state = pairing_on_bff_state(&tmp);
+        let response = handle_api_cost(
+            State(state),
+            bff_headers("alice", "普通用户"),
+            Query(CostQuery {
+                from: None,
+                to: None,
+                agent: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]

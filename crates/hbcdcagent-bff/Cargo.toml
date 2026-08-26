@@ -1,0 +1,59 @@
+[package]
+name = "hbcdcagent-bff"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Login and reverse-proxy BFF in front of ZeroClaw for 数智疾控. Separate process: no user-center secrets in the daemon."
+publish = false
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "hbcdcagent-bff"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0"
+axum = { version = "0.8", default-features = false, features = [
+  "http1",
+  "json",
+  "tokio",
+  "query",
+  "ws",
+  "macros",
+] }
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+cipher = { version = "0.4", features = ["alloc", "block-padding"] }
+digest = "0.10"
+ecb = "0.1"
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+hex = "0.4"
+hyper = { version = "1", features = ["http1", "client", "server"] }
+hyper-util = { version = "0.1", features = ["tokio", "client-legacy", "http1"] }
+md-5 = "0.10"
+parking_lot = "0.12"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0", default-features = false, features = ["std"] }
+sm3 = "0.4"
+sm4 = "0.5"
+tokio = { version = "1.50", default-features = false, features = [
+  "rt-multi-thread",
+  "macros",
+  "time",
+  "net",
+  "io-util",
+  "sync",
+  "signal",
+] }
+tokio-tungstenite = { version = "0.26", default-features = false, features = ["connect"] }
+tower = { version = "0.5", default-features = false, features = ["util"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = [
+  "fmt",
+  "env-filter",
+  "std",
+  "ansi",
+] }
+uuid = { version = "1.22", default-features = false, features = ["v4", "std"] }

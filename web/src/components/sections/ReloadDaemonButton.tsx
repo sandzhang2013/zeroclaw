@@ -18,6 +18,7 @@
 import { useState } from 'react';
 import { Loader2, RotateCw, X } from 'lucide-react';
 import { ApiError, reloadDaemon } from '../../lib/api';
+import { gatewayUrl } from '../../lib/basePath';
 import { useReloadAvailable } from '../../lib/reloadAvailability';
 import { t } from '@/lib/i18n';
 
@@ -69,7 +70,7 @@ export default function ReloadDaemonButton({ onReloaded, timeoutMs = 30_000 }: R
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 500));
       try {
-        const r = await fetch('/health', { cache: 'no-store' });
+        const r = await fetch(gatewayUrl('/health'), { cache: 'no-store' });
         if (r.ok) {
           setState({ kind: 'back' });
           // Hold the success state briefly so the user sees the green

@@ -29,17 +29,21 @@ pub struct McpToolWrapper {
     /// Live policy handle. `workspace_dir` is read at execute time so session
     /// cwd changes are visible; not a copied path snapshot.
     security: Option<Arc<SecurityPolicy>>,
+    /// `region` / `city` properties advertised by the MCP tool schema.
+    geo_schema_keys: Vec<String>,
 }
 
 impl McpToolWrapper {
     pub fn new(prefixed_name: String, def: McpToolDef, registry: Arc<McpRegistry>) -> Self {
         let description = def.description.unwrap_or_else(|| "MCP tool".to_string());
+        let geo_schema_keys = zeroclaw_api::UserAttrs::geo_keys_from_schema(&def.input_schema);
         Self {
             prefixed_name,
             description,
             input_schema: Arc::new(def.input_schema),
             registry,
             security: None,
+            geo_schema_keys,
         }
     }
 
@@ -92,8 +96,9 @@ impl Tool for McpToolWrapper {
             }
             other => other,
         };
-        zeroclaw_api::UserAttrs::strip_identity_args(&mut args);
-        if let Err(msg) = zeroclaw_api::mcp_identity() {
+        if let Err(msg) =
+            zeroclaw_api::UserAttrs::bind_mcp_tool_args(&mut args, &self.geo_schema_keys)
+        {
             return Ok(ToolResult {
                 success: false,
                 output: ToolOutput::default(),

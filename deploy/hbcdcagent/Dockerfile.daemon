@@ -1,0 +1,28 @@
+# 数智疾控运行镜像：在官方 debian 底上预装 Python/R。
+# 构建：先 docker build -f Dockerfile.debian -t zeroclaw:debian .
+#       再 docker build -f deploy/hbcdcagent/Dockerfile.daemon --build-arg BASE=zeroclaw:debian -t hbcdcagent-daemon:local .
+ARG BASE=zeroclaw:debian
+FROM ${BASE}
+
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 \
+        python3-pandas \
+        python3-numpy \
+        python3-scipy \
+        python3-statsmodels \
+        python3-matplotlib \
+        r-base \
+        r-cran-mass \
+        r-cran-boot \
+        r-cran-matrix \
+        r-cran-nlme \
+        r-cran-survival \
+        r-cran-mgcv \
+        r-cran-cluster \
+        locales \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /usr/bin/python3 /usr/local/bin/python3 \
+    && ln -sf /usr/bin/Rscript /usr/local/bin/Rscript
+
+USER 65534:65534

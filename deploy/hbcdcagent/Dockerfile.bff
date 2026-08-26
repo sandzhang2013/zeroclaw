@@ -1,0 +1,47 @@
+# syntax=docker/dockerfile:1.7-labs
+# BFF 独立镜像。构建机需能拉 rust:1.96-bookworm（或已 docker load）。
+ARG ZEROCLAW_BASE_RUST_BOOKWORM=rust:1.96-bookworm
+FROM ${ZEROCLAW_BASE_RUST_BOOKWORM} AS builder
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends pkg-config g++ \
+    && rm -rf /var/lib/apt/lists/*
+COPY Cargo.toml Cargo.lock ./
+COPY --parents crates/*/Cargo.toml ./
+COPY --parents crates/*/tests/fixtures/*/Cargo.toml ./
+COPY apps/tauri/Cargo.toml apps/tauri/Cargo.toml
+COPY apps/zerocode/Cargo.toml apps/zerocode/Cargo.toml
+COPY tools/fill-translations/Cargo.toml tools/fill-translations/Cargo.toml
+COPY xtask/Cargo.toml xtask/Cargo.toml
+RUN mkdir -p src src/bin benches apps/tauri/src apps/zerocode/src tools/fill-translations/src xtask/src/bin \
+        crates/zeroclaw-hardware/examples \
+    && echo "fn main() {}" > src/main.rs \
+    && echo "" > src/lib.rs \
+    && echo "fn main() {}" > src/bin/zeroclaw-acp-bridge.rs \
+    && echo "fn main() {}" > benches/agent_benchmarks.rs \
+    && echo "fn main() {}" > apps/tauri/src/main.rs \
+    && echo "fn main() {}" > apps/tauri/build.rs \
+    && echo "fn main() {}" > apps/zerocode/src/main.rs \
+    && echo "fn main() {}" > apps/zerocode/build.rs \
+    && echo "fn main() {}" > tools/fill-translations/src/main.rs \
+    && echo "" > xtask/src/lib.rs \
+    && echo "fn main() {}" > xtask/src/bin/mdbook.rs \
+    && echo "fn main() {}" > xtask/src/bin/fluent.rs \
+    && echo "fn main() {}" > xtask/src/bin/web.rs \
+    && echo "fn main() {}" > crates/zeroclaw-hardware/examples/esp32_sim.rs \
+    && for d in crates/*/; do mkdir -p "${d}src" && printf '' > "${d}src/lib.rs"; done \
+    && for d in crates/*/tests/fixtures/*/; do [ -f "${d}Cargo.toml" ] || continue; mkdir -p "${d}src" && printf '' > "${d}src/lib.rs"; done
+COPY src/ src/
+COPY crates/ crates/
+COPY locales.toml .
+RUN rm -f crates/hbcdcagent-bff/src/lib.rs \
+    && cargo build --release --locked -p hbcdcagent-bff \
+    && cp target/release/hbcdcagent-bff /app/hbcdcagent-bff \
+    && strip /app/hbcdcagent-bff
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /app/hbcdcagent-bff /usr/local/bin/hbcdcagent-bff
+USER 65534:65534
+EXPOSE 50001
+ENTRYPOINT ["hbcdcagent-bff"]

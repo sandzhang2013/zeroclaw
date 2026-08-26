@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { gatewayUrl } from '@/lib/basePath';
 
 interface Device {
   id: string;
@@ -19,7 +20,7 @@ export function useDevices() {
   const fetchDevices = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await fetch('/api/devices', {
+      const res = await fetch(gatewayUrl('/api/devices'), {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {

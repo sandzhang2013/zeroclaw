@@ -25,6 +25,14 @@ test('getOrCreateSessionId is a UUID and never prefixes user_id', () => {
   assert.equal(id.includes(':'), false);
   assert.equal(id.startsWith('alice'), false);
   assert.equal(getOrCreateSessionId('deepseek'), id);
+
+  const alice = getOrCreateSessionId('deepseek', 'alice');
+  const bob = getOrCreateSessionId('deepseek', 'bob');
+  assert.match(alice, UUID_RE);
+  assert.match(bob, UUID_RE);
+  assert.notEqual(alice, bob);
+  assert.equal(alice.includes('alice'), false);
+  assert.equal(getOrCreateSessionId('deepseek', 'alice'), alice);
 });
 
 test('generateUUID is RFC 4122 version 4', () => {

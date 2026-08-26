@@ -16,7 +16,7 @@ import type {
 } from "../types/api";
 import type { components } from "./api-generated";
 import { clearToken, getToken, setToken } from "./auth";
-import { apiOrigin, basePath } from "./basePath";
+import { apiOrigin, basePath, gatewayUrl } from "./basePath";
 
 // ---------------------------------------------------------------------------
 // Base fetch wrapper
@@ -264,7 +264,7 @@ export async function getAdminPairCode(): Promise<{
     }>;
   }
 
-  const response = await fetch("/admin/paircode");
+  const response = await fetch(gatewayUrl("/admin/paircode"));
   if (!response.ok) {
     throw new Error(`Failed to fetch pairing code (${response.status})`);
   }
@@ -1307,7 +1307,9 @@ export interface AgentWorkspaceFileRead {
 export function workspaceRawUrl(alias: string, path: string, download = false): string {
   const q = new URLSearchParams({ path });
   if (download) q.set("download", "true");
-  return `/api/agents/${encodeURIComponent(alias)}/workspace/raw?${q.toString()}`;
+  return gatewayUrl(
+    `/api/agents/${encodeURIComponent(alias)}/workspace/raw?${q.toString()}`,
+  );
 }
 
 export function listAgentWorkspace(

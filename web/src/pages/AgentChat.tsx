@@ -16,6 +16,7 @@ import {
 } from '@/lib/slashCommands';
 import ToolCallCard from '@/components/ToolCallCard';
 import { ArtifactCard } from '@/components/ArtifactCard';
+import { OutlineEditModal } from '@/components/OutlineEditModal';
 import ApprovalBanner from '@/components/ApprovalBanner';
 import { AutonomySelect } from '@/components/AutonomySelect';
 import { uploadAgentWorkspaceFile } from '@/lib/api';
@@ -42,6 +43,7 @@ import { groupIllustratedBubbles, shouldAttachStreamingToGroup } from '@/lib/cha
 import { extractMcpToolText, extractToolImages, stripImageMarkers } from '@/lib/chatImages';
 import { ChatImagePreview } from '@/components/ChatImagePreview';
 import { sanitizeSessionTitle } from '@/lib/workbenchSession';
+import { composeOutlineContinuePrompt, shouldShowOutlineEditButton } from '@/lib/outlineDraft';
 import { basePath } from '@/lib/basePath';
 
 const DRAFT_KEY_PREFIX = 'agent-chat';
@@ -213,6 +215,7 @@ export function AgentChatInner({
 
   const { draft, clearDraft } = useDraft(`${DRAFT_KEY_PREFIX}.${agentAlias}`);
   const [input, setInput] = useState(draft);
+  const [outlineDraft, setOutlineDraft] = useState<string | null>(null);
   const persistAutonomyScope = autonomyScope ?? sessionId;
   const maxAutonomy = maxAutonomyForRole(userRole);
   const [autonomy, setAutonomy] = useState<WorkbenchAutonomy>(() =>
@@ -564,6 +567,12 @@ export function AgentChatInner({
     ? matchCommands(input.slice(1))
     : COMMANDS.slice();
 
+  const handleEditOutline = useCallback((content: string) => {
+    const text = content.trim();
+    if (!text) return;
+    setOutlineDraft(text);
+  }, []);
+
   const handleCopy = useCallback((msgId: string, content: string) => {
     const onSuccess = () => {
       setCopiedId(msgId);
@@ -680,6 +689,18 @@ export function AgentChatInner({
         void addFiles([...e.dataTransfer.files]);
       }}
     >
+      <OutlineEditModal
+        open={outlineDraft != null}
+        value={outlineDraft ?? ''}
+        onChange={(text) => setOutlineDraft(text)}
+        onClose={() => setOutlineDraft(null)}
+        onContinue={() => {
+          if (!outlineDraft?.trim()) return;
+          sendMessage(composeOutlineContinuePrompt(outlineDraft));
+          setOutlineDraft(null);
+        }}
+        busy={!connected || typing}
+      />
       {dragOver && (
         <div className="pointer-events-none absolute inset-3 z-40 flex items-center justify-center rounded-xl border-2 border-dashed border-pc-accent bg-pc-accent/10">
           <p className="text-sm font-medium text-pc-accent">{t('workbench.attach_drop')}</p>
@@ -801,7 +822,12 @@ export function AgentChatInner({
           const streamInLast = Boolean(typing && shouldAttachStreamingToGroup(last));
           return (
             <>
-              {bubbles.map((items, idx) => (
+              {bubbles.map((items, idx) => {
+                const prev = bubbles[idx - 1];
+                const previousUserText = prev?.[0]?.role === 'user'
+                  ? messageDisplayText(prev[0])
+                  : '';
+                return (
                 <MessageItem
                   key={items.map((m) => m.id).join(':')}
                   items={items}
@@ -809,13 +835,16 @@ export function AgentChatInner({
                   compact={compact}
                   showToolActivity={showToolActivity}
                   isCopied={items.some((m) => copiedId === m.id)}
+                  previousUserText={previousUserText}
                   onCopy={handleCopy}
+                  onEditOutline={handleEditOutline}
                   onDelete={handleDeleteMessage}
                   streaming={streamInLast && idx === bubbles.length - 1
                     ? { content: streamingContent, thinking: streamingThinking }
                     : null}
                 />
-              ))}
+                );
+              })}
               {typing && !streamInLast && (
                 <div className="flex items-start gap-3 animate-fade-in">
                   <AgentAvatar className="h-8 w-8" />
@@ -1091,7 +1120,9 @@ interface MessageItemProps {
   compact: boolean;
   showToolActivity: boolean;
   isCopied: boolean;
+  previousUserText?: string;
   onCopy: (id: string, content: string) => void;
+  onEditOutline: (content: string) => void;
   onDelete: (id: string) => void;
   streaming?: { content: string; thinking: string } | null;
 }
@@ -1169,7 +1200,9 @@ const MessageItem = memo(function MessageItem({
   compact,
   showToolActivity,
   isCopied,
+  previousUserText,
   onCopy,
+  onEditOutline,
   onDelete,
   streaming,
 }: MessageItemProps) {
@@ -1245,6 +1278,22 @@ const MessageItem = memo(function MessageItem({
                 <span className="bounce-dot w-1.5 h-1.5 rounded-full bg-pc-accent" />
               </div>
             )}
+            {shouldShowOutlineEditButton({
+              isAssistant: !isUser,
+              streaming: Boolean(streaming),
+              hasProse: groupHasProse,
+              content: shownContent,
+              previousUserText: previousUserText ?? '',
+            }) ? (
+              <button
+                type="button"
+                onClick={() => onEditOutline(shownContent)}
+                className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-[8px] border border-pc-border px-2.5 text-xs font-medium text-pc-text-secondary hover:bg-[var(--pc-hover)] hover:text-pc-text"
+              >
+                <Pencil className="size-3.5" />
+                {t('workbench.edit_outline')}
+              </button>
+            ) : null}
           </div>
         </div>
         <div
