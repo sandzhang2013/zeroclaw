@@ -6,7 +6,7 @@ import { generateUUID } from '@/lib/uuid';
 import { t } from '@/lib/i18n';
 import { getProp, putProp, resolveAliasSource, listProps, getStatus, getSessionMessages, abortSession, deleteSession } from '@/lib/api';
 import { primeModelProviderCatalog, modelProviderDisplayName } from '@/lib/modelProviders';
-import { resolveAvailableModels } from './modelPicker.logic';
+import { resolveAvailableModels, scanConfiguredModelLabels } from './modelPicker.logic';
 import type { ToolCallInfo } from '@/components/ToolCallCard';
 import { resolveToolResultIndex } from '@/lib/toolCardMatch';
 import { parseToolArtifact } from '@/lib/artifactKind';
@@ -63,6 +63,8 @@ interface AgentContextValue {
   streamingThinking: string;
   currentModel: string | null;
   availableModels: string[];
+  /** Configured model id keyed by provider ref (`deepseek.default` → `deepseek-v4-flash`). */
+  modelLabels: Record<string, string>;
   switchModel: (model: string) => Promise<void>;
   modelLoading: boolean;
   /** Re-fetch model list from server. Useful after user edits config externally. */
@@ -145,6 +147,7 @@ export function AgentProvider({ agentAlias, taskId, userId, children }: AgentPro
   const [streamingThinking, setStreamingThinking] = useState('');
   const [currentModel, setCurrentModel] = useState<string | null>(null);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [modelLabels, setModelLabels] = useState<Record<string, string>>({});
   const [modelLoading, setModelLoading] = useState(false);
   const [modelInfoVersion, setModelInfoVersion] = useState(0);
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
@@ -654,8 +657,9 @@ export function AgentProvider({ agentAlias, taskId, userId, children }: AgentPro
           // ignore — fall back to the status value below
         }
         if (cancelled) return;
-        // Show the agent's configured provider ref (e.g. "kilo.minimax_m3"),
-        // falling back to the daemon status model only if unset.
+        // Show the agent's configured provider ref internally (e.g.
+        // "deepseek.default") so the picker can switch profiles. The chat
+        // button labels this with the configured model id via `modelLabels`.
         setCurrentModel(activeRef ?? activeModel);
 
         // Available switch targets = every configured provider ref
@@ -671,14 +675,23 @@ export function AgentProvider({ agentAlias, taskId, userId, children }: AgentPro
         // same `family.alias` key) when the endpoint is unavailable, so the
         // picker never silently collapses to a single ref on those deployments.
         try {
-          const refs = await resolveAvailableModels({
-            resolveAliasSource: () => resolveAliasSource('model_providers'),
-            listProps: () => listProps('providers.models'),
-          });
+          const [refs, listed] = await Promise.all([
+            resolveAvailableModels({
+              resolveAliasSource: () => resolveAliasSource('model_providers'),
+              listProps: () => listProps('providers.models'),
+            }),
+            listProps('providers.models').catch(() => ({ entries: [] })),
+          ]);
           if (cancelled) return;
           setAvailableModels(refs.length > 0 ? refs : activeRef ? [activeRef] : []);
+          const labels = scanConfiguredModelLabels(listed.entries);
+          if (activeRef && activeModel) {
+            labels[activeRef] = activeModel;
+          }
+          setModelLabels(labels);
         } catch {
           setAvailableModels(activeRef ? [activeRef] : []);
+          setModelLabels(activeRef && activeModel ? { [activeRef]: activeModel } : {});
         }
       } catch {
         // Ignore errors — dropdown will just show current model once loaded
@@ -926,6 +939,7 @@ export function AgentProvider({ agentAlias, taskId, userId, children }: AgentPro
     streamingThinking,
     currentModel,
     availableModels,
+    modelLabels,
     switchModel,
     modelLoading,
     refreshModels: () => setModelInfoVersion((v) => v + 1),

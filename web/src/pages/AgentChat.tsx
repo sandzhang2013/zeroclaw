@@ -4,6 +4,7 @@ import { ArrowUp, Square, User, AlertCircle, Copy, Check, X, Trash2, Minimize2, 
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { AgentProvider, useAgent, type ChatMessage } from '@/contexts/AgentContext';
+import { labelForProviderRef, resolveProviderRefArg } from '@/contexts/modelPicker.logic';
 import { useDraft } from '@/hooks/useDraft';
 import { t } from '@/lib/i18n';
 import {
@@ -200,6 +201,7 @@ export function AgentChatInner({
     streamingThinking,
     currentModel,
     availableModels,
+    modelLabels,
     switchModel,
     modelLoading,
     deleteMessage,
@@ -335,40 +337,46 @@ export function AgentChatInner({
 
       case 'model': {
         const name = args.trim();
+        const currentLabel = currentModel
+          ? labelForProviderRef(currentModel, modelLabels)
+          : null;
         if (!name) {
-          const current = currentModel
-            ? t('agent.cmd_model_current').replace('{model}', currentModel)
+          const current = currentLabel
+            ? t('agent.cmd_model_current').replace('{model}', currentLabel)
             : t('agent.cmd_model_none');
           const list = availableModels.length > 0
-            ? `\n${t('agent.cmd_model_available').replace('{models}', availableModels.join(', '))}`
+            ? `\n${t('agent.cmd_model_available').replace('{models}', availableModels.map((ref) => labelForProviderRef(ref, modelLabels)).join(', '))}`
             : '';
           addLocalMessage(`${current}${list}`);
           return true;
         }
-        if (name === currentModel) {
-          addLocalMessage(t('agent.cmd_model_current').replace('{model}', name));
+        if (name === currentModel || name === currentLabel) {
+          addLocalMessage(t('agent.cmd_model_current').replace('{model}', currentLabel ?? name));
           return true;
         }
-        if (availableModels.length > 0 && !availableModels.includes(name)) {
+        const target = resolveProviderRefArg(name, availableModels, modelLabels);
+        if (availableModels.length > 0 && !target) {
           addLocalMessage(
             t('agent.cmd_model_unknown')
               .replace('{model}', name)
-              .replace('{models}', availableModels.join(', ')),
+              .replace('{models}', availableModels.map((ref) => labelForProviderRef(ref, modelLabels)).join(', ')),
           );
           return true;
         }
+        const ref = target ?? name;
         // switchModel silently no-ops while another switch is in flight, which
         // looks like the command was ignored. Surface that state explicitly. #7137
         if (modelLoading) {
           addLocalMessage(t('agent.cmd_model_busy'));
           return true;
         }
-        addLocalMessage(t('agent.cmd_model_switching').replace('{model}', name));
-        // Reuse the existing model-switch path (config write + socket rebuild).
-        void switchModel(name).catch(() => {
-          // switchModel surfaces its own error via context `error` state, but
-          // the user just typed a command and expects inline feedback there too.
-          addLocalMessage(t('agent.cmd_model_failed').replace('{model}', name));
+        addLocalMessage(
+          t('agent.cmd_model_switching').replace('{model}', labelForProviderRef(ref, modelLabels)),
+        );
+        void switchModel(ref).catch(() => {
+          addLocalMessage(
+            t('agent.cmd_model_failed').replace('{model}', labelForProviderRef(ref, modelLabels)),
+          );
         });
         return true;
       }
@@ -377,7 +385,7 @@ export function AgentChatInner({
         addLocalMessage(t('agent.cmd_unknown').replace('{cmd}', `/${command}`));
         return true;
     }
-  }, [addLocalMessage, clearAllMessages, currentModel, availableModels, switchModel, modelLoading]);
+  }, [addLocalMessage, clearAllMessages, currentModel, availableModels, modelLabels, switchModel, modelLoading]);
 
   const handleSend = () => {
     const trimmed = input.trim();
@@ -1020,10 +1028,12 @@ export function AgentChatInner({
                       disabled={modelLoading || typing || (availableModels.length === 0 && currentModel === null)}
                       className="flex items-center gap-1 rounded-md px-1.5 py-1 text-sm text-pc-text-secondary hover:bg-[var(--pc-hover)] hover:text-pc-text disabled:opacity-50"
                     >
-                      <span className="max-w-[9rem] truncate">
+                      <span className="max-w-[12rem] truncate">
                         {modelLoading
                           ? t('agent.model_switching')
-                          : (currentModel ?? (availableModels.length === 0 ? t('agent.model_loading') : t('agent.select_model')))}
+                          : (currentModel
+                            ? labelForProviderRef(currentModel, modelLabels)
+                            : (availableModels.length === 0 ? t('agent.model_loading') : t('agent.select_model')))}
                       </span>
                       <ChevronDown className="h-3 w-3 shrink-0" />
                     </button>
@@ -1042,7 +1052,7 @@ export function AgentChatInner({
                                   : 'text-pc-text hover:bg-[var(--pc-hover)]'
                               }`}
                             >
-                              {model}
+                              {labelForProviderRef(model, modelLabels)}
                             </button>
                           );
                         })}

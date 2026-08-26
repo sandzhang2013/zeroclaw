@@ -5,6 +5,8 @@
 /** Minimal shape of a `listProps` entry the scan reads. */
 export interface PropEntry {
   path: string;
+  /** Present on `/api/config/list` when the leaf is populated. */
+  value?: unknown;
 }
 
 /** Data sources the picker needs, injected so tests can stub them. */
@@ -41,4 +43,48 @@ export async function resolveAvailableModels(
   } catch {
     return scanConfiguredRefs((await sources.listProps()).entries);
   }
+}
+
+const PROVIDER_MODEL_PATH = /^providers\.models\.([^.]+)\.([^.]+)\.model$/;
+
+/** Map `family.alias` provider refs to the configured model id. */
+export function scanConfiguredModelLabels(
+  entries: PropEntry[] | undefined,
+): Record<string, string> {
+  const labels: Record<string, string> = {};
+  for (const entry of entries ?? []) {
+    const match = entry.path.match(PROVIDER_MODEL_PATH);
+    if (!match) continue;
+    if (typeof entry.value !== "string") continue;
+    const model = entry.value.trim();
+    if (!model || model === "<unset>") continue;
+    labels[`${match[1]}.${match[2]}`] = model;
+  }
+  return labels;
+}
+
+/**
+ * User-facing label for a provider ref. Prefers the configured model id
+ * (`deepseek-v4-flash`) over the profile alias (`deepseek.default`). When two
+ * refs share the same model id, the alias stays in parentheses so the picker
+ * can still tell them apart.
+ */
+export function labelForProviderRef(
+  ref: string,
+  labels: Record<string, string>,
+): string {
+  const model = labels[ref];
+  if (!model) return ref;
+  const collisions = Object.values(labels).filter((value) => value === model);
+  return collisions.length > 1 ? `${model} (${ref})` : model;
+}
+
+/** Accept either a provider ref or its model id as a `/model` argument. */
+export function resolveProviderRefArg(
+  name: string,
+  availableRefs: string[],
+  labels: Record<string, string>,
+): string | undefined {
+  if (availableRefs.includes(name)) return name;
+  return availableRefs.find((ref) => labels[ref] === name);
 }

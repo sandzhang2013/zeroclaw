@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  labelForProviderRef,
   resolveAvailableModels,
+  resolveProviderRefArg,
+  scanConfiguredModelLabels,
   scanConfiguredRefs,
   type ModelProviderSources,
 } from './modelPicker.logic.ts';
@@ -84,4 +87,42 @@ test('scanConfiguredRefs keeps only two-segment .model paths', () => {
 
 test('scanConfiguredRefs tolerates an undefined entry list', () => {
   assert.deepEqual(scanConfiguredRefs(undefined), []);
+});
+
+test('scanConfiguredModelLabels maps family.alias refs to model ids', () => {
+  assert.deepEqual(
+    scanConfiguredModelLabels([
+      { path: 'providers.models.deepseek.default.model', value: 'deepseek-v4-flash' },
+      { path: 'providers.models.deepseek.default.api_key', value: 'sk-test' },
+      { path: 'providers.models.openai.zeta.model', value: 'gpt-4o' },
+      { path: 'providers.models.openai.zeta.model' }, // unpopulated
+    ]),
+    { 'deepseek.default': 'deepseek-v4-flash', 'openai.zeta': 'gpt-4o' },
+  );
+});
+
+test('labelForProviderRef prefers the model id over the profile alias', () => {
+  assert.equal(
+    labelForProviderRef('deepseek.default', { 'deepseek.default': 'deepseek-v4-flash' }),
+    'deepseek-v4-flash',
+  );
+  assert.equal(labelForProviderRef('deepseek.default', {}), 'deepseek.default');
+});
+
+test('labelForProviderRef keeps the alias when two refs share a model id', () => {
+  assert.equal(
+    labelForProviderRef('deepseek.default', {
+      'deepseek.default': 'deepseek-v4-flash',
+      'deepseek.backup': 'deepseek-v4-flash',
+    }),
+    'deepseek-v4-flash (deepseek.default)',
+  );
+});
+
+test('resolveProviderRefArg accepts either the ref or the model id', () => {
+  const refs = ['deepseek.default', 'openai.zeta'];
+  const labels = { 'deepseek.default': 'deepseek-v4-flash', 'openai.zeta': 'gpt-4o' };
+  assert.equal(resolveProviderRefArg('deepseek.default', refs, labels), 'deepseek.default');
+  assert.equal(resolveProviderRefArg('deepseek-v4-flash', refs, labels), 'deepseek.default');
+  assert.equal(resolveProviderRefArg('missing', refs, labels), undefined);
 });
