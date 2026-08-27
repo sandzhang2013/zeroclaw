@@ -1,0 +1,29 @@
+# hbcdcagent BFF 完整 unit（BFF 没有自带 service install，需手写）。
+# 用法：放到 ~/.config/systemd/user/hbcdcagent-bff.service，
+# 然后 systemctl --user daemon-reload && systemctl --user enable --now hbcdcagent-bff。
+# 不要提交真实密钥。
+
+[Unit]
+Description=hbcdcagent BFF
+After=network.target
+
+[Service]
+Environment=HBCDCAGENT_BFF_UPSTREAM=http://127.0.0.1:42617
+Environment=HBCDCAGENT_BFF_PUBLIC_ORIGIN=http://<150地址>:50001
+Environment=HBCDCAGENT_BFF_COOKIE_SECURE=false
+Environment=ZEROCLAW_gateway__trusted_proxy_secret=<与daemon相同>
+Environment=USER_CENTER_BASE_URL=http://<用户中心地址>/openapi
+Environment=USER_CENTER_APP_ID=<占位>
+Environment=USER_CENTER_APP_KEY=<占位>
+Environment=USER_CENTER_APP_SECRET=<占位>
+Environment=USER_CENTER_SIGN_TYPE=MD5
+Environment=USER_CENTER_LOGIN_URL=
+Environment=USER_CENTER_CLIENT_ID=
+Environment=USER_CENTER_REALM=
+Environment=USER_CENTER_TERMINAL=Web
+Environment=HBCDCAGENT_BFF_OPS_USER_IDS=
+ExecStart=/usr/local/bin/hbcdcagent-bff
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
