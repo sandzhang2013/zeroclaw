@@ -1675,6 +1675,12 @@ fn require_session_access(
         return Ok(());
     }
     match backend.get_session_metadata(session_key) {
+        Some(meta) if meta.user_id.is_none() => {
+            // Pre-identity rows: the first user who already holds the UUID
+            // (typically after workbench localStorage inherit) claims them.
+            let _ = backend.set_session_user_id(session_key, &attrs.user_id);
+            Ok(())
+        }
         Some(meta) if meta.user_id.as_deref() == Some(attrs.user_id.as_str()) => Ok(()),
         _ => Err((
             StatusCode::NOT_FOUND,
@@ -3608,6 +3614,35 @@ pub(crate) mod tests {
         .await
         .into_response();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn user_can_read_unowned_pre_identity_session() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = trusted_proxy_config(&tmp);
+        let backend = Arc::new(
+            zeroclaw_infra::session_sqlite::SqliteSessionBackend::new(tmp.path()).unwrap(),
+        );
+        backend
+            .append("gw_legacy", &zeroclaw_providers::ChatMessage::user("old"))
+            .unwrap();
+        backend
+            .set_session_agent_alias("gw_legacy", "deepseek")
+            .unwrap();
+        let state = test_state_with_session_backend(config, backend.clone());
+
+        let response = handle_api_session_messages(
+            State(state),
+            bff_headers("chenmin", "普通用户"),
+            Path("legacy".to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let owner = backend
+            .get_session_metadata("gw_legacy")
+            .and_then(|m| m.user_id);
+        assert_eq!(owner.as_deref(), Some("chenmin"));
     }
 
     #[tokio::test]

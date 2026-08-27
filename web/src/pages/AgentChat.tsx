@@ -270,7 +270,7 @@ export function AgentChatInner({
 
   function startTitleRename() {
     if (!onRenameSession) return;
-    setTitleDraft(sessionTitle?.trim() || '');
+    setTitleDraft(sanitizeSessionTitle(sessionTitle) ?? (sessionTitle?.trim() || ''));
     setRenamingTitle(true);
   }
 
@@ -284,10 +284,11 @@ export function AgentChatInner({
   // Report live status up to the workbench (sidebar indicators + session title).
   useEffect(() => {
     const first = messages.find((m) => m.role === 'user' && !m.ephemeral && !m.notice);
-    const preview = first?.content.trim().split('\n')[0]?.slice(0, 48);
+    const preview = sanitizeSessionTitle(first?.content.trim().split('\n')[0] ?? '') ?? undefined;
     onStatus?.({ typing, messageCount: messages.length, preview });
   }, [typing, messages, onStatus]);
 
+  const headingTitle = sanitizeSessionTitle(sessionTitle) ?? (sessionTitle?.trim() || agentAlias);
   // Scroll to bottom on new messages / streaming.
   // Note: WebSocket lifecycle, hydration, and tool_call/tool_result handling
   // moved to AgentContext (PR #6101). Tool activity is filtered at render
@@ -740,8 +741,8 @@ export function AgentChatInner({
               />
             ) : (
               <div className="flex min-w-0 items-center gap-1">
-                <h2 className="text-sm font-semibold min-w-0 truncate text-pc-text" title={sessionTitle?.trim() || agentAlias}>
-                  {sessionTitle?.trim() || agentAlias}
+                <h2 className="text-sm font-semibold min-w-0 truncate text-pc-text" title={headingTitle}>
+                  {headingTitle}
                 </h2>
                 {onRenameSession && (
                   <button
@@ -756,7 +757,7 @@ export function AgentChatInner({
                 )}
               </div>
             )}
-            {sessionTitle?.trim() && sessionTitle.trim() !== agentAlias && (
+            {headingTitle !== agentAlias && (
               <p className="text-xs text-pc-text-muted truncate">{agentAlias}</p>
             )}
           </div>

@@ -23,9 +23,23 @@ export function persistSessionId(agentAlias: string, id: string, userId?: string
  * localStorage. Each agent gets its own session so parallel conversations
  * don't collide. Isolation is the BFF frozen identity — never prefix user_id
  * into the UUID. When `userId` is set, each login gets a distinct UUID so
- * switching mock users does not reuse another user's gateway session. */
+ * switching mock users does not reuse another user's gateway session.
+ *
+ * The first identity login inherits a pre-identity (unscoped) UUID so
+ * existing transcripts stay visible; later users mint their own. */
 export function getOrCreateSessionId(agentAlias: string, userId?: string): string {
   const key = sessionIdStorageKey(agentAlias, userId);
+  if (userId) {
+    const legacyKey = sessionIdStorageKey(agentAlias);
+    const inherited = localStorage.getItem(legacyKey);
+    if (inherited) {
+      // Leftover unscoped UUID is claimed even if this user already minted a
+      // new one (empty workbench after the first mock-user login).
+      localStorage.setItem(key, inherited);
+      localStorage.removeItem(legacyKey);
+      return inherited;
+    }
+  }
   let id = localStorage.getItem(key);
   if (!id) {
     id = generateUUID();

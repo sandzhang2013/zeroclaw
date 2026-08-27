@@ -87,6 +87,22 @@ pub struct WsQuery {
     pub user_id: Option<String>,
 }
 
+/// Whether this visitor should stamp `user_id` on connect.
+/// `Ok(true)` stamps; `Ok(false)` leaves an existing owner (including ops
+/// reading someone else's session); `Err` rejects a non-ops visitor.
+fn should_stamp_session_owner(
+    owner: Option<&str>,
+    visitor: &str,
+    visitor_is_ops: bool,
+) -> Result<bool, ()> {
+    match owner {
+        None => Ok(true),
+        Some(existing) if existing == visitor => Ok(false),
+        Some(_) if visitor_is_ops => Ok(false),
+        Some(_) => Err(()),
+    }
+}
+
 fn extract_ws_token<'a>(headers: &'a HeaderMap, query_token: Option<&'a str>) -> Option<&'a str> {
     // 1. Authorization header
     if let Some(t) = headers
@@ -418,20 +434,24 @@ async fn handle_socket(
         // per-agent filters can attribute this session to its agent.
         let _ = backend.set_session_agent_alias(&session_key, &agent_alias);
         if let Some(ref attrs) = frozen_user {
-            if let Some(meta) = backend.get_session_metadata(&session_key)
-                && let Some(owner) = meta.user_id.as_deref()
-                && owner != attrs.user_id
-                && !attrs.is_ops()
-            {
-                let err = serde_json::json!({
-                    "type": "error",
-                    "message": "Session not found",
-                    "code": "SESSION_FORBIDDEN"
-                });
-                let _ = sender.send(Message::Text(err.to_string().into())).await;
-                return;
+            let owner = backend
+                .get_session_metadata(&session_key)
+                .and_then(|m| m.user_id);
+            match should_stamp_session_owner(owner.as_deref(), &attrs.user_id, attrs.is_ops()) {
+                Err(()) => {
+                    let err = serde_json::json!({
+                        "type": "error",
+                        "message": "Session not found",
+                        "code": "SESSION_FORBIDDEN"
+                    });
+                    let _ = sender.send(Message::Text(err.to_string().into())).await;
+                    return;
+                }
+                Ok(true) => {
+                    let _ = backend.set_session_user_id(&session_key, &attrs.user_id);
+                }
+                Ok(false) => {}
             }
-            let _ = backend.set_session_user_id(&session_key, &attrs.user_id);
         }
     }
 
@@ -1877,6 +1897,23 @@ mod tests {
                 .unwrap_or_default()
                 .contains(diagnostic),
             "WebSocket delivery must not fall back to the diagnostic when Fluent supplies text"
+        );
+    }
+
+    #[test]
+    fn ops_connect_does_not_steal_an_owned_session() {
+        assert_eq!(should_stamp_session_owner(None, "chenmin", false), Ok(true));
+        assert_eq!(
+            should_stamp_session_owner(Some("chenmin"), "chenmin", false),
+            Ok(false)
+        );
+        assert_eq!(
+            should_stamp_session_owner(Some("chenmin"), "ops", true),
+            Ok(false)
+        );
+        assert_eq!(
+            should_stamp_session_owner(Some("chenmin"), "liuyang", false),
+            Err(())
         );
     }
 

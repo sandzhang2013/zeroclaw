@@ -527,9 +527,9 @@ function SessionRow({
       ].join(' ')}
     >
       <StatusDot streaming={indicator?.streaming} unread={indicator?.unread} active={active} />
-      <span className="flex-1 min-w-0 truncate">{sessionLabel(session)}</span>
-      <span className="relative ml-1 flex h-6 w-[4.5rem] shrink-0 items-center justify-end">
-        <span className="max-w-full truncate text-[10px] tabular-nums text-pc-text-faint group-hover/task-card:opacity-0">
+      <span className="min-w-0 flex-1 truncate text-pc-text">{sessionLabel(session)}</span>
+      <span className="relative ml-1 flex h-6 shrink-0 items-center justify-end">
+        <span className="whitespace-nowrap text-[10px] tabular-nums text-pc-text-faint group-hover/task-card:opacity-0">
           {relativeTime}
         </span>
         <span className="absolute inset-y-0 right-0 inline-flex items-center justify-end gap-0.5 opacity-0 group-hover/task-card:opacity-100">

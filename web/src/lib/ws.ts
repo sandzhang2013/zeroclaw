@@ -65,6 +65,25 @@ export function createTaskSessionId(agentAlias: string): string {
   return taskId;
 }
 
+/** Bind an existing gateway session UUID to a workbench task tab so a
+ * conversation that lives in SQLite but is missing from the sidebar can
+ * reopen. Returns the short taskId. Idempotent for the same UUID. */
+export function adoptTaskSession(agentAlias: string, sessionId: string): string {
+  const existing = listTaskSessions(agentAlias).find((e) => e.sessionId === sessionId);
+  if (existing) return existing.taskId;
+  const taskId = generateUUID().slice(0, 8);
+  localStorage.setItem(`${TASK_SESSION_PREFIX}.${agentAlias}.${taskId}`, sessionId);
+  const index = listTaskSessions(agentAlias);
+  index.push({
+    taskId,
+    sessionId,
+    agentAlias,
+    createdAt: new Date().toISOString(),
+  });
+  localStorage.setItem(`${TASK_INDEX_PREFIX}.${agentAlias}`, JSON.stringify(index));
+  return taskId;
+}
+
 /** Resolve the session_id for a given task, or null if the task doesn't
  * exist. */
 export function resolveTaskSessionId(agentAlias: string, taskId: string): string | null {

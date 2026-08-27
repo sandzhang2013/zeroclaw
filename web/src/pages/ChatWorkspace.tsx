@@ -5,21 +5,29 @@ import { AgentChatInner, type AgentChatStatus } from '@/pages/AgentChat';
 import { WorkbenchSidebar, type SessionIndicator } from '@/components/WorkbenchSidebar';
 import { ResultsPanel } from '@/components/ResultsPanel';
 import { WorkbenchHome } from '@/components/WorkbenchHome';
+import { getSessions } from '@/lib/api';
 import {
+  adoptTaskSession,
   createTaskSessionId,
+  getOrCreateSessionId,
   removeTaskSession,
+  resolveTaskSessionId,
 } from '@/lib/ws';
 import { generateUUID } from '@/lib/uuid';
 import { basePath } from '@/lib/basePath';
 import { t } from '@/lib/i18n';
-import { workspaceStorageId } from '@/lib/platformUser';
 import {
   saveWorkbenchAutonomy,
   clampWorkbenchAutonomy,
   maxAutonomyForRole,
   type WorkbenchAutonomy,
 } from '@/lib/workbenchAutonomy';
-import { sanitizeSessionTitle } from '@/lib/workbenchSession';
+import {
+  gatewaySessionsToRecover,
+  readWorkspaceSnapshot,
+  sanitizeSessionTitle,
+  workspaceStorageKey,
+} from '@/lib/workbenchSession';
 
 const SIDEBAR_COLLAPSED_KEY = 'zeroclaw-workbench-sidebar-collapsed';
 const RIGHT_COLLAPSED_KEY = 'zeroclaw-workbench-right-collapsed';
@@ -42,7 +50,6 @@ function readPct(key: string, fallback: number): number {
   return fallback;
 }
 
-const STORAGE_KEY = 'zeroclaw-chat-workspace-v3';
 export const DEFAULT_FOLDER_ID = 'default';
 
 export interface WorkbenchFolder {
@@ -120,15 +127,9 @@ function findSessionByAgent(sessions: WorkbenchSession[], agentAlias: string): W
   return sessions.find((s) => s.agentAlias === agentAlias);
 }
 
-function workspaceKey(userId?: string): string {
-  return userId ? `${STORAGE_KEY}:${workspaceStorageId(userId)}` : STORAGE_KEY;
-}
-
 function loadPersisted(userId?: string): Partial<PersistedStateV3> {
   try {
-    const raw = userId
-      ? localStorage.getItem(workspaceKey(userId))
-      : (localStorage.getItem(STORAGE_KEY) ?? localStorage.getItem('zeroclaw-chat-workspace-v2'));
+    const raw = readWorkspaceSnapshot(userId);
     if (!raw) return {};
     const parsed = JSON.parse(raw);
 
@@ -260,7 +261,11 @@ export default function ChatWorkspace({
         setSessions((list) => {
           const current = list.find((sess) => sess.id === sessionId);
           if (!current) return list;
-          const nextTitle = current.title || preview;
+          const stored = sanitizeSessionTitle(current.title);
+          const fromPreview = sanitizeSessionTitle(preview);
+          const nextTitle = fromPreview && stored && fromPreview.startsWith(stored) && fromPreview.length > stored.length
+            ? fromPreview
+            : (stored ?? fromPreview ?? current.title);
           if (!grew && nextTitle === current.title) return list;
           return list.map((sess) => (
             sess.id === sessionId
@@ -294,8 +299,45 @@ export default function ChatWorkspace({
 
   useEffect(() => {
     const snapshot: PersistedStateV3 = { folders, sessions, activeSessionId };
-    try { localStorage.setItem(workspaceKey(userId), JSON.stringify(snapshot)); } catch { /* noop */ }
+    try { localStorage.setItem(workspaceStorageKey(userId), JSON.stringify(snapshot)); } catch { /* noop */ }
   }, [folders, sessions, activeSessionId, userId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const defaultId = getOrCreateSessionId(initialAlias, userId);
+    getSessions()
+      .then((rows) => {
+        if (cancelled) return;
+        const recovered = gatewaySessionsToRecover(rows, defaultId, userId);
+        if (!recovered.length) return;
+        setSessions((prev) => {
+          const known = new Set<string>();
+          for (const session of prev) {
+            const gid = session.taskId === '__default__'
+              ? defaultId
+              : resolveTaskSessionId(session.agentAlias, session.taskId);
+            if (gid) known.add(gid);
+          }
+          const added: WorkbenchSession[] = [];
+          for (const row of recovered) {
+            if (known.has(row.sessionId)) continue;
+            known.add(row.sessionId);
+            const taskId = adoptTaskSession(row.agentAlias, row.sessionId);
+            added.push({
+              id: makeSessionId(row.agentAlias, taskId),
+              agentAlias: row.agentAlias,
+              taskId,
+              folderId: DEFAULT_FOLDER_ID,
+              updatedAt: row.lastActivity || stampNow(),
+              title: row.title,
+            });
+          }
+          return added.length ? dedupeSessions([...prev, ...added]) : prev;
+        });
+      })
+      .catch(() => { /* keep the local snapshot */ });
+    return () => { cancelled = true; };
+  }, [initialAlias, userId]);
 
   useEffect(() => {
     const target = `${basePath}/workbench/${encodeURIComponent(activeAlias)}`;
