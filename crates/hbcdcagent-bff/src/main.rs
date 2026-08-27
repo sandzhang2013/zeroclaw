@@ -102,6 +102,7 @@ async fn callback(
         Err(_) => return (StatusCode::BAD_REQUEST, "invalid userId").into_response(),
     };
     let identity = Identity {
+        display_name: info.display_name,
         role: map_role(&user_id, &state.cfg.ops_user_ids),
         region: None,
         org: info.tenant_name,

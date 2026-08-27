@@ -6,16 +6,19 @@ use crate::identity::{
 use crate::session::{SessionStore, sid_from_cookie_header};
 use crate::user_center::UserCenter;
 use anyhow::Result;
-use axum::body::Body;
+use axum::body::{Body, to_bytes};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{FromRequest, Request, State};
-use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, Uri};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Redirect, Response};
 use futures_util::{SinkExt, StreamExt};
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
+use serde::Serialize;
 use std::sync::Arc;
 use tokio_tungstenite::tungstenite;
+
+const MAX_HTML_INJECT_BYTES: usize = 2 * 1024 * 1024;
 
 pub type HttpClient = Client<hyper_util::client::legacy::connect::HttpConnector, Body>;
 
@@ -76,12 +79,111 @@ async fn proxy_http(state: Arc<AppState>, mut req: Request) -> Result<Response, 
     }
     remove_hop_by_hop(req.headers_mut());
     match state.http.request(req).await {
-        Ok(resp) => Ok(resp.map(Body::new).into_response()),
+        Ok(resp) => Ok(inject_platform_user(resp.map(Body::new).into_response(), &identity).await),
         Err(err) => {
             tracing::warn!(error = %err, "upstream request failed");
             Err((StatusCode::BAD_GATEWAY, "upstream failed").into_response())
         }
     }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PlatformUserPayload<'a> {
+    user_id: &'a str,
+    display_name: &'a str,
+    role: &'a str,
+    region: &'a str,
+    org: &'a str,
+}
+
+fn should_inject_html(headers: &HeaderMap) -> bool {
+    let html = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|ct| {
+            ct.split(';')
+                .next()
+                .map(str::trim)
+                .is_some_and(|mime| mime.eq_ignore_ascii_case("text/html"))
+        });
+    if !html {
+        return false;
+    }
+    let encoded = headers
+        .get(header::CONTENT_ENCODING)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|enc| {
+            let enc = enc.trim();
+            !enc.is_empty() && !enc.eq_ignore_ascii_case("identity")
+        });
+    if encoded {
+        return false;
+    }
+    let too_large = headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<usize>().ok())
+        .is_some_and(|n| n > MAX_HTML_INJECT_BYTES);
+    !too_large
+}
+
+fn platform_user_script(identity: &Identity) -> Option<String> {
+    let payload = PlatformUserPayload {
+        user_id: &identity.user_id,
+        display_name: identity.display_label(),
+        role: &identity.role,
+        region: identity.region.as_deref().unwrap_or(""),
+        org: identity.org.as_deref().unwrap_or(""),
+    };
+    let mut json = serde_json::to_string(&payload).ok()?;
+    json = json.replace('<', r"\u003c");
+    Some(format!(
+        "<script>window.__ZEROCLAW_PLATFORM_USER__={json};</script>"
+    ))
+}
+
+fn inject_script_into_html(html: &str, script: &str) -> String {
+    let lower = html.to_ascii_lowercase();
+    if let Some(pos) = lower.find("<head>") {
+        let insert_at = pos + "<head>".len();
+        let mut out = String::with_capacity(html.len() + script.len());
+        out.push_str(&html[..insert_at]);
+        out.push_str(script);
+        out.push_str(&html[insert_at..]);
+        out
+    } else {
+        format!("{script}{html}")
+    }
+}
+
+async fn inject_platform_user(resp: Response, identity: &Identity) -> Response {
+    if !should_inject_html(resp.headers()) {
+        return resp;
+    }
+    let Some(script) = platform_user_script(identity) else {
+        return resp;
+    };
+    let (mut parts, body) = resp.into_parts();
+    let bytes = match to_bytes(body, MAX_HTML_INJECT_BYTES).await {
+        Ok(b) => b,
+        Err(err) => {
+            tracing::warn!(error = %err, "html inject body exceeded limit");
+            return (StatusCode::BAD_GATEWAY, "upstream body").into_response();
+        }
+    };
+    let Ok(html) = std::str::from_utf8(&bytes) else {
+        parts.headers.remove(header::CONTENT_LENGTH);
+        return Response::from_parts(parts, Body::from(bytes));
+    };
+    let injected = inject_script_into_html(html, &script);
+    parts.headers.remove(header::TRANSFER_ENCODING);
+    if let Ok(len) = HeaderValue::from_str(&injected.len().to_string()) {
+        parts.headers.insert(header::CONTENT_LENGTH, len);
+    } else {
+        parts.headers.remove(header::CONTENT_LENGTH);
+    }
+    Response::from_parts(parts, Body::from(injected))
 }
 
 async fn proxy_ws(state: Arc<AppState>, req: Request) -> Response {
@@ -280,6 +382,7 @@ mod tests {
         strip_identity(&mut headers);
         let id = Identity {
             user_id: "real".into(),
+            display_name: None,
             role: ROLE_NORMAL.into(),
             region: Some("武汉市".into()),
             org: None,
@@ -297,5 +400,76 @@ mod tests {
         let uri: Uri = "/hbcdcagent/ws/chat".parse().expect("uri");
         let out = ws_upstream_url("http://127.0.0.1:42617", &uri).expect("ws");
         assert_eq!(out, "ws://127.0.0.1:42617/hbcdcagent/ws/chat");
+    }
+
+    fn sample_identity() -> Identity {
+        Identity {
+            user_id: "chenmin".into(),
+            display_name: Some("陈敏".into()),
+            role: ROLE_NORMAL.into(),
+            region: Some("武汉市".into()),
+            org: Some("武汉疾控".into()),
+        }
+    }
+
+    #[test]
+    fn html_injects_camel_case_platform_user() {
+        let script = platform_user_script(&sample_identity()).expect("script");
+        let html = inject_script_into_html("<html><head></head><body></body></html>", &script);
+        assert!(html.contains("<head><script>window.__ZEROCLAW_PLATFORM_USER__="));
+        assert!(html.contains(r#""userId":"chenmin""#));
+        assert!(html.contains(r#""displayName":"陈敏""#));
+        assert!(html.contains(r#""role":"普通用户""#));
+        assert!(!html.contains("user_id"));
+        assert!(!html.contains("display_name"));
+    }
+
+    #[test]
+    fn html_inject_falls_back_to_user_id() {
+        let id = Identity {
+            user_id: "alice".into(),
+            display_name: Some("  ".into()),
+            role: ROLE_NORMAL.into(),
+            region: None,
+            org: None,
+        };
+        let script = platform_user_script(&id).expect("script");
+        assert!(script.contains(r#""displayName":"alice""#));
+    }
+
+    #[test]
+    fn html_inject_escapes_script_breakout() {
+        let id = Identity {
+            user_id: "u1".into(),
+            display_name: Some("</script><script>alert(1)".into()),
+            role: ROLE_NORMAL.into(),
+            region: None,
+            org: None,
+        };
+        let script = platform_user_script(&id).expect("script");
+        assert!(!script.contains("</script><script>"));
+        assert!(script.contains(r"\u003c/script>"));
+    }
+
+    #[test]
+    fn non_html_and_gzip_are_not_injected() {
+        let mut html = HeaderMap::new();
+        html.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/html; charset=utf-8"),
+        );
+        assert!(should_inject_html(&html));
+
+        let mut json = HeaderMap::new();
+        json.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+        assert!(!should_inject_html(&json));
+
+        let mut gzip = HeaderMap::new();
+        gzip.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/html"));
+        gzip.insert(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+        assert!(!should_inject_html(&gzip));
     }
 }

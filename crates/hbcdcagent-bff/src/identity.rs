@@ -37,9 +37,22 @@ pub fn normalize_user_id(raw: &str) -> Result<String, UserIdError> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Identity {
     pub user_id: String,
+    /// UI label only. Not a trusted-proxy header; HTML injection uses this.
+    pub display_name: Option<String>,
     pub role: String,
     pub region: Option<String>,
     pub org: Option<String>,
+}
+
+impl Identity {
+    /// Non-empty label for the workbench. Falls back to `user_id`.
+    pub fn display_label(&self) -> &str {
+        self.display_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(self.user_id.as_str())
+    }
 }
 
 pub fn map_role(user_id: &str, ops_user_ids: &[String]) -> String {

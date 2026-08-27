@@ -61,3 +61,10 @@ and `crates/zeroclaw-gateway/src/trusted_proxy.rs`: `X-Auth-Secret`,
 `X-User-Id`, `X-User-Role`, optional region/org. UTF-8 header bytes for
 Chinese role/region values. Query `user_id` remains ignored by the
 daemon.
+
+Workbench HTML responses also get a `<head>` script:
+
+`window.__ZEROCLAW_PLATFORM_USER__ = { userId, displayName, role, region, org }`
+(camelCase). The SPA reads this and skips mock login. JSON, API, and
+WebSocket bodies are unchanged. `displayName` is `realName`, then
+`nickName`, then `accountName`, then `userId`.

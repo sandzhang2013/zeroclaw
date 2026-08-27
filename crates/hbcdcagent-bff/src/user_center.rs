@@ -19,6 +19,7 @@ struct Ticket {
 #[derive(Clone, Debug)]
 pub struct TokenUserInfo {
     pub user_id: String,
+    pub display_name: Option<String>,
     pub tenant_name: Option<String>,
 }
 
@@ -207,10 +208,21 @@ fn parse_user_info(data: &Value) -> Result<TokenUserInfo> {
         .context("userInfo.userId missing")?;
     Ok(TokenUserInfo {
         user_id: user_id.to_string(),
+        display_name: first_nonempty_str(user, &["realName", "nickName", "accountName"]),
         tenant_name: user
             .get("tenantName")
             .and_then(Value::as_str)
             .map(str::to_string),
+    })
+}
+
+fn first_nonempty_str(user: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        user.get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
     })
 }
 
@@ -298,7 +310,35 @@ mod tests {
         });
         let u = parse_user_info(&data).expect("user");
         assert_eq!(u.user_id, "u1");
+        assert_eq!(u.display_name, None);
         assert_eq!(u.tenant_name.as_deref(), Some("疾控"));
+    }
+
+    #[test]
+    fn parse_user_prefers_real_name() {
+        let u = parse_user_info(&json!({
+            "userInfo": {
+                "userId": "u1",
+                "realName": "陈敏",
+                "nickName": "min",
+                "accountName": "chenmin"
+            }
+        }))
+        .expect("user");
+        assert_eq!(u.display_name.as_deref(), Some("陈敏"));
+    }
+
+    #[test]
+    fn parse_user_falls_back_to_account_name() {
+        let u = parse_user_info(&json!({
+            "userInfo": {
+                "userId": "u1",
+                "realName": "  ",
+                "accountName": "chenmin"
+            }
+        }))
+        .expect("user");
+        assert_eq!(u.display_name.as_deref(), Some("chenmin"));
     }
 
     #[test]

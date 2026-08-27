@@ -85,6 +85,7 @@ mod tests {
         let store = SessionStore::default();
         let id = Identity {
             user_id: "u1".into(),
+            display_name: None,
             role: ROLE_NORMAL.into(),
             region: None,
             org: Some("org".into()),
@@ -120,6 +121,7 @@ mod tests {
         let store = SessionStore::default();
         let id = Identity {
             user_id: "u1".into(),
+            display_name: None,
             role: ROLE_NORMAL.into(),
             region: None,
             org: None,

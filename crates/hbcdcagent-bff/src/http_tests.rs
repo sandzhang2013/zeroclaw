@@ -103,7 +103,14 @@ async fn mock_user_info(
     };
     let data = encrypt_data(
         SECRET,
-        &json!({"userInfo": {"userId": user_id, "tenantName": "武汉疾控"}}).to_string(),
+        &json!({
+            "userInfo": {
+                "userId": user_id,
+                "realName": if code == "ops-code" { "系统运维" } else { "爱丽丝" },
+                "tenantName": "武汉疾控"
+            }
+        })
+        .to_string(),
     )
     .expect("enc");
     axum::Json(json!({"success": true, "retCode": "999999", "data": data})).into_response()
@@ -114,6 +121,16 @@ async fn start_user_center(state: Arc<MockUserCenter>) -> (String, tokio::task::
         .route("/auth/ticket", post(mock_ticket))
         .route("/sso/code/userInfo", post(mock_user_info))
         .with_state(state);
+    serve(app).await
+}
+
+async fn start_html_upstream() -> (String, tokio::task::JoinHandle<()>) {
+    let app = Router::new().fallback(async || {
+        (
+            [(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")],
+            "<html><head></head><body>workbench</body></html>",
+        )
+    });
     serve(app).await
 }
 
@@ -363,6 +380,36 @@ async fn proxy_keeps_prefix_and_drops_forged_identity() {
     assert_eq!(body["role"], "普通用户");
     assert_eq!(body["org"], "武汉疾控");
     assert_eq!(body["secret"], "bff-secret");
+    uc_h.abort();
+    up_h.abort();
+}
+
+#[tokio::test]
+async fn html_proxy_injects_platform_user() {
+    let (uc, uc_h) = start_user_center(MockUserCenter::ok()).await;
+    let (up, up_h) = start_html_upstream().await;
+    let app = router(Config::for_test(&uc, &up)).expect("router");
+    let cookie = login(&app, "good-code").await;
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/hbcdcagent/workbench")
+                .header("cookie", cookie)
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await
+        .expect("resp");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.expect("body");
+    let html = String::from_utf8(bytes.to_vec()).expect("utf8");
+    assert!(
+        html.contains(
+            r#"window.__ZEROCLAW_PLATFORM_USER__={"userId":"alice","displayName":"爱丽丝""#
+        )
+    );
+    assert!(html.contains("<head><script>window.__ZEROCLAW_PLATFORM_USER__="));
+    assert!(html.contains("workbench</body>"));
     uc_h.abort();
     up_h.abort();
 }
