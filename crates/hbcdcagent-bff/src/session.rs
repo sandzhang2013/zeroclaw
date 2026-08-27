@@ -62,10 +62,15 @@ pub fn clear_cookie_header(secure: bool) -> String {
 }
 
 pub fn sid_from_cookie_header(header: Option<&str>) -> Option<String> {
+    cookie_value(header, COOKIE_NAME)
+}
+
+pub fn cookie_value(header: Option<&str>, name: &str) -> Option<String> {
     let header = header?;
+    let prefix = format!("{name}=");
     for part in header.split(';') {
         let part = part.trim();
-        if let Some(v) = part.strip_prefix(&format!("{COOKIE_NAME}="))
+        if let Some(v) = part.strip_prefix(&prefix)
             && !v.is_empty()
         {
             return Some(v.to_string());
@@ -102,6 +107,16 @@ mod tests {
         assert_eq!(sid_from_cookie_header(Some(&raw)).as_deref(), Some("abc"));
         assert!(sid_from_cookie_header(None).is_none());
         assert!(sid_from_cookie_header(Some("other=1")).is_none());
+    }
+
+    #[test]
+    fn cookie_value_extracts_named_cookie() {
+        let raw = "a=1; zeroclaw_mock_user=chenmin; b=2";
+        assert_eq!(
+            cookie_value(Some(raw), "zeroclaw_mock_user").as_deref(),
+            Some("chenmin")
+        );
+        assert!(cookie_value(Some(raw), "nope").is_none());
     }
 
     #[test]

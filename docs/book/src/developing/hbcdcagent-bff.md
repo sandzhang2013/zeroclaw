@@ -51,6 +51,12 @@ Required environment (secrets stay out of git and out of
 - `USER_CENTER_BASE_URL`, `USER_CENTER_APP_ID`, `USER_CENTER_APP_KEY`,
   `USER_CENTER_APP_SECRET`
 
+Optional demo mode: set `HBCDCAGENT_BFF_LOCAL_MOCK=true` to skip SSO and
+derive the identity from a `zeroclaw_mock_user` cookie instead. The cookie
+value must be in a fixed allowlist (`MOCK_USER_ALLOWLIST` in
+`crates/hbcdcagent-bff/src/identity.rs`). Demo only — do not enable in
+production.
+
 The BFF does not depend on `zeroclaw-*` crates. Sign and SM4 follow
 `docs/集成/用户中心集成工具类/` without executing those Java classes.
 

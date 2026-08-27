@@ -17,6 +17,11 @@ pub const IDENTITY_HEADERS: &[&str] = &[
 pub const ROLE_NORMAL: &str = "普通用户";
 pub const ROLE_OPS: &str = "运维";
 
+/// Local demo mode: cookie carrying an impersonated user id.
+pub const MOCK_COOKIE_NAME: &str = "zeroclaw_mock_user";
+/// Fixed allowlist of user ids that local demo mode may impersonate.
+pub const MOCK_USER_ALLOWLIST: &[&str] = &["chenmin"];
+
 #[derive(Clone, Debug)]
 pub struct UserIdError;
 

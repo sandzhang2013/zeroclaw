@@ -1,9 +1,9 @@
 use crate::config::Config;
 use crate::identity::{
     HEADER_AUTH_SECRET, HEADER_USER_ID, HEADER_USER_ORG, HEADER_USER_REGION, HEADER_USER_ROLE,
-    IDENTITY_HEADERS, Identity,
+    IDENTITY_HEADERS, MOCK_COOKIE_NAME, MOCK_USER_ALLOWLIST, Identity, map_role, normalize_user_id,
 };
-use crate::session::{SessionStore, sid_from_cookie_header};
+use crate::session::{SessionStore, cookie_value, sid_from_cookie_header};
 use crate::user_center::UserCenter;
 use anyhow::Result;
 use axum::body::{Body, to_bytes};
@@ -38,8 +38,31 @@ pub fn identity_from_request(state: &AppState, headers: &HeaderMap) -> Option<Id
     let cookie = headers
         .get(axum::http::header::COOKIE)
         .and_then(|v| v.to_str().ok());
-    let sid = sid_from_cookie_header(cookie)?;
-    state.sessions.get(&sid)
+    if let Some(sid) = sid_from_cookie_header(cookie) {
+        if let Some(id) = state.sessions.get(&sid) {
+            return Some(id);
+        }
+    }
+    mock_identity(&state.cfg, cookie)
+}
+
+/// Local demo mode: derive identity from the `zeroclaw_mock_user` cookie
+/// instead of requiring an SSO session, validated against a fixed allowlist.
+fn mock_identity(cfg: &Config, cookie: Option<&str>) -> Option<Identity> {
+    if !cfg.local_mock {
+        return None;
+    }
+    let user_id = normalize_user_id(&cookie_value(cookie, MOCK_COOKIE_NAME)?).ok()?;
+    if !MOCK_USER_ALLOWLIST.contains(&user_id.as_str()) {
+        return None;
+    }
+    Some(Identity {
+        user_id: user_id.clone(),
+        display_name: None,
+        role: map_role(&user_id, &cfg.ops_user_ids),
+        region: None,
+        org: None,
+    })
 }
 
 pub async fn fallback(State(state): State<Arc<AppState>>, req: Request) -> Response {
@@ -471,5 +494,21 @@ mod tests {
         gzip.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/html"));
         gzip.insert(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
         assert!(!should_inject_html(&gzip));
+    }
+
+    #[test]
+    fn mock_identity_gates_on_flag_and_allowlist() {
+        let mut cfg = crate::config::Config::for_test("http://uc", "http://127.0.0.1:42617");
+        cfg.local_mock = false;
+        assert!(mock_identity(&cfg, Some("zeroclaw_mock_user=chenmin")).is_none());
+
+        cfg.local_mock = true;
+        let id = mock_identity(&cfg, Some("zeroclaw_mock_user=chenmin")).expect("mock");
+        assert_eq!(id.user_id, "chenmin");
+        assert_eq!(id.role, ROLE_NORMAL);
+
+        assert!(mock_identity(&cfg, Some("zeroclaw_mock_user=evil")).is_none());
+        assert!(mock_identity(&cfg, Some("hbcdcagent_session=abc")).is_none());
+        assert!(mock_identity(&cfg, None).is_none());
     }
 }

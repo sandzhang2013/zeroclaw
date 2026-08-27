@@ -334,6 +334,54 @@ async fn api_without_cookie_is_unauthorized() {
     up_h.abort();
 }
 
+#[tokio::test]
+async fn local_mock_cookie_skips_sso() {
+    let (uc, uc_h) = start_user_center(MockUserCenter::ok()).await;
+    let (up, up_h) = start_upstream().await;
+    let mut cfg = Config::for_test(&uc, &up);
+    cfg.local_mock = true;
+    let app = router(cfg).expect("router");
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/hbcdcagent/api/status")
+                .header("cookie", "zeroclaw_mock_user=chenmin")
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await
+        .expect("resp");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = json_body(resp).await;
+    assert_eq!(body["user"], "chenmin");
+    assert_eq!(body["role"], "普通用户");
+    assert_eq!(body["secret"], "bff-secret");
+    uc_h.abort();
+    up_h.abort();
+}
+
+#[tokio::test]
+async fn local_mock_rejects_non_allowlisted_user() {
+    let (uc, uc_h) = start_user_center(MockUserCenter::ok()).await;
+    let (up, up_h) = start_upstream().await;
+    let mut cfg = Config::for_test(&uc, &up);
+    cfg.local_mock = true;
+    let app = router(cfg).expect("router");
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/hbcdcagent/api/status")
+                .header("cookie", "zeroclaw_mock_user=evil")
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await
+        .expect("resp");
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    uc_h.abort();
+    up_h.abort();
+}
+
 async fn login(app: &axum::Router, code: &str) -> String {
     let resp = app
         .clone()

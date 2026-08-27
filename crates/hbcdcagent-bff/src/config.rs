@@ -21,6 +21,9 @@ pub struct Config {
     pub realm: Option<String>,
     pub terminal: String,
     pub ops_user_ids: Vec<String>,
+    /// Local demo mode: skip SSO and derive identity from the
+    /// `zeroclaw_mock_user` cookie (validated against a fixed allowlist).
+    pub local_mock: bool,
 }
 
 impl Config {
@@ -61,6 +64,7 @@ impl Config {
                 .filter(|s| !s.is_empty())
                 .map(str::to_string)
                 .collect(),
+            local_mock: env_flag("HBCDCAGENT_BFF_LOCAL_MOCK", false),
         })
     }
 
@@ -87,6 +91,7 @@ impl Config {
             realm: Some("B".into()),
             terminal: "Web".into(),
             ops_user_ids: vec!["ops-user".into()],
+            local_mock: false,
         }
     }
 
@@ -180,6 +185,7 @@ mod tests {
             realm: Some("B".into()),
             terminal: "Web".into(),
             ops_user_ids: vec![],
+            local_mock: false,
         };
         let url = cfg.login_redirect().expect("url");
         assert!(url.contains("redirectUrl=http%3A%2F%2F88.8.130.150%3A50001%2Fauth%2Fcallback"));
