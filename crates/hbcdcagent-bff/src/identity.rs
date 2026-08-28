@@ -20,8 +20,6 @@ pub const ROLE_OPS: &str = "运维";
 
 /// Local demo mode: cookie carrying an impersonated user id.
 pub const MOCK_COOKIE_NAME: &str = "zeroclaw_mock_user";
-/// Same catalog as the workbench mock picker (`web/src/lib/platformUser.ts`).
-pub const MOCK_USER_ALLOWLIST: &[&str] = &["chenmin", "liuyang", "zhoujing", "ops"];
 
 #[derive(Clone, Copy, Debug)]
 pub struct MockUser {
@@ -139,11 +137,10 @@ mod tests {
     }
 
     #[test]
-    fn mock_catalog_matches_allowlist() {
-        assert_eq!(MOCK_USERS.len(), MOCK_USER_ALLOWLIST.len());
-        for id in MOCK_USER_ALLOWLIST {
-            let user = mock_user(id).expect("catalog");
-            assert_eq!(user.user_id, *id);
+    fn mock_catalog_matches_picker_ids() {
+        assert_eq!(MOCK_USERS.len(), 4);
+        for user in MOCK_USERS {
+            assert_eq!(mock_user(user.user_id).expect("catalog").user_id, user.user_id);
         }
         assert!(mock_user("evil").is_none());
         assert_eq!(mock_user("ops").expect("ops").role, ROLE_OPS);
