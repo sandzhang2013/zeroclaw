@@ -20,6 +20,10 @@ hbcdcagent_resolve_root "$SCRIPT_DIR"
 hbcdcagent_require_pack
 hbcdcagent_ensure_config
 
+# Command-line / already-exported origin wins over config/.env
+# (the pack .env often has an intranet IP like 88.8.x).
+CLI_PUBLIC_ORIGIN="${HBCDCAGENT_BFF_PUBLIC_ORIGIN:-}"
+
 if [[ -f "$ENV_FILE" ]]; then
   set -a
   # shellcheck disable=SC1090
@@ -29,7 +33,11 @@ fi
 
 export HBCDCAGENT_BFF_LOCAL_MOCK=true
 export ZEROCLAW_gateway__trusted_proxy_secret="${ZEROCLAW_gateway__trusted_proxy_secret:-zeroclaw-local-bff-secret}"
-export HBCDCAGENT_BFF_PUBLIC_ORIGIN="${HBCDCAGENT_BFF_PUBLIC_ORIGIN:-http://127.0.0.1:50001}"
+if [[ -n "$CLI_PUBLIC_ORIGIN" ]]; then
+  export HBCDCAGENT_BFF_PUBLIC_ORIGIN="$CLI_PUBLIC_ORIGIN"
+else
+  export HBCDCAGENT_BFF_PUBLIC_ORIGIN="${HBCDCAGENT_BFF_PUBLIC_ORIGIN:-http://127.0.0.1:50001}"
+fi
 export USER_CENTER_BASE_URL="${USER_CENTER_BASE_URL:-http://127.0.0.1}"
 export USER_CENTER_APP_ID="${USER_CENTER_APP_ID:-local}"
 export USER_CENTER_APP_KEY="${USER_CENTER_APP_KEY:-local}"
@@ -43,10 +51,10 @@ hbcdcagent_start_daemon
 hbcdcagent_start_bff
 
 echo "✅ 本地模拟用户已启动"
-echo "   入口：${HBCDCAGENT_BFF_PUBLIC_ORIGIN}/hbcdcagent/workbench"
-echo "   浏览器先执行再刷新："
-echo "     document.cookie = \"zeroclaw_mock_user=chenmin; Path=/; SameSite=Lax\""
-echo "   可选用户：chenmin 陈敏 / liuyang 刘洋 / zhoujing 周静 / ops 系统运维"
-echo "   从其他机器访问时设置 HBCDCAGENT_BFF_PUBLIC_ORIGIN=http://<主机>:50001"
+echo "   点这个登录（会写 cookie 并跳转工作台）："
+echo "     ${HBCDCAGENT_BFF_PUBLIC_ORIGIN}/auth/mock?user=chenmin"
+echo "   工作台：${HBCDCAGENT_BFF_PUBLIC_ORIGIN}/hbcdcagent/workbench"
+echo "   可选 user=chenmin|liuyang|zhoujing|ops"
+echo "   从其他机器访问时设置 HBCDCAGENT_BFF_PUBLIC_ORIGIN=http://<公网主机>:50001"
 
 hbcdcagent_wait

@@ -13,10 +13,13 @@ use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Redirect, Response};
 use futures_util::{SinkExt, StreamExt};
 use hyper_util::client::legacy::Client;
-use hyper_util::rt::TokioExecutor;
+use hyper_util::rt::{TokioExecutor, TokioIo};
 use serde::Serialize;
 use std::sync::Arc;
+use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite;
+use tokio_tungstenite::tungstenite::protocol::Role;
+use tokio_tungstenite::WebSocketStream;
 
 const MAX_HTML_INJECT_BYTES: usize = 2 * 1024 * 1024;
 
@@ -82,16 +85,35 @@ fn is_websocket(req: &Request) -> bool {
         .unwrap_or(false)
 }
 
+fn requires_login(path: &str) -> bool {
+    path.contains("/api") || path.contains("/ws") || path.contains("/admin")
+}
+
 async fn proxy_http(state: Arc<AppState>, mut req: Request) -> Result<Response, Response> {
-    let Some(identity) = identity_from_request(&state, req.headers()) else {
-        return Err(unauthenticated(&state.cfg, req.uri().path()));
-    };
+    let identity = identity_from_request(&state, req.headers());
     strip_identity(req.headers_mut());
-    inject_identity(
-        req.headers_mut(),
-        &state.cfg.trusted_proxy_secret,
-        &identity,
-    );
+    match identity {
+        Some(identity) => {
+            inject_identity(
+                req.headers_mut(),
+                &state.cfg.trusted_proxy_secret,
+                &identity,
+            );
+            forward_http(&state, req, Some(&identity)).await
+        }
+        None if state.cfg.local_mock && !requires_login(req.uri().path()) => {
+            // SPA + static assets must load so the mock picker can set the cookie.
+            forward_http(&state, req, None).await
+        }
+        None => Err(unauthenticated(&state.cfg, req.uri().path())),
+    }
+}
+
+async fn forward_http(
+    state: &AppState,
+    mut req: Request,
+    identity: Option<&Identity>,
+) -> Result<Response, Response> {
     let target = rewrite_uri(&state.cfg.upstream, req.uri())
         .map_err(|_| (StatusCode::BAD_GATEWAY, "bad upstream URI").into_response())?;
     *req.uri_mut() = target;
@@ -100,7 +122,14 @@ async fn proxy_http(state: Arc<AppState>, mut req: Request) -> Result<Response, 
     }
     remove_hop_by_hop(req.headers_mut());
     match state.http.request(req).await {
-        Ok(resp) => Ok(inject_platform_user(resp.map(Body::new).into_response(), &identity).await),
+        Ok(resp) => {
+            let resp = resp.map(Body::new).into_response();
+            if let Some(identity) = identity {
+                Ok(inject_platform_user(resp, identity).await)
+            } else {
+                Ok(resp)
+            }
+        }
         Err(err) => {
             tracing::warn!(error = %err, "upstream request failed");
             Err((StatusCode::BAD_GATEWAY, "upstream failed").into_response())
@@ -212,41 +241,77 @@ async fn proxy_ws(state: Arc<AppState>, req: Request) -> Response {
         Some(id) => id,
         None => return unauthenticated(&state.cfg, req.uri().path()),
     };
-    let upstream = match ws_upstream_url(&state.cfg.upstream, req.uri()) {
+    let target = match rewrite_uri(&state.cfg.upstream, req.uri()) {
         Ok(u) => u,
         Err(_) => return (StatusCode::BAD_GATEWAY, "bad upstream URI").into_response(),
     };
+    let host = upstream_host(&state.cfg.upstream);
+    let path = target
+        .path_and_query()
+        .map(|pq| pq.as_str().to_string())
+        .unwrap_or_else(|| "/".to_string());
     let secret = state.cfg.trusted_proxy_secret.clone();
     let upgrade = match WebSocketUpgrade::from_request(req, &()).await {
         Ok(u) => u,
         Err(_) => return (StatusCode::BAD_REQUEST, "expected websocket").into_response(),
     };
     upgrade
-        .on_upgrade(move |client| pump_ws(client, upstream, secret, identity))
+        .on_upgrade(move |client| pump_ws(client, host, path, secret, identity))
         .into_response()
 }
 
-async fn pump_ws(client: WebSocket, upstream: String, secret: String, identity: Identity) {
-    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-    let mut ws_req = match upstream.into_client_request() {
-        Ok(req) => req,
-        Err(err) => {
-            tracing::warn!(error = %err, "ws request build failed");
-            return;
+/// Handshake via hyper so `X-User-Role` / region / org can be raw UTF-8.
+/// `tungstenite` `connect_async` calls `HeaderValue::to_str()` and fails with
+/// `UTF-8 encoding error` on Chinese identity headers.
+pub(crate) async fn connect_upstream_ws(
+    host: &str,
+    path: &str,
+    secret: &str,
+    identity: &Identity,
+) -> std::result::Result<WebSocketStream<TokioIo<hyper::upgrade::Upgraded>>, String> {
+    let stream = TcpStream::connect(host)
+        .await
+        .map_err(|err| format!("tcp {host}: {err}"))?;
+    let _ = stream.set_nodelay(true);
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
+        .await
+        .map_err(|err| format!("http handshake: {err}"))?;
+    tokio::spawn(async move {
+        if let Err(err) = conn.with_upgrades().await {
+            tracing::debug!(error = %err, "upstream ws http conn closed");
         }
-    };
-    let headers = ws_req.headers_mut();
-    headers.insert(HEADER_AUTH_SECRET, header_utf8(&secret));
-    headers.insert(HEADER_USER_ID, header_utf8(&identity.user_id));
-    headers.insert(HEADER_USER_ROLE, header_utf8(&identity.role));
-    if let Some(org) = &identity.org {
-        headers.insert(HEADER_USER_ORG, header_utf8(org));
+    });
+    let path = if path.is_empty() { "/" } else { path };
+    let mut req = Request::builder()
+        .method(axum::http::Method::GET)
+        .uri(path)
+        .header(header::HOST, host)
+        .header(header::CONNECTION, "Upgrade")
+        .header(header::UPGRADE, "websocket")
+        .header("Sec-WebSocket-Version", "13")
+        .header(
+            "Sec-WebSocket-Key",
+            tungstenite::handshake::client::generate_key(),
+        )
+        .body(Body::empty())
+        .map_err(|err| format!("ws request: {err}"))?;
+    inject_identity(req.headers_mut(), secret, identity);
+    let res = sender
+        .send_request(req)
+        .await
+        .map_err(|err| format!("ws send: {err}"))?;
+    if res.status() != StatusCode::SWITCHING_PROTOCOLS {
+        return Err(format!("ws status {}", res.status()));
     }
-    if let Some(region) = &identity.region {
-        headers.insert(HEADER_USER_REGION, header_utf8(region));
-    }
-    let (upstream_ws, _) = match tokio_tungstenite::connect_async(ws_req).await {
-        Ok(pair) => pair,
+    let upgraded = hyper::upgrade::on(res)
+        .await
+        .map_err(|err| format!("ws upgrade: {err}"))?;
+    Ok(WebSocketStream::from_raw_socket(TokioIo::new(upgraded), Role::Client, None).await)
+}
+
+async fn pump_ws(client: WebSocket, host: String, path: String, secret: String, identity: Identity) {
+    let upstream_ws = match connect_upstream_ws(&host, &path, &secret, &identity).await {
+        Ok(ws) => ws,
         Err(err) => {
             tracing::warn!(error = %err, "upstream websocket failed");
             return;
@@ -296,8 +361,7 @@ fn from_tungstenite(msg: tungstenite::Message) -> Message {
 }
 
 fn unauthenticated(cfg: &Config, path: &str) -> Response {
-    let api = path.contains("/api") || path.contains("/ws") || path.contains("/admin");
-    if api {
+    if requires_login(path) {
         return (StatusCode::UNAUTHORIZED, "login required").into_response();
     }
     match cfg.login_redirect() {
@@ -413,6 +477,18 @@ mod tests {
         assert_eq!(
             headers.get(HEADER_USER_REGION).unwrap().as_bytes(),
             "武汉市".as_bytes()
+        );
+    }
+
+    #[test]
+    fn chinese_identity_header_is_opaque_not_visible_ascii() {
+        // tungstenite connect_async uses HeaderValue::to_str() and yields
+        // "UTF-8 encoding error" for these values.
+        let role = header_utf8("普通用户");
+        assert!(role.to_str().is_err());
+        assert_eq!(
+            std::str::from_utf8(role.as_bytes()).expect("utf8"),
+            "普通用户"
         );
     }
 

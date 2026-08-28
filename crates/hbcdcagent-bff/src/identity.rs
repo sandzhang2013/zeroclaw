@@ -67,6 +67,11 @@ pub fn mock_user(user_id: &str) -> Option<&'static MockUser> {
     MOCK_USERS.iter().find(|u| u.user_id == user_id)
 }
 
+/// Browser-visible cookie (not HttpOnly) so the workbench picker can overwrite it.
+pub fn mock_user_cookie_header(user_id: &str) -> String {
+    format!("{MOCK_COOKIE_NAME}={user_id}; Path=/; SameSite=Lax")
+}
+
 #[derive(Clone, Debug)]
 pub struct UserIdError;
 
@@ -143,5 +148,9 @@ mod tests {
         assert!(mock_user("evil").is_none());
         assert_eq!(mock_user("ops").expect("ops").role, ROLE_OPS);
         assert_eq!(mock_user("liuyang").expect("adv").role, ROLE_ADVANCED);
+        assert_eq!(
+            mock_user_cookie_header("chenmin"),
+            "zeroclaw_mock_user=chenmin; Path=/; SameSite=Lax"
+        );
     }
 }

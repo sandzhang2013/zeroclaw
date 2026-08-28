@@ -26,8 +26,16 @@ uri = "http://<内网qwen>/v1"
 model = "qwen-max"
 api_key = "not-needed"
 
-# ── 代理（alias 按实际工作台 agent 调整）───────────────
+# ── 代理（alias 必须和工作台 URL 一致）────────────────
+# 工作台默认打开 /hbcdcagent/workbench/deepseek，对应 [agents.deepseek]。
+# CLI / 直连 daemon 常用 [agents.default]。两个都可以指向同一模型通道。
 [agents.default]
+enabled = true
+model_provider = "openai.deepseek"
+risk_profile = "default"
+runtime_profile = "default"
+
+[agents.deepseek]
 enabled = true
 model_provider = "openai.deepseek"
 risk_profile = "default"

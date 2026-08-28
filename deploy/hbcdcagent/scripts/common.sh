@@ -88,7 +88,16 @@ hbcdcagent_start_daemon() {
   hbcdcagent_wait_daemon
 }
 
+hbcdcagent_stop_pack_bff() {
+  if pgrep -f '[h]bcdcagent-bff' >/dev/null 2>&1; then
+    echo "▶ 结束旧 hbcdcagent-bff（释放 50001）"
+    pkill -f '[h]bcdcagent-bff' || true
+    sleep 0.4
+  fi
+}
+
 hbcdcagent_start_bff() {
+  hbcdcagent_stop_pack_bff
   echo "▶ 启动 hbcdcagent-bff  ${HBCDCAGENT_BFF_LISTEN}"
   "$BIN/hbcdcagent-bff" &
   BFF_PID=$!

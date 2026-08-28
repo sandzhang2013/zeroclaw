@@ -54,8 +54,10 @@ Required environment (secrets stay out of git and out of
 Optional demo mode: set `HBCDCAGENT_BFF_LOCAL_MOCK=true` to skip SSO and
 derive the identity from a `zeroclaw_mock_user` cookie instead. Allowed
 ids: `chenmin`, `liuyang`, `zhoujing`, `ops` (`MOCK_USERS` in
-`crates/hbcdcagent-bff/src/identity.rs`). Demo only — do not enable in
-production.
+`crates/hbcdcagent-bff/src/identity.rs`). Open
+`/auth/mock?user=chenmin` to set the cookie, or load `/hbcdcagent/workbench`
+without a cookie to reach the SPA picker. API and WebSocket still return
+401 until a cookie is present. Demo only — do not enable in production.
 
 The BFF does not depend on `zeroclaw-*` crates. Sign and SM4 follow
 `docs/集成/用户中心集成工具类/` without executing those Java classes.
@@ -78,6 +80,10 @@ WebSocket bodies are unchanged. `displayName` is `realName`, then
 Delivery-pack start scripts live in `deploy/hbcdcagent/scripts/`. Both
 local mock and user-center SSO run `zeroclaw daemon` plus
 `hbcdcagent-bff` against `web/dist`. Local mode sets
-`HBCDCAGENT_BFF_LOCAL_MOCK=true` and reads `zeroclaw_mock_user`; SSO
-mode loads `config/.env` and leaves mock off. Do not point those
-scripts at a Vite source tree.
+`HBCDCAGENT_BFF_LOCAL_MOCK=true` and logs
+`/auth/mock?user=chenmin`; SSO mode loads `config/.env` and leaves mock
+off. Do not point those scripts at a Vite source tree.
+
+WebSocket proxying uses a hyper HTTP/1 upgrade so Chinese
+`X-User-Role` / region / org bytes reach the daemon. `tungstenite`
+`connect_async` rejects those headers (`UTF-8 encoding error`).

@@ -1,6 +1,8 @@
 use crate::config::Config;
 use crate::crypto::{decrypt_data, encrypt_data, sign};
-use crate::identity::{HEADER_AUTH_SECRET, HEADER_USER_ID, HEADER_USER_ORG, HEADER_USER_ROLE};
+use crate::identity::{
+    HEADER_AUTH_SECRET, HEADER_USER_ID, HEADER_USER_ORG, HEADER_USER_REGION, HEADER_USER_ROLE,
+};
 use crate::router;
 use crate::session::COOKIE_NAME;
 use axum::Router;
@@ -382,6 +384,139 @@ async fn local_mock_rejects_non_allowlisted_user() {
     up_h.abort();
 }
 
+#[tokio::test]
+async fn local_mock_workbench_without_cookie_serves_spa() {
+    let (uc, uc_h) = start_user_center(MockUserCenter::ok()).await;
+    let (up, up_h) = start_html_upstream().await;
+    let mut cfg = Config::for_test(&uc, &up);
+    cfg.local_mock = true;
+    let app = router(cfg).expect("router");
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/hbcdcagent/workbench")
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await
+        .expect("resp");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.expect("body");
+    let html = String::from_utf8(bytes.to_vec()).expect("utf8");
+    assert!(html.contains("workbench</body>"));
+    assert!(!html.contains("__ZEROCLAW_PLATFORM_USER__"));
+    uc_h.abort();
+    up_h.abort();
+}
+
+#[tokio::test]
+async fn local_mock_api_without_cookie_is_unauthorized() {
+    let (uc, uc_h) = start_user_center(MockUserCenter::ok()).await;
+    let (up, up_h) = start_upstream().await;
+    let mut cfg = Config::for_test(&uc, &up);
+    cfg.local_mock = true;
+    let app = router(cfg).expect("router");
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/hbcdcagent/api/status")
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await
+        .expect("resp");
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    uc_h.abort();
+    up_h.abort();
+}
+
+#[tokio::test]
+async fn local_mock_login_sets_cookie_and_redirects() {
+    let (uc, uc_h) = start_user_center(MockUserCenter::ok()).await;
+    let (up, up_h) = start_upstream().await;
+    let mut cfg = Config::for_test(&uc, &up);
+    cfg.local_mock = true;
+    let app = router(cfg).expect("router");
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/auth/mock?user=chenmin")
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await
+        .expect("resp");
+    assert_eq!(resp.status(), StatusCode::TEMPORARY_REDIRECT);
+    assert_eq!(
+        resp.headers()
+            .get("location")
+            .and_then(|v| v.to_str().ok()),
+        Some("/hbcdcagent/workbench")
+    );
+    let set_cookie = resp
+        .headers()
+        .get("set-cookie")
+        .and_then(|v| v.to_str().ok())
+        .expect("set-cookie");
+    assert!(set_cookie.contains("zeroclaw_mock_user=chenmin"));
+    assert!(!set_cookie.to_ascii_lowercase().contains("httponly"));
+
+    let api = app
+        .oneshot(
+            Request::builder()
+                .uri("/hbcdcagent/api/status")
+                .header("cookie", "zeroclaw_mock_user=chenmin")
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await
+        .expect("resp");
+    assert_eq!(api.status(), StatusCode::OK);
+    uc_h.abort();
+    up_h.abort();
+}
+
+#[tokio::test]
+async fn mock_login_hidden_when_sso_mode() {
+    let (uc, uc_h) = start_user_center(MockUserCenter::ok()).await;
+    let (up, up_h) = start_upstream().await;
+    let app = router(Config::for_test(&uc, &up)).expect("router");
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/auth/mock?user=chenmin")
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await
+        .expect("resp");
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    uc_h.abort();
+    up_h.abort();
+}
+
+#[tokio::test]
+async fn local_mock_login_rejects_unknown_user() {
+    let (uc, uc_h) = start_user_center(MockUserCenter::ok()).await;
+    let (up, up_h) = start_upstream().await;
+    let mut cfg = Config::for_test(&uc, &up);
+    cfg.local_mock = true;
+    let app = router(cfg).expect("router");
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/auth/mock?user=evil")
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await
+        .expect("resp");
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    uc_h.abort();
+    up_h.abort();
+}
+
 async fn login(app: &axum::Router, code: &str) -> String {
     let resp = app
         .clone()
@@ -548,4 +683,62 @@ async fn chinese_role_header_is_utf8_bytes() {
         std::str::from_utf8(headers.get(HEADER_USER_ROLE).expect("h").as_bytes()).expect("s"),
         "普通用户"
     );
+}
+
+#[tokio::test]
+async fn upstream_ws_forwards_chinese_identity_headers() {
+    use crate::identity::{Identity, ROLE_NORMAL};
+    use crate::proxy::connect_upstream_ws;
+    use axum::extract::State;
+    use axum::extract::ws::{Message, WebSocketUpgrade};
+    use axum::routing::get;
+    use futures_util::StreamExt;
+    use std::sync::Mutex;
+    use tokio_tungstenite::tungstenite::Message as WsMessage;
+
+    #[derive(Clone)]
+    struct Cap(Arc<Mutex<Option<(String, String, String)>>>);
+
+    async fn handler(
+        State(cap): State<Cap>,
+        headers: HeaderMap,
+        ws: WebSocketUpgrade,
+    ) -> impl IntoResponse {
+        let role = header_text(&headers, HEADER_USER_ROLE);
+        let region = header_text(&headers, HEADER_USER_REGION);
+        let org = header_text(&headers, HEADER_USER_ORG);
+        *cap.0.lock().expect("lock") = Some((role, region, org));
+        ws.on_upgrade(|mut socket| async move {
+            let _ = socket.send(Message::Text("ok".into())).await;
+        })
+    }
+
+    let cap = Cap(Arc::new(Mutex::new(None)));
+    let app = Router::new()
+        .route("/hbcdcagent/ws", get(handler))
+        .with_state(cap.clone());
+    let (base, handle) = serve(app).await;
+    let uri: axum::http::Uri = base.parse().expect("uri");
+    let host = format!(
+        "{}:{}",
+        uri.host().expect("host"),
+        uri.port_u16().expect("port")
+    );
+    let id = Identity {
+        user_id: "chenmin".into(),
+        display_name: Some("陈敏".into()),
+        role: ROLE_NORMAL.into(),
+        region: Some("武汉市".into()),
+        org: Some("武汉市疾病预防控制中心".into()),
+    };
+    let mut ws = connect_upstream_ws(&host, "/hbcdcagent/ws", "bff-secret", &id)
+        .await
+        .expect("connect");
+    let msg = ws.next().await.expect("msg").expect("frame");
+    assert_eq!(msg, WsMessage::Text("ok".into()));
+    let got = cap.0.lock().expect("lock").clone().expect("headers");
+    assert_eq!(got.0, "普通用户");
+    assert_eq!(got.1, "武汉市");
+    assert_eq!(got.2, "武汉市疾病预防控制中心");
+    handle.abort();
 }

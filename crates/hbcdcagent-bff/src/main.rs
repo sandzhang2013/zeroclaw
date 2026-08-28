@@ -13,7 +13,7 @@ mod session;
 mod user_center;
 
 use crate::config::Config;
-use crate::identity::{Identity, map_role, normalize_user_id};
+use crate::identity::{Identity, map_role, mock_user, mock_user_cookie_header, normalize_user_id};
 use crate::proxy::{AppState, fallback};
 use crate::session::{SessionStore, clear_cookie_header, cookie_header, sid_from_cookie_header};
 use crate::user_center::UserCenter;
@@ -31,6 +31,11 @@ use tokio::net::TcpListener;
 struct CallbackQuery {
     #[serde(rename = "verifyCode")]
     verify_code: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct MockLoginQuery {
+    user: Option<String>,
 }
 
 #[tokio::main]
@@ -65,6 +70,7 @@ pub(crate) fn router(cfg: Config) -> anyhow::Result<Router> {
     Ok(Router::new()
         .route("/health", get(health))
         .route("/auth/callback", get(callback))
+        .route("/auth/mock", get(mock_login))
         .route("/auth/logout", get(logout).post(logout))
         .fallback(fallback)
         .with_state(state))
@@ -76,6 +82,36 @@ async fn shutdown() {
 
 async fn health() -> &'static str {
     "ok"
+}
+
+async fn mock_login(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<MockLoginQuery>,
+) -> Response {
+    if !state.cfg.local_mock {
+        return (StatusCode::NOT_FOUND, "not found").into_response();
+    }
+    let Some(user_id) = query
+        .user
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    else {
+        return (StatusCode::BAD_REQUEST, "missing user").into_response();
+    };
+    if mock_user(user_id).is_none() {
+        return (StatusCode::BAD_REQUEST, "unknown mock user").into_response();
+    }
+    let mut response = Redirect::temporary(Config::workbench_path()).into_response();
+    match mock_user_cookie_header(user_id).parse() {
+        Ok(value) => {
+            response.headers_mut().insert(header::SET_COOKIE, value);
+        }
+        Err(_) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "cookie").into_response();
+        }
+    }
+    response
 }
 
 async fn callback(
