@@ -1,7 +1,7 @@
 use crate::config::Config;
 use crate::identity::{
     HEADER_AUTH_SECRET, HEADER_USER_ID, HEADER_USER_ORG, HEADER_USER_REGION, HEADER_USER_ROLE,
-    IDENTITY_HEADERS, MOCK_COOKIE_NAME, MOCK_USER_ALLOWLIST, Identity, map_role, normalize_user_id,
+    IDENTITY_HEADERS, MOCK_COOKIE_NAME, Identity, mock_user, normalize_user_id,
 };
 use crate::session::{SessionStore, cookie_value, sid_from_cookie_header};
 use crate::user_center::UserCenter;
@@ -53,15 +53,13 @@ fn mock_identity(cfg: &Config, cookie: Option<&str>) -> Option<Identity> {
         return None;
     }
     let user_id = normalize_user_id(&cookie_value(cookie, MOCK_COOKIE_NAME)?).ok()?;
-    if !MOCK_USER_ALLOWLIST.contains(&user_id.as_str()) {
-        return None;
-    }
+    let spec = mock_user(&user_id)?;
     Some(Identity {
-        user_id: user_id.clone(),
-        display_name: None,
-        role: map_role(&user_id, &cfg.ops_user_ids),
-        region: None,
-        org: None,
+        user_id: spec.user_id.to_string(),
+        display_name: Some(spec.display_name.to_string()),
+        role: spec.role.to_string(),
+        region: Some(spec.region.to_string()),
+        org: Some(spec.org.to_string()),
     })
 }
 
@@ -505,7 +503,14 @@ mod tests {
         cfg.local_mock = true;
         let id = mock_identity(&cfg, Some("zeroclaw_mock_user=chenmin")).expect("mock");
         assert_eq!(id.user_id, "chenmin");
+        assert_eq!(id.display_name.as_deref(), Some("陈敏"));
         assert_eq!(id.role, ROLE_NORMAL);
+
+        let advanced = mock_identity(&cfg, Some("zeroclaw_mock_user=liuyang")).expect("adv");
+        assert_eq!(advanced.role, crate::identity::ROLE_ADVANCED);
+
+        let ops = mock_identity(&cfg, Some("zeroclaw_mock_user=ops")).expect("ops");
+        assert_eq!(ops.role, crate::identity::ROLE_OPS);
 
         assert!(mock_identity(&cfg, Some("zeroclaw_mock_user=evil")).is_none());
         assert!(mock_identity(&cfg, Some("hbcdcagent_session=abc")).is_none());

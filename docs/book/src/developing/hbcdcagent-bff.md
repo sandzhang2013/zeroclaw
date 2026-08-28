@@ -52,8 +52,8 @@ Required environment (secrets stay out of git and out of
   `USER_CENTER_APP_SECRET`
 
 Optional demo mode: set `HBCDCAGENT_BFF_LOCAL_MOCK=true` to skip SSO and
-derive the identity from a `zeroclaw_mock_user` cookie instead. The cookie
-value must be in a fixed allowlist (`MOCK_USER_ALLOWLIST` in
+derive the identity from a `zeroclaw_mock_user` cookie instead. Allowed
+ids: `chenmin`, `liuyang`, `zhoujing`, `ops` (`MOCK_USERS` in
 `crates/hbcdcagent-bff/src/identity.rs`). Demo only — do not enable in
 production.
 
@@ -74,3 +74,10 @@ Workbench HTML responses also get a `<head>` script:
 (camelCase). The SPA reads this and skips mock login. JSON, API, and
 WebSocket bodies are unchanged. `displayName` is `realName`, then
 `nickName`, then `accountName`, then `userId`.
+
+Delivery-pack start scripts live in `deploy/hbcdcagent/scripts/`. Both
+local mock and user-center SSO run `zeroclaw daemon` plus
+`hbcdcagent-bff` against `web/dist`. Local mode sets
+`HBCDCAGENT_BFF_LOCAL_MOCK=true` and reads `zeroclaw_mock_user`; SSO
+mode loads `config/.env` and leaves mock off. Do not point those
+scripts at a Vite source tree.

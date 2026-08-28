@@ -12,7 +12,8 @@ port = 42617
 trusted_proxy = true        # 信任 BFF 写入的身份头
 path_prefix = "/hbcdcagent"
 web_dist_dir = "/opt/zeroclaw/web/dist"
-# secret 不写这里！用 systemd 环境变量 ZEROCLAW_gateway__trusted_proxy_secret
+# 交付包 start-*.sh 会用 ZEROCLAW_gateway__web_dist_dir 覆盖为包内 web/dist
+# secret 不写这里！用环境变量 ZEROCLAW_gateway__trusted_proxy_secret
 
 # ── 内网模型（OpenAI 兼容）────────────────────────────
 [providers.models.openai.deepseek]

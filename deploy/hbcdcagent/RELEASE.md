@@ -1,6 +1,17 @@
 # ZeroClaw 数智疾控 — 发布打包清单
 
-> 编译完成后，在编译机上把产物收拢成一个可传输的 tar 包，再拷贝到生产 150 主机安装上线。
+> 编译完成后，在 Linux x86-64 编译机上打 tar。默认把本机 `deploy/hbcdcagent/.env` 打进包（不进 git）。只要占位符则加 `--no-secrets`。
+
+```bash
+# 含密钥（需已有 deploy/hbcdcagent/.env）
+./deploy/hbcdcagent/pack-release.sh
+# 占位符包：
+./deploy/hbcdcagent/pack-release.sh --no-secrets
+# 连编译带打包：
+./deploy/hbcdcagent/pack-release.sh --build hbcdcagent-v0.4
+```
+
+产物默认在 `dist-offline/hbcdcagent-v0.3.tar.gz`（`dist-offline/` 已 gitignore）。
 
 ## 〇、前置（编译已完成）
 
@@ -11,34 +22,7 @@ ls web/dist/index.html
 
 ## 一、打包产物
 
-```bash
-RELEASE=zeroclaw-release
-rm -rf /tmp/$RELEASE
-mkdir -p /tmp/$RELEASE/bin /tmp/$RELEASE/web /tmp/$RELEASE/config/systemd
-
-# 1. 二进制 + 前端
-cp target/ci/zeroclaw target/ci/hbcdcagent-bff target/ci/zerocode /tmp/$RELEASE/bin/
-cp -r web/dist /tmp/$RELEASE/web/dist
-
-# 2. 模板文件（占位符版，不含真实密钥）
-cp config.toml.template /tmp/$RELEASE/config/
-cp systemd/zeroclaw-secret.conf systemd/hbcdcagent-bff.service /tmp/$RELEASE/config/systemd/
-
-# 3. 校验架构（必须 x86-64）
-file /tmp/$RELEASE/bin/*
-
-# 4. 生成校验和
-cd /tmp/$RELEASE
-find . -type f -exec sha256sum {} \; | sort -k2 > SHA256SUMS
-
-# 5. 打包
-cd /tmp
-tar czf zeroclaw-release.tar.gz $RELEASE
-
-# 6. 确认
-ls -lh /tmp/zeroclaw-release.tar.gz
-sha256sum /tmp/zeroclaw-release.tar.gz
-```
+脚本：`deploy/hbcdcagent/pack-release.sh`。它会收 `bin/`、`web/dist/`、`scripts/`、`config/`，校验 x86-64 ELF，默认把编译机 `.env` 打进包；`--no-secrets` 则只打占位符。
 
 ## 二、传输到 150
 
@@ -101,11 +85,15 @@ daemon 日志应出现 `Gateway listening on http://127.0.0.1:42617`；BFF 日�
 ## 打包产物结构
 
 ```
-zeroclaw-release/
+hbcdcagent-v0.3/
+├── README.txt
 ├── bin/{zeroclaw, hbcdcagent-bff, zerocode}
 ├── web/dist/
+├── scripts/{common.sh,start-local.sh,start-user-center.sh,scripts-README.txt}
 ├── config/
 │   ├── config.toml.template
+│   ├── env.example
+│   ├── .env                 # 默认打入，来自编译机本地文件，--no-secrets 则无
 │   └── systemd/
 │       ├── zeroclaw-secret.conf
 │       └── hbcdcagent-bff.service
@@ -114,6 +102,7 @@ zeroclaw-release/
 
 ## 安全边界
 
-- 包内**只有二进制 + 前端 + 占位符模板 + 校验和**。
-- **绝不打入**：`config.toml`（真实）、secret、用户中心密钥（`USER_CENTER_APP_ID/KEY/SECRET`）、真实内网 IP。
-- 那些一律在 150 上现场填写，走 systemd 环境变量，不进 git、不进包。
+- git 里只有二进制构建说明、占位符模板、启动脚本。密钥文件 `deploy/hbcdcagent/.env` 必须 gitignore。
+- **默认交付 tar 含密钥**：从编译机 `.env` 写入 `config/.env` 和 systemd Environment。给 150 用内网渠道传输，不要再提交回仓库。
+- `--no-secrets` 只打占位符，上线前在 150 现场填 `.env`。
+- 包内仍不要带真实 `~/.zeroclaw/config.toml`（模型 uri 在目标机填）。

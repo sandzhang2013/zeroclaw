@@ -60,6 +60,14 @@ cargo build --profile ci --locked -p zerocode         # workspace member，用 -
 | `hbcdcagent-bff` | `target/ci/hbcdcagent-bff` | 平台 BFF：用户中心换票 + 身份头转发，绑 `0.0.0.0:50001` |
 | `zerocode` | `target/ci/zerocode` | TUI 配置管理器（运维辅助工具） |
 
+打交付 tar（编译完成后，Linux amd64）：
+
+```bash
+./deploy/hbcdcagent/pack-release.sh
+```
+
+细节见 `deploy/hbcdcagent/RELEASE.md`。
+
 ## 六、验证
 
 ```bash
