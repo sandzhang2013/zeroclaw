@@ -4,8 +4,9 @@ import { apiOrigin, basePath } from './basePath';
 import { isTauri } from './tauri';
 import { generateUUID } from './uuid';
 import { SESSION_ID_KEY_PREFIX, getOrCreateSessionId } from './sessionId';
+import { releaseWebSocket } from './ws.release';
 
-export { getOrCreateSessionId };
+export { getOrCreateSessionId, releaseWebSocket };
 
 export type WsMessageHandler = (msg: WsMessage) => void;
 export type WsOpenHandler = () => void;
@@ -234,7 +235,7 @@ export class WebSocketClient {
     this.intentionallyClosed = true;
     this.clearReconnectTimer();
     if (this.ws) {
-      this.ws.close();
+      releaseWebSocket(this.ws);
       this.ws = null;
     }
   }

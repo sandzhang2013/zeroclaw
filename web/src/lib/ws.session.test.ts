@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { getOrCreateSessionId } from './sessionId.ts';
 import { generateUUID } from './uuid.ts';
+import { releaseWebSocket } from './ws.release.ts';
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -81,4 +82,39 @@ test('leftover unscoped UUID is claimed even if the first user already minted on
 
 test('generateUUID is RFC 4122 version 4', () => {
   assert.match(generateUUID(), UUID_RE);
+});
+
+test('releaseWebSocket does not close() while CONNECTING', () => {
+  let closed = 0;
+  const socket = {
+    readyState: 0,
+    onopen: null as ((ev?: Event) => void) | null,
+    onclose: () => {},
+    onerror: () => {},
+    onmessage: () => {},
+    close() {
+      closed += 1;
+    },
+  };
+  releaseWebSocket(socket as unknown as WebSocket);
+  assert.equal(closed, 0);
+  socket.onopen?.();
+  assert.equal(closed, 1);
+});
+
+test('releaseWebSocket closes an OPEN socket immediately', () => {
+  let closed = 0;
+  const socket = {
+    readyState: 1,
+    onopen: () => {},
+    onclose: () => {},
+    onerror: () => {},
+    onmessage: () => {},
+    close() {
+      closed += 1;
+    },
+  };
+  releaseWebSocket(socket as unknown as WebSocket);
+  assert.equal(closed, 1);
+  assert.equal(socket.onopen, null);
 });

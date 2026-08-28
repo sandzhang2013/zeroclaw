@@ -508,6 +508,7 @@ export default function ChatWorkspace({
                 key={session.id}
                 agentAlias={session.agentAlias}
                 userId={userId}
+                userRole={userRole}
                 taskId={session.taskId === '__default__' ? undefined : session.taskId}
               >
                 <div

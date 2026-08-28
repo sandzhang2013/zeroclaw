@@ -6,6 +6,7 @@ import { generateUUID } from '@/lib/uuid';
 import { t } from '@/lib/i18n';
 import { getProp, putProp, resolveAliasSource, listProps, getStatus, getSessionMessages, abortSession, deleteSession } from '@/lib/api';
 import { primeModelProviderCatalog, modelProviderDisplayName } from '@/lib/modelProviders';
+import { canOpenDashboard } from '@/lib/platformUser';
 import { resolveAvailableModels, scanConfiguredModelLabels } from './modelPicker.logic';
 import type { ToolCallInfo } from '@/components/ToolCallCard';
 import { resolveToolResultIndex } from '@/lib/toolCardMatch';
@@ -127,10 +128,12 @@ export interface AgentProviderProps {
   /** Frozen workbench identity. Used only as a localStorage key prefix so
    * mock-user switches do not reuse another user's gateway session UUID. */
   userId?: string;
+  /** When set, ops-only `/api/config/*` is skipped unless the role is 运维. */
+  userRole?: string;
   children: React.ReactNode;
 }
 
-export function AgentProvider({ agentAlias, taskId, userId, children }: AgentProviderProps) {
+export function AgentProvider({ agentAlias, taskId, userId, userRole, children }: AgentProviderProps) {
   const sessionIdRef = useRef(
     taskId ? resolveTaskSessionId(agentAlias, taskId) ?? getOrCreateSessionId(agentAlias, userId)
             : getOrCreateSessionId(agentAlias, userId),
@@ -168,9 +171,12 @@ export function AgentProvider({ agentAlias, taskId, userId, children }: AgentPro
 
   // Prime the model-provider catalog once so error formatting can resolve
   // display names from the backend registry rather than a local shadow list.
+  // `/api/config/catalog` is ops-only under trusted_proxy; skip it on the
+  // workbench for 普通用户 / 高级用户 (browser would log 403).
   useEffect(() => {
+    if (userRole !== undefined && !canOpenDashboard(userRole)) return;
     void primeModelProviderCatalog();
-  }, []);
+  }, [userRole]);
 
   // Hydrate chat from server (preferred) or localStorage fallback
   useEffect(() => {
@@ -609,13 +615,19 @@ export function AgentProvider({ agentAlias, taskId, userId, children }: AgentPro
 
   // WebSocket bound to the configured agent. Re-keys (via the outer
   // <AgentProvider key={alias}>) when the alias changes.
+  // Connect on the next macrotask so React Strict Mode's dev double-invoke
+  // can unmount the first effect before handshake starts (Chrome otherwise
+  // logs "WebSocket is closed before the connection is established").
   useEffect(() => {
     const ws = new WebSocketClient({ agentAlias, sessionId: sessionIdRef.current });
     attachSocketCallbacks(ws);
-    ws.connect();
     wsRef.current = ws;
+    const timer = window.setTimeout(() => {
+      ws.connect();
+    }, 0);
 
     return () => {
+      window.clearTimeout(timer);
       ws.disconnect();
     };
   }, [attachSocketCallbacks, agentAlias]);
@@ -635,6 +647,14 @@ export function AgentProvider({ agentAlias, taskId, userId, children }: AgentPro
         if (cancelled) return;
 
         let activeModel = status.model;
+
+        const allowOpsConfig = userRole === undefined || canOpenDashboard(userRole);
+        if (!allowOpsConfig) {
+          setCurrentModel(activeModel);
+          setAvailableModels(activeModel ? [activeModel] : []);
+          setModelLabels({});
+          return;
+        }
 
         // Per-agent model (multi-agent / schema V3). The old global `model` /
         // `default_model` keys were removed in V3, so the source of truth is THIS
@@ -703,7 +723,7 @@ export function AgentProvider({ agentAlias, taskId, userId, children }: AgentPro
     return () => {
       cancelled = true;
     };
-  }, [modelInfoVersion, agentAlias]);
+  }, [modelInfoVersion, agentAlias, userRole]);
 
   const sendMessage = useCallback((content: string, autonomy?: 'readonly' | 'supervised' | 'full') => {
     if (!wsRef.current?.connected) return;

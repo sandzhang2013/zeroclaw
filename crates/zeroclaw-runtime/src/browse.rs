@@ -212,7 +212,19 @@ pub fn list_agent_workspace_for_user(
     raw: &str,
     user_id: Option<&str>,
 ) -> Result<BrowseResult, BrowseError> {
-    let mut result = list_under_root(&agent_root(config, agent_alias, user_id), raw)?;
+    let mut result = match list_under_root(&agent_root(config, agent_alias, user_id), raw) {
+        Ok(result) => result,
+        // Session dirs are created on first write. The workbench artifacts
+        // pane lists `sessions/<id>` as soon as a chat exists, so a missing
+        // path is an empty folder, not an error.
+        Err(BrowseError::NotFound(_)) if is_session_list_path(raw) => {
+            return Ok(BrowseResult {
+                path: raw.trim_matches('/').to_string(),
+                entries: Vec::new(),
+            });
+        }
+        Err(err) => return Err(err),
+    };
     if raw.trim_matches('/').is_empty() {
         for entry in &mut result.entries {
             entry.protected = match entry.kind {
@@ -223,6 +235,11 @@ pub fn list_agent_workspace_for_user(
         }
     }
     Ok(result)
+}
+
+fn is_session_list_path(raw: &str) -> bool {
+    let trimmed = raw.trim_matches('/');
+    trimmed == "sessions" || trimmed.starts_with("sessions/")
 }
 
 /// Create a directory under the agent's workspace. Idempotent — if the
@@ -933,6 +950,25 @@ mod tests {
         )
         .unwrap();
         assert_eq!(read.bytes, b"ok");
+    }
+
+    #[test]
+    fn list_missing_session_dir_is_empty_not_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = Config {
+            config_path: dir.path().join("config.toml"),
+            ..Config::default()
+        };
+        let missing = list_agent_workspace_for_user(
+            &cfg,
+            "alpha",
+            "sessions/46c8dafe-9f16-4680-85f0-025000bd2fa5",
+            Some("ops"),
+        )
+        .unwrap();
+        assert!(missing.entries.is_empty());
+        let still_missing = list_agent_workspace_for_user(&cfg, "alpha", "notes", Some("ops"));
+        assert!(matches!(still_missing, Err(BrowseError::NotFound(_))));
     }
 
     #[test]

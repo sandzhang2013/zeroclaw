@@ -129,6 +129,8 @@ fn workspace_scope(state: &AppState, headers: &HeaderMap) -> Result<Option<Strin
 /// `GET /api/agents/{alias}/workspace/list?path=<rel>` — one level under
 /// the caller's workspace (`users/<id>/...` when identity is frozen,
 /// otherwise `<install>/agents/{alias}/workspace/<rel>`).
+/// Missing `sessions/` paths return an empty listing: those dirs are
+/// created on first write, and the workbench lists them for every chat.
 pub async fn handle_agent_workspace_list(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -501,7 +503,9 @@ mod tests {
             }),
         )
         .await;
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = response_json(response).await;
+        assert_eq!(json["entries"].as_array().unwrap().len(), 0);
     }
 
     #[tokio::test]
