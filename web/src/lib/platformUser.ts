@@ -155,7 +155,15 @@ export function clearMockUser(): void {
 }
 
 export function resolveWorkbenchUser(): PlatformUser | null {
-  return readInjectedUser() ?? loadMockUser();
+  const injected = readInjectedUser();
+  if (injected) return switchableWorkbenchUser(injected);
+  return loadMockUser();
+}
+
+/** Catalog mock ids stay switchable even when the BFF HTML-injected them. */
+export function switchableWorkbenchUser(user: PlatformUser): PlatformUser {
+  const catalog = MOCK_USERS.find((u) => u.userId === user.userId);
+  return catalog ? { ...catalog, source: 'mock' } : user;
 }
 
 declare global {

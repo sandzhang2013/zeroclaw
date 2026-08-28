@@ -50,8 +50,7 @@ export const Router = () => (
   <Suspense fallback={<RouteFallback />}>
     <Routes>
       <Route path="/" element={<Navigate to="/workbench" replace />} />
-      <Route path="/workbench" element={<WorkbenchPage />} />
-      <Route path="/workbench/:alias" element={<WorkbenchPage />} />
+      <Route path="/workbench/:alias?" element={<WorkbenchPage />} />
       <Route element={<OpsGate />}>
         <Route element={<Layout />}>
           <Route path="/dashboard" element={<Dashboard />} />

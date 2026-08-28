@@ -7,6 +7,7 @@ import {
   parseMockUserCookie,
   parsePlatformPayload,
   roleI18nKey,
+  switchableWorkbenchUser,
   workspaceStorageId,
 } from './platformUser.ts';
 
@@ -33,6 +34,9 @@ test('parsePlatformPayload maps BFF roles and skips login identity into session_
   assert.equal(user.source, 'platform');
   assert.equal(user.role, '高级用户');
   assert.equal(user.userId.includes(':'), false);
+  const mock = switchableWorkbenchUser(user);
+  assert.equal(mock.source, 'mock');
+  assert.equal(mock.displayName, '刘洋');
 });
 
 test('normalizeRole and storage id stay UI-only', () => {
@@ -106,4 +110,18 @@ test('parseMockUserCookie reads among other cookies and decodes URI', () => {
   assert.equal(parseMockUserCookie('zeroclaw_mock_user=ops')?.role, '运维');
   assert.equal(canOpenDashboard(undefined), false);
   assert.equal(canOpenDashboard('admin'), false);
+});
+
+test('catalog injects stay mock so the sidebar can return to the picker', () => {
+  const injected = parsePlatformPayload({
+    userId: 'chenmin',
+    displayName: '陈敏',
+    role: '普通用户',
+  });
+  assert.ok(injected);
+  assert.equal(injected.source, 'platform');
+  assert.equal(switchableWorkbenchUser(injected).source, 'mock');
+  const sso = parsePlatformPayload({ userId: 'alice', displayName: '爱丽丝' });
+  assert.ok(sso);
+  assert.equal(switchableWorkbenchUser(sso).source, 'platform');
 });

@@ -686,14 +686,15 @@ async fn chinese_role_header_is_utf8_bytes() {
 }
 
 #[tokio::test]
-async fn upstream_ws_forwards_chinese_identity_headers() {
-    use crate::identity::{Identity, ROLE_NORMAL};
-    use crate::proxy::connect_upstream_ws;
+async fn ws_proxy_splices_chinese_identity_and_frames() {
     use axum::extract::State;
     use axum::extract::ws::{Message, WebSocketUpgrade};
     use axum::routing::get;
     use futures_util::StreamExt;
     use std::sync::Mutex;
+    use tokio_tungstenite::connect_async;
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    use tokio_tungstenite::tungstenite::http::header::SEC_WEBSOCKET_PROTOCOL;
     use tokio_tungstenite::tungstenite::Message as WsMessage;
 
     #[derive(Clone)]
@@ -708,37 +709,41 @@ async fn upstream_ws_forwards_chinese_identity_headers() {
         let region = header_text(&headers, HEADER_USER_REGION);
         let org = header_text(&headers, HEADER_USER_ORG);
         *cap.0.lock().expect("lock") = Some((role, region, org));
-        ws.on_upgrade(|mut socket| async move {
+        ws.protocols(["zeroclaw.v1"]).on_upgrade(|mut socket| async move {
             let _ = socket.send(Message::Text("ok".into())).await;
         })
     }
 
     let cap = Cap(Arc::new(Mutex::new(None)));
-    let app = Router::new()
-        .route("/hbcdcagent/ws", get(handler))
+    let upstream = Router::new()
+        .route("/hbcdcagent/ws/chat", get(handler))
         .with_state(cap.clone());
-    let (base, handle) = serve(app).await;
-    let uri: axum::http::Uri = base.parse().expect("uri");
-    let host = format!(
-        "{}:{}",
-        uri.host().expect("host"),
-        uri.port_u16().expect("port")
+    let (uc, uc_h) = start_user_center(MockUserCenter::ok()).await;
+    let (up, up_h) = serve(upstream).await;
+    let mut cfg = Config::for_test(&uc, &up);
+    cfg.local_mock = true;
+    let (bff, bff_h) = serve(router(cfg).expect("router")).await;
+    let ws_url = format!(
+        "{}/hbcdcagent/ws/chat?agent=default",
+        bff.replacen("http://", "ws://", 1)
     );
-    let id = Identity {
-        user_id: "chenmin".into(),
-        display_name: Some("陈敏".into()),
-        role: ROLE_NORMAL.into(),
-        region: Some("武汉市".into()),
-        org: Some("武汉市疾病预防控制中心".into()),
-    };
-    let mut ws = connect_upstream_ws(&host, "/hbcdcagent/ws", "bff-secret", &id)
-        .await
-        .expect("connect");
+    let mut req = ws_url.into_client_request().expect("req");
+    req.headers_mut().insert(
+        axum::http::header::COOKIE,
+        "zeroclaw_mock_user=chenmin".parse().expect("cookie"),
+    );
+    req.headers_mut().insert(
+        SEC_WEBSOCKET_PROTOCOL,
+        "zeroclaw.v1".parse().expect("proto"),
+    );
+    let (mut ws, _) = connect_async(req).await.expect("connect");
     let msg = ws.next().await.expect("msg").expect("frame");
     assert_eq!(msg, WsMessage::Text("ok".into()));
     let got = cap.0.lock().expect("lock").clone().expect("headers");
     assert_eq!(got.0, "普通用户");
     assert_eq!(got.1, "武汉市");
     assert_eq!(got.2, "武汉市疾病预防控制中心");
-    handle.abort();
+    bff_h.abort();
+    up_h.abort();
+    uc_h.abort();
 }

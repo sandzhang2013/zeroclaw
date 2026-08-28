@@ -62,15 +62,13 @@ export const ThemeContext = createContext<ThemeContextValue>({
 
 const loadedFonts: Set<string> = new Set();
 
-function loadGoogleFont(family: string, weights: string = '400;500;600') {
+function loadGoogleFont(family: string, _weights: string = '400;500;600') {
   const id = `gfont-${family.replace(/\s+/g, '-').toLowerCase()}`;
   if (loadedFonts.has(id)) return;
   loadedFonts.add(id);
-  const link = document.createElement('link');
-  link.id = id;
-  link.rel = 'stylesheet';
-  link.href = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(family)}:wght@${weights}&display=swap`;
-  document.head.appendChild(link);
+  // Gateway CSP is `style-src 'self' 'unsafe-inline'` (no Google). Injecting
+  // fonts.googleapis.com only fills the console; stacks already fall back to
+  // system mono/sans. Do not fetch remote stylesheets.
 }
 
 function loadUiFont(font: string) {

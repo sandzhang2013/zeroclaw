@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { GripVertical } from 'lucide-react';
 import { AgentProvider } from '@/contexts/AgentContext';
 import { AgentChatInner, type AgentChatStatus } from '@/pages/AgentChat';
@@ -14,7 +15,6 @@ import {
   resolveTaskSessionId,
 } from '@/lib/ws';
 import { generateUUID } from '@/lib/uuid';
-import { basePath } from '@/lib/basePath';
 import { t } from '@/lib/i18n';
 import {
   saveWorkbenchAutonomy,
@@ -185,6 +185,8 @@ export default function ChatWorkspace({
   userRegion,
   onSwitchUser,
 }: ChatWorkspaceProps) {
+  const navigate = useNavigate();
+  const location = useLocation();
   const persisted = useRef<Partial<PersistedStateV3>>(loadPersisted(userId));
 
   const [folders, setFolders] = useState<WorkbenchFolder[]>(() => {
@@ -340,11 +342,11 @@ export default function ChatWorkspace({
   }, [initialAlias, userId]);
 
   useEffect(() => {
-    const target = `${basePath}/workbench/${encodeURIComponent(activeAlias)}`;
-    if (window.location.pathname !== target) {
-      try { window.history.replaceState(window.history.state, '', target); } catch { /* noop */ }
+    const target = `/workbench/${encodeURIComponent(activeAlias)}`;
+    if (location.pathname !== target) {
+      navigate(target, { replace: true });
     }
-  }, [activeAlias]);
+  }, [activeAlias, location.pathname, navigate]);
 
   const selectSession = useCallback((sessionId: string) => {
     setActiveSessionId(sessionId);

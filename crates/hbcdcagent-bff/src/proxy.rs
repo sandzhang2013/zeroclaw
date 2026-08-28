@@ -7,19 +7,16 @@ use crate::session::{SessionStore, cookie_value, sid_from_cookie_header};
 use crate::user_center::UserCenter;
 use anyhow::Result;
 use axum::body::{Body, to_bytes};
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{FromRequest, Request, State};
+use axum::extract::{Request, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Redirect, Response};
-use futures_util::{SinkExt, StreamExt};
+use hyper::upgrade::OnUpgrade;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use serde::Serialize;
 use std::sync::Arc;
+use tokio::io::copy_bidirectional;
 use tokio::net::TcpStream;
-use tokio_tungstenite::tungstenite;
-use tokio_tungstenite::tungstenite::protocol::Role;
-use tokio_tungstenite::WebSocketStream;
 
 const MAX_HTML_INJECT_BYTES: usize = 2 * 1024 * 1024;
 
@@ -120,7 +117,7 @@ async fn forward_http(
     if let Ok(host) = HeaderValue::from_str(&upstream_host(&state.cfg.upstream)) {
         req.headers_mut().insert(axum::http::header::HOST, host);
     }
-    remove_hop_by_hop(req.headers_mut());
+    remove_hop_by_hop(req.headers_mut(), false);
     match state.http.request(req).await {
         Ok(resp) => {
             let resp = resp.map(Body::new).into_response();
@@ -236,39 +233,51 @@ async fn inject_platform_user(resp: Response, identity: &Identity) -> Response {
     Response::from_parts(parts, Body::from(injected))
 }
 
-async fn proxy_ws(state: Arc<AppState>, req: Request) -> Response {
-    let identity = match identity_from_request(&state, req.headers()) {
-        Some(id) => id,
-        None => return unauthenticated(&state.cfg, req.uri().path()),
+async fn proxy_ws(state: Arc<AppState>, mut req: Request) -> Response {
+    let Some(identity) = identity_from_request(&state, req.headers()) else {
+        return unauthenticated(&state.cfg, req.uri().path());
     };
     let target = match rewrite_uri(&state.cfg.upstream, req.uri()) {
         Ok(u) => u,
         Err(_) => return (StatusCode::BAD_GATEWAY, "bad upstream URI").into_response(),
     };
     let host = upstream_host(&state.cfg.upstream);
+    let client_upgrade = req.extensions_mut().remove::<OnUpgrade>();
+    strip_identity(req.headers_mut());
+    inject_identity(
+        req.headers_mut(),
+        &state.cfg.trusted_proxy_secret,
+        &identity,
+    );
+    if let Ok(value) = HeaderValue::from_str(&host) {
+        req.headers_mut().insert(header::HOST, value);
+    }
+    remove_hop_by_hop(req.headers_mut(), true);
     let path = target
         .path_and_query()
-        .map(|pq| pq.as_str().to_string())
-        .unwrap_or_else(|| "/".to_string());
-    let secret = state.cfg.trusted_proxy_secret.clone();
-    let upgrade = match WebSocketUpgrade::from_request(req, &()).await {
-        Ok(u) => u,
-        Err(_) => return (StatusCode::BAD_REQUEST, "expected websocket").into_response(),
+        .map(|pq| pq.as_str())
+        .unwrap_or("/");
+    *req.uri_mut() = match path.parse() {
+        Ok(uri) => uri,
+        Err(_) => return (StatusCode::BAD_GATEWAY, "bad upstream URI").into_response(),
     };
-    upgrade
-        .on_upgrade(move |client| pump_ws(client, host, path, secret, identity))
-        .into_response()
+    match splice_upstream_ws(&host, req, client_upgrade).await {
+        Ok(resp) => resp,
+        Err(err) => {
+            tracing::warn!(error = %err, "upstream websocket failed");
+            (StatusCode::BAD_GATEWAY, err).into_response()
+        }
+    }
 }
 
-/// Handshake via hyper so `X-User-Role` / region / org can be raw UTF-8.
-/// `tungstenite` `connect_async` calls `HeaderValue::to_str()` and fails with
-/// `UTF-8 encoding error` on Chinese identity headers.
-pub(crate) async fn connect_upstream_ws(
+/// Byte-splice the HTTP upgrade. Do not terminate WebSocket in the BFF:
+/// re-encoding frames and `HeaderValue::to_str()` on Chinese identity
+/// headers both produced browser close code 1006.
+async fn splice_upstream_ws(
     host: &str,
-    path: &str,
-    secret: &str,
-    identity: &Identity,
-) -> std::result::Result<WebSocketStream<TokioIo<hyper::upgrade::Upgraded>>, String> {
+    req: Request,
+    client_upgrade: Option<OnUpgrade>,
+) -> std::result::Result<Response, String> {
     let stream = TcpStream::connect(host)
         .await
         .map_err(|err| format!("tcp {host}: {err}"))?;
@@ -281,83 +290,32 @@ pub(crate) async fn connect_upstream_ws(
             tracing::debug!(error = %err, "upstream ws http conn closed");
         }
     });
-    let path = if path.is_empty() { "/" } else { path };
-    let mut req = Request::builder()
-        .method(axum::http::Method::GET)
-        .uri(path)
-        .header(header::HOST, host)
-        .header(header::CONNECTION, "Upgrade")
-        .header(header::UPGRADE, "websocket")
-        .header("Sec-WebSocket-Version", "13")
-        .header(
-            "Sec-WebSocket-Key",
-            tungstenite::handshake::client::generate_key(),
-        )
-        .body(Body::empty())
-        .map_err(|err| format!("ws request: {err}"))?;
-    inject_identity(req.headers_mut(), secret, identity);
-    let res = sender
+    let mut res = sender
         .send_request(req)
         .await
         .map_err(|err| format!("ws send: {err}"))?;
     if res.status() != StatusCode::SWITCHING_PROTOCOLS {
-        return Err(format!("ws status {}", res.status()));
+        return Ok(res.map(Body::new).into_response());
     }
-    let upgraded = hyper::upgrade::on(res)
-        .await
-        .map_err(|err| format!("ws upgrade: {err}"))?;
-    Ok(WebSocketStream::from_raw_socket(TokioIo::new(upgraded), Role::Client, None).await)
-}
-
-async fn pump_ws(client: WebSocket, host: String, path: String, secret: String, identity: Identity) {
-    let upstream_ws = match connect_upstream_ws(&host, &path, &secret, &identity).await {
-        Ok(ws) => ws,
-        Err(err) => {
-            tracing::warn!(error = %err, "upstream websocket failed");
-            return;
-        }
-    };
-    let (mut client_sink, mut client_stream) = client.split();
-    let (mut up_sink, mut up_stream) = upstream_ws.split();
-    let c2u = async {
-        while let Some(Ok(msg)) = client_stream.next().await {
-            if up_sink.send(to_tungstenite(msg)).await.is_err() {
-                break;
+    let upstream_upgrade = hyper::upgrade::on(&mut res);
+    if let Some(client_upgrade) = client_upgrade {
+        tokio::spawn(async move {
+            match tokio::join!(client_upgrade, upstream_upgrade) {
+                (Ok(client), Ok(upstream)) => {
+                    let mut client = TokioIo::new(client);
+                    let mut upstream = TokioIo::new(upstream);
+                    let _ = copy_bidirectional(&mut client, &mut upstream).await;
+                }
+                (Err(err), _) => {
+                    tracing::debug!(error = %err, "client ws upgrade failed");
+                }
+                (_, Err(err)) => {
+                    tracing::debug!(error = %err, "upstream ws upgrade failed");
+                }
             }
-        }
-    };
-    let u2c = async {
-        while let Some(Ok(msg)) = up_stream.next().await {
-            if client_sink.send(from_tungstenite(msg)).await.is_err() {
-                break;
-            }
-        }
-    };
-    tokio::select! {
-        _ = c2u => {}
-        _ = u2c => {}
+        });
     }
-}
-
-fn to_tungstenite(msg: Message) -> tungstenite::Message {
-    match msg {
-        Message::Text(t) => tungstenite::Message::Text(t.to_string().into()),
-        Message::Binary(b) => tungstenite::Message::Binary(b.to_vec().into()),
-        Message::Ping(b) => tungstenite::Message::Ping(b.to_vec().into()),
-        Message::Pong(b) => tungstenite::Message::Pong(b.to_vec().into()),
-        Message::Close(_) => tungstenite::Message::Close(None),
-    }
-}
-
-fn from_tungstenite(msg: tungstenite::Message) -> Message {
-    match msg {
-        tungstenite::Message::Text(t) => Message::Text(t.to_string().into()),
-        tungstenite::Message::Binary(b) => Message::Binary(b.to_vec().into()),
-        tungstenite::Message::Ping(b) => Message::Ping(b.to_vec().into()),
-        tungstenite::Message::Pong(b) => Message::Pong(b.to_vec().into()),
-        tungstenite::Message::Close(_) => Message::Close(None),
-        tungstenite::Message::Frame(_) => Message::Pong(vec![].into()),
-    }
+    Ok(res.map(Body::new).into_response())
 }
 
 fn unauthenticated(cfg: &Config, path: &str) -> Response {
@@ -403,7 +361,8 @@ pub(crate) fn rewrite_uri(upstream: &str, incoming: &Uri) -> Result<Uri, ()> {
         .map_err(|_| ())
 }
 
-pub(crate) fn ws_upstream_url(upstream: &str, incoming: &Uri) -> Result<String, ()> {
+#[cfg(test)]
+fn ws_upstream_url(upstream: &str, incoming: &Uri) -> std::result::Result<String, ()> {
     let http_uri = rewrite_uri(upstream, incoming)?;
     let raw = http_uri.to_string();
     if let Some(rest) = raw.strip_prefix("https://") {
@@ -428,7 +387,7 @@ fn upstream_host(upstream: &str) -> String {
         .unwrap_or_else(|| "127.0.0.1:42617".to_string())
 }
 
-fn remove_hop_by_hop(headers: &mut HeaderMap) {
+fn remove_hop_by_hop(headers: &mut HeaderMap, keep_upgrade: bool) {
     const HOP: &[&str] = &[
         "connection",
         "keep-alive",
@@ -439,6 +398,9 @@ fn remove_hop_by_hop(headers: &mut HeaderMap) {
         "transfer-encoding",
     ];
     for name in HOP {
+        if keep_upgrade && *name == "connection" {
+            continue;
+        }
         if let Ok(n) = HeaderName::from_bytes(name.as_bytes()) {
             headers.remove(n);
         }

@@ -84,6 +84,7 @@ local mock and user-center SSO run `zeroclaw daemon` plus
 `/auth/mock?user=chenmin`; SSO mode loads `config/.env` and leaves mock
 off. Do not point those scripts at a Vite source tree.
 
-WebSocket proxying uses a hyper HTTP/1 upgrade so Chinese
-`X-User-Role` / region / org bytes reach the daemon. `tungstenite`
-`connect_async` rejects those headers (`UTF-8 encoding error`).
+WebSocket proxying splices the HTTP upgrade onto the daemon so Chinese
+`X-User-Role` / region / org bytes and `zeroclaw.v1` pass through.
+Terminating the socket in the BFF (tungstenite `connect_async`) produced
+browser close code 1006 (`UTF-8 encoding error` or dropped frames).
