@@ -61,11 +61,19 @@ implementations; they are not run on the workbench host.
   `X-User-Region` is the tenant `cityCode` from `/console/tenant/detail`.
 - In-memory sessions are single-instance; a restart requires a new
   `verifyCode` callback.
+- `HBCDCAGENT_BFF_UPSTREAM` must be an `http` origin. Parse failures and
+  `https` abort startup; the proxy does not fall back to
+  `127.0.0.1:42617`.
+- BFF-initiated SSO binds a `state` cookie to the callback. Portal
+  `verifyCode`-only callbacks stay allowed until the user-center binds
+  the code to the initiating browser.
 
 ## Acceptance
 
 - `cargo test -p hbcdcagent-bff` and crate clippy pass.
 - A callback with `verifyCode` sets the session cookie and redirects to
-  `/hbcdcagent/workbench` without the code in the URL.
+  `/hbcdcagent/workbench` without the code in the URL. A BFF-issued
+  `state` cookie must match the callback `state` query when either is
+  present.
 - Forged `X-User-*` from the browser do not survive the proxy.
 - The daemon is not reachable as the user entry port.

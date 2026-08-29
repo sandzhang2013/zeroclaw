@@ -4,7 +4,10 @@ use crate::identity::{
     HEADER_AUTH_SECRET, HEADER_USER_ID, HEADER_USER_ORG, HEADER_USER_REGION, HEADER_USER_ROLE,
     IDENTITY_HEADERS, Identity, MOCK_COOKIE_NAME, mock_user, normalize_user_id,
 };
-use crate::session::{SessionStore, cookie_value, sid_from_cookie_header};
+use crate::session::{
+    STATE_TTL, SessionStore, append_set_cookie, cookie_value, sid_from_cookie_header,
+    state_cookie_header,
+};
 use crate::user_center::UserCenter;
 use anyhow::Result;
 use axum::body::{Body, to_bytes};
@@ -23,6 +26,7 @@ const MAX_HTML_INJECT_BYTES: usize = 2 * 1024 * 1024;
 
 pub type HttpClient = Client<hyper_util::client::legacy::connect::HttpConnector, Body>;
 
+/// HTTP-only. `Config::from_env` rejects `https` upstreams so this is not a silent TLS miss.
 pub fn http_client() -> HttpClient {
     Client::builder(TokioExecutor::new()).build_http()
 }
@@ -39,10 +43,10 @@ pub fn identity_from_request(state: &AppState, headers: &HeaderMap) -> Option<Id
     let cookie = headers
         .get(axum::http::header::COOKIE)
         .and_then(|v| v.to_str().ok());
-    if let Some(sid) = sid_from_cookie_header(cookie) {
-        if let Some(id) = state.sessions.get(&sid) {
-            return Some(id);
-        }
+    if let Some(sid) = sid_from_cookie_header(cookie)
+        && let Some(id) = state.sessions.get(&sid)
+    {
+        return Some(id);
     }
     mock_identity(&state.cfg, cookie)
 }
@@ -87,6 +91,12 @@ fn requires_login(path: &str) -> bool {
     path.contains("/api") || path.contains("/ws") || path.contains("/admin")
 }
 
+/// Daemon public snapshot. Nginx only forwards `/hbcdcagent`, so this must
+/// not require a BFF session and must not be answered by the BFF itself.
+fn is_public_upstream(path: &str) -> bool {
+    path == "/hbcdcagent/health" || path == "/health"
+}
+
 async fn proxy_http(state: Arc<AppState>, mut req: Request) -> Result<Response, Response> {
     let identity = identity_from_request(&state, req.headers());
     strip_identity(req.headers_mut());
@@ -99,7 +109,9 @@ async fn proxy_http(state: Arc<AppState>, mut req: Request) -> Result<Response, 
             );
             forward_http(&state, req, Some(&identity)).await
         }
-        None if state.cfg.local_mock && !requires_login(req.uri().path()) => {
+        None if is_public_upstream(req.uri().path())
+            || (state.cfg.local_mock && !requires_login(req.uri().path())) =>
+        {
             // SPA + static assets must load so the mock picker can set the cookie.
             forward_http(&state, req, None).await
         }
@@ -115,7 +127,7 @@ async fn forward_http(
     let target = rewrite_uri(&state.cfg.upstream, req.uri())
         .map_err(|_| (StatusCode::BAD_GATEWAY, "bad upstream URI").into_response())?;
     *req.uri_mut() = target;
-    if let Ok(host) = HeaderValue::from_str(&upstream_host(&state.cfg.upstream)) {
+    if let Ok(host) = HeaderValue::from_str(&state.cfg.upstream_host) {
         req.headers_mut().insert(axum::http::header::HOST, host);
     }
     remove_hop_by_hop(req.headers_mut(), false);
@@ -242,7 +254,7 @@ async fn proxy_ws(state: Arc<AppState>, mut req: Request) -> Response {
         Ok(u) => u,
         Err(_) => return (StatusCode::BAD_GATEWAY, "bad upstream URI").into_response(),
     };
-    let host = upstream_host(&state.cfg.upstream);
+    let host = state.cfg.upstream_host.as_str();
     let client_upgrade = req.extensions_mut().remove::<OnUpgrade>();
     strip_identity(req.headers_mut());
     inject_identity(
@@ -250,7 +262,7 @@ async fn proxy_ws(state: Arc<AppState>, mut req: Request) -> Response {
         &state.cfg.trusted_proxy_secret,
         &identity,
     );
-    if let Ok(value) = HeaderValue::from_str(&host) {
+    if let Ok(value) = HeaderValue::from_str(host) {
         req.headers_mut().insert(header::HOST, value);
     }
     remove_hop_by_hop(req.headers_mut(), true);
@@ -259,7 +271,7 @@ async fn proxy_ws(state: Arc<AppState>, mut req: Request) -> Response {
         Ok(uri) => uri,
         Err(_) => return (StatusCode::BAD_GATEWAY, "bad upstream URI").into_response(),
     };
-    match splice_upstream_ws(&host, req, client_upgrade).await {
+    match splice_upstream_ws(host, req, client_upgrade).await {
         Ok(resp) => resp,
         Err(err) => {
             tracing::warn!(error = %err, "upstream websocket failed");
@@ -320,8 +332,16 @@ fn unauthenticated(cfg: &Config, path: &str) -> Response {
     if requires_login(path) {
         return (StatusCode::UNAUTHORIZED, "login required").into_response();
     }
-    match cfg.login_redirect() {
-        Some(url) => Redirect::temporary(&url).into_response(),
+    let state = uuid::Uuid::new_v4().to_string();
+    match cfg.login_redirect_with_state(Some(&state)) {
+        Some(url) => {
+            let mut response = Redirect::temporary(&url).into_response();
+            append_set_cookie(
+                &mut response,
+                &state_cookie_header(&state, STATE_TTL, cfg.cookie_secure),
+            );
+            response
+        }
         None => login_error_response(StatusCode::UNAUTHORIZED, cfg, LoginErrorKind::NoLoginEntry),
     }
 }
@@ -370,19 +390,6 @@ fn ws_upstream_url(upstream: &str, incoming: &Uri) -> std::result::Result<String
     } else {
         Ok(raw)
     }
-}
-
-fn upstream_host(upstream: &str) -> String {
-    Uri::try_from(upstream)
-        .ok()
-        .and_then(|u| {
-            let host = u.host()?.to_string();
-            match u.port_u16() {
-                Some(port) => Some(format!("{host}:{port}")),
-                None => Some(host),
-            }
-        })
-        .unwrap_or_else(|| "127.0.0.1:42617".to_string())
 }
 
 fn remove_hop_by_hop(headers: &mut HeaderMap, keep_upgrade: bool) {

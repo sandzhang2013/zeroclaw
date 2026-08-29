@@ -16,6 +16,7 @@ cookie. Do not treat that as production login.
 ```text
 Browser
   → http://<workbench-host>:50001     hbcdcagent-bff
+       GET /hbcdcagent/auth/health
        GET /hbcdcagent/auth/callback?verifyCode=
        /hbcdcagent/*  (HTML, /api, /ws)
           strip client X-User-* / X-Auth-Secret
@@ -28,6 +29,25 @@ Browser
 Register the user-center `redirectUrl` as
 `http://<workbench-host>:50001/hbcdcagent/auth/callback`, not the daemon port and
 not a workbench URL that carries `userId`.
+
+Direct workbench visits redirect to the login URL with a random `state`
+(HttpOnly cookie + query on `redirectUrl`). The callback rejects a
+mismatch. Portal jumps that carry only `verifyCode` (no BFF `state`) still
+succeed: the user-center document treats `verifyCode` as one-time for
+`/sso/code/userInfo`, but does not bind it to the browser that started
+login. That leftover login-CSRF window is the portal path; close it on
+the user-center side if they add a bound `state`.
+
+BFF-owned login routes live under `/hbcdcagent/auth/*` so an nginx
+`location /hbcdcagent` can forward the whole prefix. Probe the BFF
+process at `/hbcdcagent/auth/health` (`ok`). `GET /hbcdcagent/health`
+is the daemon JSON snapshot and is proxied without a session. Session
+cookies use `Path=/hbcdcagent`.
+
+`GET/POST /hbcdcagent/auth/logout` clears the session cookie, the SSO
+`state` cookie, and `zeroclaw_mock_user`. If `USER_CENTER_LOGOUT_URL` is
+set, the browser is sent there; otherwise SSO mode shows a logged-out
+page instead of bouncing back into SSO.
 
 ## Build and run
 
@@ -45,7 +65,8 @@ cookie, `/api/status`): `docs/分析/数智疾控BFF联调手册.md`.
 Required environment (secrets stay out of git and out of
 `~/.zeroclaw/config.toml`):
 
-- `HBCDCAGENT_BFF_UPSTREAM=http://127.0.0.1:42617`
+- `HBCDCAGENT_BFF_UPSTREAM=http://127.0.0.1:42617` (http origin only;
+  https is rejected at startup: the proxy and WebSocket splice are TCP)
 - `HBCDCAGENT_BFF_PUBLIC_ORIGIN=http://<workbench-host>:50001`
 - `ZEROCLAW_gateway__trusted_proxy_secret` (same string as the daemon)
 - `USER_CENTER_BASE_URL`, `USER_CENTER_APP_ID`, `USER_CENTER_APP_KEY`,
@@ -57,7 +78,7 @@ ids: `chenmin`, `liuyang`, `zhoujing`, `ops` (`MOCK_USERS` in
 `crates/hbcdcagent-bff/src/identity.rs`). Open
 `/hbcdcagent/auth/mock?user=chenmin` to set the cookie, or load `/hbcdcagent/workbench`
 without a cookie to reach the SPA picker. API and WebSocket still return
-401 until a cookie is present. Demo only — do not enable in production.
+401 until a cookie is present. Demo only: do not enable in production.
 
 The BFF does not depend on `zeroclaw-*` crates. Sign and SM4 follow
 `docs/集成/用户中心集成工具类/` without executing those Java classes.
@@ -74,9 +95,11 @@ daemon.
 Workbench HTML responses also get a `<head>` script:
 
 `window.__ZEROCLAW_PLATFORM_USER__ = { userId, displayName, role, region, org }`
-(camelCase). The SPA reads this and skips mock login. JSON, API, and
-WebSocket bodies are unchanged. `displayName` is `realName`, then
-`nickName`, then `accountName`, then `userId`.
+(camelCase). The SPA reads this and skips mock login and the device
+pairing gate (also skipped on `/hbcdcagent/workbench` when the gateway
+did not inject `__ZEROCLAW_BASE__`). JSON, API, and WebSocket bodies are
+unchanged. `displayName` is `realName`, then `nickName`, then
+`accountName`, then `userId`.
 
 Delivery-pack start scripts live in `deploy/hbcdcagent/scripts/`. Both
 local mock and user-center SSO run `zeroclaw daemon` plus

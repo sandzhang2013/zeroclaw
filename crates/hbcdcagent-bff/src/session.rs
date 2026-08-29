@@ -1,10 +1,15 @@
+use crate::config::Config;
 use crate::identity::Identity;
+use axum::http::{HeaderValue, header};
+use axum::response::Response;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 pub const COOKIE_NAME: &str = "hbcdcagent_session";
+pub const STATE_COOKIE_NAME: &str = "hbcdcagent_sso_state";
+pub const STATE_TTL: Duration = Duration::from_secs(600);
 
 #[derive(Clone, Debug)]
 struct Entry {
@@ -44,7 +49,8 @@ impl SessionStore {
 
 pub fn cookie_header(sid: &str, max_age: Duration, secure: bool) -> String {
     let mut v = format!(
-        "{COOKIE_NAME}={sid}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}",
+        "{COOKIE_NAME}={sid}; Path={}; HttpOnly; SameSite=Lax; Max-Age={}",
+        Config::PATH_PREFIX,
         max_age.as_secs()
     );
     if secure {
@@ -54,7 +60,10 @@ pub fn cookie_header(sid: &str, max_age: Duration, secure: bool) -> String {
 }
 
 pub fn clear_cookie_header(secure: bool) -> String {
-    let mut v = format!("{COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0");
+    let mut v = format!(
+        "{COOKIE_NAME}=; Path={}; HttpOnly; SameSite=Lax; Max-Age=0",
+        Config::PATH_PREFIX
+    );
     if secure {
         v.push_str("; Secure");
     }
@@ -63,6 +72,55 @@ pub fn clear_cookie_header(secure: bool) -> String {
 
 pub fn sid_from_cookie_header(header: Option<&str>) -> Option<String> {
     cookie_value(header, COOKIE_NAME)
+}
+
+pub fn state_cookie_header(state: &str, max_age: Duration, secure: bool) -> String {
+    cookie_pair(STATE_COOKIE_NAME, state, max_age, secure)
+}
+
+pub fn clear_state_cookie_header(secure: bool) -> String {
+    cookie_pair(STATE_COOKIE_NAME, "", Duration::ZERO, secure)
+}
+
+fn cookie_pair(name: &str, value: &str, max_age: Duration, secure: bool) -> String {
+    let mut v = format!(
+        "{name}={value}; Path={}; HttpOnly; SameSite=Lax; Max-Age={}",
+        Config::PATH_PREFIX,
+        max_age.as_secs()
+    );
+    if secure {
+        v.push_str("; Secure");
+    }
+    v
+}
+
+pub fn append_set_cookie(response: &mut Response, raw: &str) {
+    if let Ok(value) = HeaderValue::from_str(raw) {
+        response.headers_mut().append(header::SET_COOKIE, value);
+    }
+}
+
+/// Portal jumps have neither cookie nor query `state`. BFF-initiated SSO
+/// sets both; they must match. Query without cookie is rejected.
+pub fn sso_state_matches(cookie_header: Option<&str>, query_state: Option<&str>) -> bool {
+    let cookie = cookie_value(cookie_header, STATE_COOKIE_NAME)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let query = query_state
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    if cookie.as_ref().is_some_and(|s| s.len() > 128)
+        || query.as_ref().is_some_and(|s| s.len() > 128)
+    {
+        return false;
+    }
+    match (cookie.as_deref(), query.as_deref()) {
+        (None, None) => true,
+        (Some(_), None) => false,
+        (None, Some(_)) => false,
+        (Some(c), Some(q)) => c == q,
+    }
 }
 
 pub fn cookie_value(header: Option<&str>, name: &str) -> Option<String> {
@@ -123,12 +181,24 @@ mod tests {
     fn cookie_flags() {
         let plain = cookie_header("sid", Duration::from_secs(60), false);
         assert!(plain.contains("HttpOnly"));
+        assert!(plain.contains("Path=/hbcdcagent"));
         assert!(plain.contains("SameSite=Lax"));
         assert!(plain.contains("Max-Age=60"));
         assert!(!plain.contains("Secure"));
         let secure = cookie_header("sid", Duration::from_secs(60), true);
         assert!(secure.contains("Secure"));
         assert!(clear_cookie_header(false).contains("Max-Age=0"));
+        assert!(
+            state_cookie_header("abc", Duration::from_secs(600), false).contains(STATE_COOKIE_NAME)
+        );
+        assert!(sso_state_matches(None, None));
+        assert!(!sso_state_matches(Some("hbcdcagent_sso_state=a"), None));
+        assert!(!sso_state_matches(None, Some("a")));
+        assert!(sso_state_matches(Some("hbcdcagent_sso_state=a"), Some("a")));
+        assert!(!sso_state_matches(
+            Some("hbcdcagent_sso_state=a"),
+            Some("b")
+        ));
     }
 
     #[test]

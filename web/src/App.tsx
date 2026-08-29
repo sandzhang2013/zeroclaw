@@ -17,6 +17,7 @@ import { getAdminPairCode, generatePairCode, PairCodeForbiddenError, getQuicksta
 import { basePath } from "./lib/basePath";
 import { ConfigDraftProvider } from "./lib/draftStore";
 import { setLocale, type Locale } from "./lib/i18n";
+import { shouldSkipPairing } from "./lib/skipPairing";
 import { Router } from "./router/router";
 
 // Locale context
@@ -376,14 +377,15 @@ function AppContent() {
   const [locale, setLocaleState] = useState(loadLocale());
   const draftStore = useDraftStore();
   setLocale(locale as Locale);
-  // Vite workbench uses the local BFF cookie, not device pairing. Skip the
-  // pairing gate in `npm run dev` and on `/workbench` so a LAN origin like
-  // http://192.168.1.107:5174/workbench is not blocked. The gateway dashboard
-  // on :42617 still requires pairing.
-  const skipPairing =
-    import.meta.env.DEV ||
-    location.pathname === "/workbench" ||
-    location.pathname.startsWith("/workbench/");
+  // Vite and BFF workbench use identity, not device pairing. Skip when
+  // `npm run dev`, the path is `/workbench` (with or without `/hbcdcagent`),
+  // or the BFF injected `__ZEROCLAW_PLATFORM_USER__`. Direct daemon
+  // dashboard on :42617 still requires pairing.
+  const skipPairing = shouldSkipPairing({
+    dev: import.meta.env.DEV,
+    pathname: location.pathname,
+    platformUser: window.__ZEROCLAW_PLATFORM_USER__,
+  });
 
   const setAppLocale = (newLocale: string) => {
     setLocaleState(newLocale);

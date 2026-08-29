@@ -20,6 +20,7 @@ web_dist_dir = "/opt/zeroclaw/web/dist"
 uri = "http://<内网deepseek>/v1"
 model = "deepseek-chat"
 api_key = "not-needed"
+context_window = 128000
 
 [providers.models.openai.qwen]
 uri = "http://<内网qwen>/v1"
@@ -47,3 +48,4 @@ allowed_commands = ["python3", "Rscript"]
 excluded_tools = ["web_search", "web_fetch"]
 
 [runtime_profiles.default]
+max_context_tokens = 128000

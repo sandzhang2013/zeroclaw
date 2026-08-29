@@ -67,7 +67,21 @@ pub fn mock_user(user_id: &str) -> Option<&'static MockUser> {
 
 /// Browser-visible cookie (not HttpOnly) so the workbench picker can overwrite it.
 pub fn mock_user_cookie_header(user_id: &str) -> String {
-    format!("{MOCK_COOKIE_NAME}={user_id}; Path=/; SameSite=Lax")
+    format!(
+        "{MOCK_COOKIE_NAME}={user_id}; Path={}; SameSite=Lax",
+        crate::config::Config::PATH_PREFIX
+    )
+}
+
+pub fn clear_mock_cookie_header(secure: bool) -> String {
+    let mut v = format!(
+        "{MOCK_COOKIE_NAME}=; Path={}; SameSite=Lax; Max-Age=0",
+        crate::config::Config::PATH_PREFIX
+    );
+    if secure {
+        v.push_str("; Secure");
+    }
+    v
 }
 
 #[derive(Clone, Debug)]
@@ -150,7 +164,7 @@ mod tests {
         assert_eq!(mock_user("liuyang").expect("adv").role, ROLE_ADVANCED);
         assert_eq!(
             mock_user_cookie_header("chenmin"),
-            "zeroclaw_mock_user=chenmin; Path=/; SameSite=Lax"
+            "zeroclaw_mock_user=chenmin; Path=/hbcdcagent; SameSite=Lax"
         );
     }
 }

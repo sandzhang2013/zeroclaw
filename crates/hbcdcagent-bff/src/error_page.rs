@@ -4,8 +4,10 @@
 //! forward the workbench SPA until a session exists.
 
 use crate::config::Config;
+use crate::session::{STATE_TTL, append_set_cookie, state_cookie_header};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
+use uuid::Uuid;
 
 #[derive(Clone, Copy)]
 pub enum LoginErrorKind {
@@ -13,7 +15,9 @@ pub enum LoginErrorKind {
     ExchangeFailed,
     TenantDetailFailed,
     InvalidUserId,
+    InvalidState,
     NoLoginEntry,
+    LoggedOut,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -71,22 +75,41 @@ impl LoginErrorKind {
                 "登录身份无效",
                 "用户中心已返回账号，但无法用于工作台。对照下面清单：卡住的是进入工作台。",
             ),
+            Self::InvalidState => (
+                "登录校验失败",
+                "回调与发起登录的浏览器不一致（state）。请从工作台重新登录，不要打开别人转发的回调链接。",
+            ),
             Self::NoLoginEntry => (
                 "无法进入工作台",
                 "本地模拟登录已关闭。对照下面清单补齐用户中心配置后，重新打开工作台。",
+            ),
+            Self::LoggedOut => (
+                "已退出登录",
+                "工作台会话已清除。若点「重新登录」后又自动进入，需要配置 USER_CENTER_LOGOUT_URL。",
             ),
         }
     }
 }
 
 pub fn login_error_response(status: StatusCode, cfg: &Config, kind: LoginErrorKind) -> Response {
-    let html = render(cfg, kind);
-    (
+    let state = cfg
+        .login_redirect()
+        .is_some()
+        .then(|| Uuid::new_v4().to_string());
+    let html = render(cfg, kind, state.as_deref());
+    let mut response = (
         status,
         [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
         html,
     )
-        .into_response()
+        .into_response();
+    if let Some(state) = state {
+        append_set_cookie(
+            &mut response,
+            &state_cookie_header(&state, STATE_TTL, cfg.cookie_secure),
+        );
+    }
+    response
 }
 
 fn missing_login_env(cfg: &Config) -> Vec<&'static str> {
@@ -129,13 +152,17 @@ fn checklist(cfg: &Config, kind: LoginErrorKind) -> Vec<Step> {
     let callback = callback_url(cfg);
     let openapi = &cfg.user_center_base_url;
     let (callback_status, callback_detail) = match kind {
-        LoginErrorKind::NoLoginEntry => (
+        LoginErrorKind::NoLoginEntry | LoginErrorKind::LoggedOut => (
             StepStatus::Pending,
             format!("回调地址 {callback}，须在用户中心登记为 redirectUrl"),
         ),
         LoginErrorKind::MissingVerifyCode => (
             StepStatus::Failed,
             format!("已回到 {callback}，但 URL 里没有 verifyCode"),
+        ),
+        LoginErrorKind::InvalidState => (
+            StepStatus::Failed,
+            format!("已回到 {callback}，但 state 与发起登录的浏览器不一致"),
         ),
         LoginErrorKind::ExchangeFailed
         | LoginErrorKind::TenantDetailFailed
@@ -156,7 +183,10 @@ fn checklist(cfg: &Config, kind: LoginErrorKind) -> Vec<Step> {
             StepStatus::Done,
             format!("{openapi}/sso/code/userInfo 已返回 userId / tenantId"),
         ),
-        LoginErrorKind::MissingVerifyCode | LoginErrorKind::NoLoginEntry => (
+        LoginErrorKind::MissingVerifyCode
+        | LoginErrorKind::NoLoginEntry
+        | LoginErrorKind::InvalidState
+        | LoginErrorKind::LoggedOut => (
             StepStatus::Pending,
             format!(
                 "{openapi}/sso/code/userInfo（先 {openapi}/auth/ticket）。有 verifyCode 后才会调用"
@@ -175,7 +205,9 @@ fn checklist(cfg: &Config, kind: LoginErrorKind) -> Vec<Step> {
         ),
         LoginErrorKind::ExchangeFailed
         | LoginErrorKind::MissingVerifyCode
-        | LoginErrorKind::NoLoginEntry => (
+        | LoginErrorKind::NoLoginEntry
+        | LoginErrorKind::InvalidState
+        | LoginErrorKind::LoggedOut => (
             StepStatus::Pending,
             format!(
                 "{openapi}/console/tenant/detail。换到 tenantId 后再调，结果写入 X-User-Region"
@@ -239,10 +271,10 @@ fn render_steps(steps: &[Step]) -> String {
     out
 }
 
-fn render(cfg: &Config, kind: LoginErrorKind) -> String {
+fn render(cfg: &Config, kind: LoginErrorKind, state: Option<&str>) -> String {
     let (title, body) = kind.copy();
     let retry = cfg
-        .login_redirect()
+        .login_redirect_with_state(state)
         .unwrap_or_else(|| Config::workbench_path().to_string());
     let href = escape_html_attr(&retry);
     let steps = render_steps(&checklist(cfg, kind));
@@ -333,7 +365,7 @@ mod tests {
         let cfg = Config::for_test("http://uc", "http://up");
         let retry = cfg.login_redirect().expect("sso url");
         assert!(retry.contains('&'));
-        let html = render(&cfg, LoginErrorKind::ExchangeFailed);
+        let html = render(&cfg, LoginErrorKind::ExchangeFailed, None);
         assert!(html.contains("&amp;"));
         assert!(!html.contains(&format!("href=\"{retry}\"")));
         assert!(html.contains("重新登录"));
@@ -344,7 +376,7 @@ mod tests {
     fn no_login_entry_lists_missing_sso_env() {
         let mut cfg = Config::for_test("http://88.7.129.9/openapi", "http://up");
         cfg.login_url = None;
-        let html = render(&cfg, LoginErrorKind::NoLoginEntry);
+        let html = render(&cfg, LoginErrorKind::NoLoginEntry, None);
         assert!(html.contains("无法进入工作台"));
         assert!(html.contains("USER_CENTER_LOGIN_URL"));
         assert!(html.contains("未配置"));
@@ -360,7 +392,7 @@ mod tests {
     #[test]
     fn exchange_failed_marks_userinfo_step() {
         let cfg = Config::for_test("http://uc", "http://up");
-        let html = render(&cfg, LoginErrorKind::ExchangeFailed);
+        let html = render(&cfg, LoginErrorKind::ExchangeFailed, None);
         assert!(html.contains("换用户 /sso/code/userInfo"));
         assert!(html.contains("查租户区域代码 /console/tenant/detail"));
         assert!(html.contains("失败"));
@@ -371,7 +403,7 @@ mod tests {
     #[test]
     fn tenant_detail_failed_marks_region_step() {
         let cfg = Config::for_test("http://uc", "http://up");
-        let html = render(&cfg, LoginErrorKind::TenantDetailFailed);
+        let html = render(&cfg, LoginErrorKind::TenantDetailFailed, None);
         assert!(html.contains("卡住的是 /console/tenant/detail"));
         assert!(html.contains("cityCode"));
         assert!(html.contains("失败"));

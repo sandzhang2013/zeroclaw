@@ -2,9 +2,10 @@ use crate::config::Config;
 use crate::crypto::{decrypt_data, encrypt_data, sign};
 use crate::identity::{
     HEADER_AUTH_SECRET, HEADER_USER_ID, HEADER_USER_ORG, HEADER_USER_REGION, HEADER_USER_ROLE,
+    MOCK_COOKIE_NAME,
 };
 use crate::router;
-use crate::session::COOKIE_NAME;
+use crate::session::{COOKIE_NAME, STATE_COOKIE_NAME, cookie_value};
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::extract::Request;
@@ -256,13 +257,36 @@ async fn health_ok() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/health")
+                .uri("/hbcdcagent/auth/health")
                 .body(Body::empty())
                 .expect("req"),
         )
         .await
         .expect("resp");
     assert_eq!(resp.status(), StatusCode::OK);
+    let body = to_bytes(resp.into_body(), usize::MAX).await.expect("body");
+    assert_eq!(body.as_ref(), b"ok");
+    uc_h.abort();
+    up_h.abort();
+}
+
+#[tokio::test]
+async fn daemon_health_without_session_is_proxied() {
+    let (uc, uc_h) = start_user_center(MockUserCenter::ok()).await;
+    let (up, up_h) = start_upstream().await;
+    let app = router(Config::for_test(&uc, &up)).expect("router");
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/hbcdcagent/health")
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await
+        .expect("resp");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = json_body(resp).await;
+    assert_eq!(body["path"], "/hbcdcagent/health");
     uc_h.abort();
     up_h.abort();
 }
@@ -327,6 +351,88 @@ async fn callback_success_sets_httponly_cookie_and_strips_code() {
     assert!(cookie.contains("HttpOnly"));
     assert!(cookie.contains(COOKIE_NAME));
     assert!(!cookie.contains("good-code"));
+    uc_h.abort();
+    up_h.abort();
+}
+
+#[tokio::test]
+async fn callback_rejects_state_mismatch() {
+    let (uc, uc_h) = start_user_center(MockUserCenter::ok()).await;
+    let (up, up_h) = start_upstream().await;
+    let app = router(Config::for_test(&uc, &up)).expect("router");
+    let leftover = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/hbcdcagent/workbench")
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await
+        .expect("resp");
+    let set_cookie = join_set_cookie(leftover.headers());
+    let state = cookie_value(Some(&set_cookie), STATE_COOKIE_NAME).expect("state");
+    let no_query = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/hbcdcagent/auth/callback?verifyCode=good-code")
+                .header("cookie", format!("{STATE_COOKIE_NAME}={state}"))
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await
+        .expect("resp");
+    let (status, _, html) = html_page(no_query).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(html.contains("登录校验失败"));
+    let mismatch = app
+        .oneshot(
+            Request::builder()
+                .uri("/hbcdcagent/auth/callback?verifyCode=good-code&state=other")
+                .header("cookie", format!("{STATE_COOKIE_NAME}={state}"))
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await
+        .expect("resp");
+    let (status, _, html) = html_page(mismatch).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(html.contains("登录校验失败"));
+    uc_h.abort();
+    up_h.abort();
+}
+
+#[tokio::test]
+async fn callback_accepts_matching_state() {
+    let (uc, uc_h) = start_user_center(MockUserCenter::ok()).await;
+    let (up, up_h) = start_upstream().await;
+    let app = router(Config::for_test(&uc, &up)).expect("router");
+    let start = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/hbcdcagent/workbench")
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await
+        .expect("resp");
+    let set_cookie = join_set_cookie(start.headers());
+    let state = cookie_value(Some(&set_cookie), STATE_COOKIE_NAME).expect("state");
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/hbcdcagent/auth/callback?verifyCode=good-code&state={state}"
+                ))
+                .header("cookie", format!("{STATE_COOKIE_NAME}={state}"))
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await
+        .expect("resp");
+    assert_eq!(resp.status(), StatusCode::TEMPORARY_REDIRECT);
     uc_h.abort();
     up_h.abort();
 }
@@ -432,8 +538,27 @@ async fn workbench_without_cookie_redirects_to_sso() {
             "redirectUrl=http%3A%2F%2F88.8.130.150%3A50001%2Fhbcdcagent%2Fauth%2Fcallback"
         )
     );
+    assert!(loc.contains("&state="));
+    let state = loc
+        .rsplit_once("&state=")
+        .map(|(_, s)| s.to_string())
+        .expect("state query");
+    let set_cookie = join_set_cookie(resp.headers());
+    assert_eq!(
+        cookie_value(Some(&set_cookie), STATE_COOKIE_NAME).as_deref(),
+        Some(state.as_str())
+    );
     uc_h.abort();
     up_h.abort();
+}
+
+fn join_set_cookie(headers: &axum::http::HeaderMap) -> String {
+    headers
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 #[tokio::test]
@@ -796,7 +921,11 @@ async fn logout_invalidates_session() {
         )
         .await
         .expect("resp");
-    assert_eq!(logout.status(), StatusCode::TEMPORARY_REDIRECT);
+    assert_eq!(logout.status(), StatusCode::OK);
+    let cleared = join_set_cookie(logout.headers());
+    assert!(cleared.contains(&format!("{COOKIE_NAME}=")));
+    assert!(cleared.contains(&format!("{MOCK_COOKIE_NAME}=")));
+    assert!(cleared.contains("Max-Age=0"));
     let api = app
         .oneshot(
             Request::builder()
@@ -808,6 +937,67 @@ async fn logout_invalidates_session() {
         .await
         .expect("resp");
     assert_eq!(api.status(), StatusCode::UNAUTHORIZED);
+    uc_h.abort();
+    up_h.abort();
+}
+
+#[tokio::test]
+async fn logout_clears_mock_cookie() {
+    let (uc, uc_h) = start_user_center(MockUserCenter::ok()).await;
+    let (up, up_h) = start_upstream().await;
+    let mut cfg = Config::for_test(&uc, &up);
+    cfg.local_mock = true;
+    let app = router(cfg).expect("router");
+    let logout = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/hbcdcagent/auth/logout")
+                .header("cookie", format!("{MOCK_COOKIE_NAME}=chenmin"))
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await
+        .expect("resp");
+    assert_eq!(logout.status(), StatusCode::TEMPORARY_REDIRECT);
+    let cleared = join_set_cookie(logout.headers());
+    assert!(cleared.contains(&format!("{MOCK_COOKIE_NAME}=")));
+    assert!(cleared.contains("Max-Age=0"));
+    let api = app
+        .oneshot(
+            Request::builder()
+                .uri("/hbcdcagent/api/status")
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await
+        .expect("resp");
+    assert_eq!(api.status(), StatusCode::UNAUTHORIZED);
+    uc_h.abort();
+    up_h.abort();
+}
+
+#[tokio::test]
+async fn logout_redirects_to_user_center_when_configured() {
+    let (uc, uc_h) = start_user_center(MockUserCenter::ok()).await;
+    let (up, up_h) = start_upstream().await;
+    let mut cfg = Config::for_test(&uc, &up);
+    cfg.logout_url = Some("http://sso/logout".into());
+    let app = router(cfg).expect("router");
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/hbcdcagent/auth/logout")
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await
+        .expect("resp");
+    assert_eq!(resp.status(), StatusCode::TEMPORARY_REDIRECT);
+    assert_eq!(
+        resp.headers().get("location").and_then(|v| v.to_str().ok()),
+        Some("http://sso/logout")
+    );
     uc_h.abort();
     up_h.abort();
 }

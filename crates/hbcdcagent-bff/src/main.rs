@@ -3,7 +3,7 @@
 //! Separate process: user-center secrets never enter `zeroclaw daemon`.
 //! Workspace clippy forbids `tracing::*` / `anyhow::anyhow` in daemon crates;
 //! this binary is intentionally outside that log contract.
-#![allow(clippy::disallowed_macros)]
+#![allow(clippy::disallowed_macros, clippy::disallowed_methods)]
 
 mod config;
 mod crypto;
@@ -15,9 +15,15 @@ mod user_center;
 
 use crate::config::Config;
 use crate::error_page::{LoginErrorKind, login_error_response};
-use crate::identity::{Identity, map_role, mock_user, mock_user_cookie_header, normalize_user_id};
+use crate::identity::{
+    Identity, clear_mock_cookie_header, map_role, mock_user, mock_user_cookie_header,
+    normalize_user_id,
+};
 use crate::proxy::{AppState, fallback};
-use crate::session::{SessionStore, clear_cookie_header, cookie_header, sid_from_cookie_header};
+use crate::session::{
+    SessionStore, append_set_cookie, clear_cookie_header, clear_state_cookie_header, cookie_header,
+    sid_from_cookie_header, sso_state_matches,
+};
 use crate::user_center::{LoginFetchError, UserCenter};
 use anyhow::Context;
 use axum::Router;
@@ -33,6 +39,7 @@ use tokio::net::TcpListener;
 struct CallbackQuery {
     #[serde(rename = "verifyCode")]
     verify_code: Option<String>,
+    state: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -70,7 +77,7 @@ pub(crate) fn router(cfg: Config) -> anyhow::Result<Router> {
         cfg,
     });
     Ok(Router::new()
-        .route("/health", get(health))
+        .route(Config::HEALTH_PATH, get(health))
         .route(Config::CALLBACK_PATH, get(callback))
         .route(Config::MOCK_PATH, get(mock_login))
         .route(Config::LOGOUT_PATH, get(logout).post(logout))
@@ -118,6 +125,7 @@ async fn mock_login(
 
 async fn callback(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Query(query): Query<CallbackQuery>,
 ) -> Response {
     let Some(code) = query
@@ -132,6 +140,14 @@ async fn callback(
             LoginErrorKind::MissingVerifyCode,
         );
     };
+    let cookie = headers.get(header::COOKIE).and_then(|v| v.to_str().ok());
+    if !sso_state_matches(cookie, query.state.as_deref()) {
+        return login_error_response(
+            StatusCode::BAD_REQUEST,
+            &state.cfg,
+            LoginErrorKind::InvalidState,
+        );
+    }
     let info = match state.user_center.user_info_by_verify_code(code).await {
         Ok(info) => info,
         Err(LoginFetchError::UserInfo(err)) => {
@@ -171,14 +187,11 @@ async fn callback(
     let sid = state.sessions.insert(identity, state.cfg.session_ttl);
     let cookie = cookie_header(&sid, state.cfg.session_ttl, state.cfg.cookie_secure);
     let mut response = Redirect::temporary(Config::workbench_path()).into_response();
-    match cookie.parse() {
-        Ok(value) => {
-            response.headers_mut().insert(header::SET_COOKIE, value);
-        }
-        Err(_) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, "cookie").into_response();
-        }
-    }
+    append_set_cookie(&mut response, &cookie);
+    append_set_cookie(
+        &mut response,
+        &clear_state_cookie_header(state.cfg.cookie_secure),
+    );
     response
 }
 
@@ -188,9 +201,19 @@ async fn logout(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Respo
     {
         state.sessions.remove(&sid);
     }
-    let mut response = Redirect::temporary("/").into_response();
-    if let Ok(value) = clear_cookie_header(state.cfg.cookie_secure).parse() {
-        response.headers_mut().insert(header::SET_COOKIE, value);
+    let secure = state.cfg.cookie_secure;
+    let bounce = state.cfg.logout_url.is_some() || state.cfg.local_mock;
+    let mut response = if let Some(url) = state.cfg.logout_url.as_deref() {
+        Redirect::temporary(url).into_response()
+    } else if state.cfg.local_mock {
+        Redirect::temporary(Config::workbench_path()).into_response()
+    } else {
+        login_error_response(StatusCode::OK, &state.cfg, LoginErrorKind::LoggedOut)
+    };
+    append_set_cookie(&mut response, &clear_cookie_header(secure));
+    append_set_cookie(&mut response, &clear_mock_cookie_header(secure));
+    if bounce {
+        append_set_cookie(&mut response, &clear_state_cookie_header(secure));
     }
     response
 }
