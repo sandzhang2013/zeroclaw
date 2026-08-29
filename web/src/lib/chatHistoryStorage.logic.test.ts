@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  clearChatHistory,
   loadChatHistory,
   mapServerMessagesToPersisted,
   persistedToUiMessages,
@@ -16,6 +17,9 @@ function mockLocalStorage() {
       getItem: (key: string) => store.get(key) ?? null,
       setItem: (key: string, value: string) => {
         store.set(key, value);
+      },
+      removeItem: (key: string) => {
+        store.delete(key);
       },
     },
     configurable: true,
@@ -96,4 +100,14 @@ test('mapServerMessagesToPersisted skips system rows and ui round-trip drops eph
   assert.equal(persisted.length, 2);
   assert.equal(persisted.find((m) => m.id === '2'), undefined);
   assert.equal(persisted.find((m) => m.id === '3')?.local, true);
+});
+
+test('clearChatHistory removes the persisted transcript', () => {
+  mockLocalStorage();
+  saveChatHistory('s-del', [
+    { id: '1', role: 'user', content: 'hi', timestamp: '2026-01-01T00:00:00.000Z' },
+  ]);
+  assert.equal(loadChatHistory('s-del').length, 1);
+  clearChatHistory('s-del');
+  assert.deepEqual(loadChatHistory('s-del'), []);
 });

@@ -127,7 +127,6 @@ export function WorkbenchSidebar({
     return () => window.clearInterval(id);
   }, []);
 
-  const closableLast = sessions.length <= 1;
   const displayName = userName?.trim() || t('workbench.user_fallback');
   const roleLabel = userRole ? t(roleI18nKey(userRole)) : '';
   const userMeta = [roleLabel, userRegion?.trim()].filter(Boolean).join(' · ');
@@ -196,7 +195,7 @@ export function WorkbenchSidebar({
         session={session}
         active={session.id === activeSessionId}
         indicator={indicators[session.id]}
-        closable={!closableLast}
+        closable
         nested={nested}
         renaming={renamingId === session.id}
         renameDraft={renameDraft}
@@ -549,8 +548,8 @@ function SessionRow({
           <span
             role="button"
             tabIndex={-1}
-            aria-label={t('workbench.close_session')}
-            title={t('workbench.close_session')}
+            aria-label={t('workbench.delete_session')}
+            title={t('workbench.delete_session')}
             aria-disabled={!closable}
             onClick={(e) => {
               e.stopPropagation();

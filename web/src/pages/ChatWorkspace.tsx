@@ -6,7 +6,8 @@ import { AgentChatInner, type AgentChatStatus } from '@/pages/AgentChat';
 import { WorkbenchSidebar, type SessionIndicator } from '@/components/WorkbenchSidebar';
 import { ResultsPanel } from '@/components/ResultsPanel';
 import { WorkbenchHome } from '@/components/WorkbenchHome';
-import { getSessions } from '@/lib/api';
+import { ConfirmDialog } from '@/components/ui';
+import { deleteAgentWorkspacePath, deleteSession, getSessions } from '@/lib/api';
 import {
   adoptTaskSession,
   createTaskSessionId,
@@ -14,6 +15,7 @@ import {
   removeTaskSession,
   resolveTaskSessionId,
 } from '@/lib/ws';
+import { persistSessionId } from '@/lib/sessionId';
 import { generateUUID } from '@/lib/uuid';
 import { t } from '@/lib/i18n';
 import {
@@ -27,7 +29,9 @@ import {
   readWorkspaceSnapshot,
   sanitizeSessionTitle,
   workspaceStorageKey,
+  dropSessionFromList,
 } from '@/lib/workbenchSession';
+import { clearChatHistory } from '@/lib/chatHistoryStorage';
 
 const SIDEBAR_COLLAPSED_KEY = 'zeroclaw-workbench-sidebar-collapsed';
 const RIGHT_COLLAPSED_KEY = 'zeroclaw-workbench-right-collapsed';
@@ -215,6 +219,8 @@ export default function ChatWorkspace({
     autonomy: WorkbenchAutonomy;
     files: File[];
   } | null>(null);
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const deletingRef = useRef(false);
   const showHome = !sessions.some((s) => s.id === activeSessionId);
 
   const activeSession = useMemo(
@@ -385,25 +391,44 @@ export default function ChatWorkspace({
     )));
   }, []);
 
-  const closeSession = useCallback((sessionId: string) => {
-    setSessions((prev) => {
-      if (prev.length <= 1) return prev;
-      const next = prev.filter((s) => s.id !== sessionId);
-      setActiveSessionId((cur) => {
-        if (cur !== sessionId) return cur;
-        const idx = prev.findIndex((s) => s.id === sessionId);
-        return next[Math.min(idx, next.length - 1)]?.id ?? next[0]?.id ?? cur;
-      });
-      return next;
-    });
+  const requestDeleteSession = useCallback((sessionId: string) => {
+    setPendingDeleteId(sessionId);
+  }, []);
+
+  const confirmDeleteSession = useCallback(() => {
+    const sessionId = pendingDeleteId;
+    if (!sessionId || deletingRef.current) return;
     const closed = sessions.find((s) => s.id === sessionId);
-    if (closed && closed.taskId !== '__default__') {
-      removeTaskSession(closed.agentAlias, closed.taskId);
-    }
-    delete statusRef.current[sessionId];
-    delete onStatusCacheRef.current[sessionId];
-    syncIndicators();
-  }, [sessions, syncIndicators]);
+    setPendingDeleteId(null);
+    if (!closed) return;
+    deletingRef.current = true;
+    const defaultId = getOrCreateSessionId(closed.agentAlias, userId);
+    const gid = closed.taskId === '__default__'
+      ? defaultId
+      : resolveTaskSessionId(closed.agentAlias, closed.taskId);
+
+    void (async () => {
+      if (gid) {
+        try { await deleteSession(gid); } catch { /* already gone or persistence off */ }
+        try { await deleteAgentWorkspacePath(closed.agentAlias, `sessions/${gid}`); } catch { /* no files */ }
+        clearChatHistory(gid);
+      }
+      if (closed.taskId !== '__default__') {
+        removeTaskSession(closed.agentAlias, closed.taskId);
+      } else {
+        persistSessionId(closed.agentAlias, generateUUID(), userId);
+      }
+      setSessions((prev) => {
+        const dropped = dropSessionFromList(prev, sessionId, activeSessionId);
+        setActiveSessionId(dropped.activeSessionId);
+        return dropped.sessions;
+      });
+      delete statusRef.current[sessionId];
+      delete onStatusCacheRef.current[sessionId];
+      syncIndicators();
+      deletingRef.current = false;
+    })();
+  }, [pendingDeleteId, sessions, userId, activeSessionId, syncIndicators]);
 
   const newFolder = useCallback((name: string) => {
     const folder: WorkbenchFolder = { id: generateUUID().slice(0, 8), name };
@@ -473,7 +498,7 @@ export default function ChatWorkspace({
         onToggleCollapsed={toggleSidebar}
         onNewSession={newSession}
         onSelect={selectSession}
-        onClose={closeSession}
+        onClose={requestDeleteSession}
         onRename={renameSession}
         onNewFolder={newFolder}
         onSelectFolder={setActiveFolderId}
@@ -558,6 +583,15 @@ export default function ChatWorkspace({
           );
         })}
       </div>
+      <ConfirmDialog
+        open={pendingDeleteId !== null}
+        danger
+        title={t('workbench.confirm_delete_session_title')}
+        message={t('workbench.confirm_delete_session')}
+        confirmLabel={t('common.confirm')}
+        onConfirm={confirmDeleteSession}
+        onClose={() => setPendingDeleteId(null)}
+      />
     </div>
   );
 }

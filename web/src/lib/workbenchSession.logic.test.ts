@@ -9,6 +9,7 @@ import {
   sanitizeSessionTitle,
   sessionDisplayTitle,
   workspaceStorageKey,
+  dropSessionFromList,
 } from './workbenchSession.ts';
 
 test('sanitizeSessionTitle trims, collapses space, and rejects empty', () => {
@@ -182,4 +183,20 @@ test('gatewaySessionsToRecover keeps owned transcripts and skips empty or foreig
       title: '周报',
     },
   ]);
+});
+
+test('dropSessionFromList removes the row and moves active to a neighbor', () => {
+  const sessions = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+  assert.deepEqual(dropSessionFromList(sessions, 'b', 'b'), {
+    sessions: [{ id: 'a' }, { id: 'c' }],
+    activeSessionId: 'c',
+  });
+  assert.deepEqual(dropSessionFromList(sessions, 'a', 'c'), {
+    sessions: [{ id: 'b' }, { id: 'c' }],
+    activeSessionId: 'c',
+  });
+  assert.deepEqual(dropSessionFromList([{ id: 'only' }], 'only', 'only'), {
+    sessions: [],
+    activeSessionId: '',
+  });
 });

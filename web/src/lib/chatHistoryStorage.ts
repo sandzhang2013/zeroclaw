@@ -43,6 +43,14 @@ export function saveChatHistory(sessionId: string, messages: PersistedChatBubble
   }
 }
 
+export function clearChatHistory(sessionId: string): void {
+  try {
+    localStorage.removeItem(storageKey(sessionId));
+  } catch {
+    // private mode
+  }
+}
+
 /** Map server-persisted rows into UI messages (timestamps are synthetic for ordering). */
 export function mapServerMessagesToPersisted(rows: SessionMessageRow[]): PersistedChatBubble[] {
   const base = Date.now() - rows.length * 1000;

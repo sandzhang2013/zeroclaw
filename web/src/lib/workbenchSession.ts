@@ -156,3 +156,18 @@ export function sessionDisplayTitle(
   if (session.taskId === '__default__') return untitledFallback;
   return session.taskId;
 }
+
+/** Drop a sidebar row and pick the next active id (empty string → home). */
+export function dropSessionFromList<T extends { id: string }>(
+  sessions: T[],
+  deletedId: string,
+  activeId: string,
+): { sessions: T[]; activeSessionId: string } {
+  const next = sessions.filter((s) => s.id !== deletedId);
+  if (activeId !== deletedId) {
+    return { sessions: next, activeSessionId: activeId };
+  }
+  const idx = sessions.findIndex((s) => s.id === deletedId);
+  const activeSessionId = next[Math.min(Math.max(idx, 0), Math.max(next.length - 1, 0))]?.id ?? '';
+  return { sessions: next, activeSessionId };
+}
