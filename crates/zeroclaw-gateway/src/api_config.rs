@@ -565,10 +565,14 @@ pub async fn compute_drift(in_memory: &zeroclaw_config::schema::Config) -> Vec<D
     };
 
     // Re-parse the on-disk form into a fresh Config for value-by-value comparison.
+    // Apply the same load-time, non-persisted canonicalization as
+    // `Config::load_or_init` so merges such as default `auto_approve` entries
+    // are not reported as operator-visible drift.
     let on_disk: zeroclaw_config::schema::Config =
         match toml::from_str::<zeroclaw_config::schema::Config>(&raw) {
             Ok(mut cfg) => {
                 cfg.config_path = path.clone();
+                cfg.ensure_default_risk_profile_auto_approve();
                 cfg
             }
             Err(_) => return Vec::new(),
@@ -3871,6 +3875,37 @@ mod tests {
                 .iter()
                 .any(|p| p.name == "gateway.paired_tokens"),
             "expected a prop-field named gateway.paired_tokens"
+        );
+    }
+
+    #[tokio::test]
+    async fn compute_drift_ignores_default_auto_approve_load_merge() {
+        let (_tmp, path) = temp_config_path();
+        let raw = r#"
+schema_version = 3
+
+[risk_profiles.default]
+auto_approve = ["file_read", "memory_recall", "disease-report__getcase"]
+"#;
+        tokio::fs::write(&path, raw).await.expect("write config");
+
+        let mut cfg: zeroclaw_config::schema::Config =
+            toml::from_str(raw).expect("parse operator toml");
+        cfg.config_path = path.clone();
+        cfg.ensure_default_risk_profile_auto_approve();
+
+        let drift = compute_drift(&cfg).await;
+        assert!(
+            !drift
+                .iter()
+                .any(|entry| entry.path == "risk_profiles.default.auto_approve"),
+            "load-time default auto_approve merge must not look like on-disk drift, got {drift:?}"
+        );
+        assert!(
+            cfg.risk_profiles["default"]
+                .auto_approve
+                .contains(&"weather".to_string()),
+            "precondition: in-memory list must include merged defaults"
         );
     }
 

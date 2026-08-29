@@ -3,6 +3,7 @@ use crate::crypto::{decrypt_data, encrypt_data, sign};
 use anyhow::{Context, Result, bail};
 use parking_lot::Mutex;
 use serde_json::{Value, json};
+use std::fmt;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
@@ -20,7 +21,33 @@ struct Ticket {
 pub struct TokenUserInfo {
     pub user_id: String,
     pub display_name: Option<String>,
+    pub tenant_id: Option<String>,
     pub tenant_name: Option<String>,
+    /// `cityCode` from `/console/tenant/detail` (区划代码).
+    pub city_code: Option<String>,
+}
+
+#[derive(Debug)]
+pub enum LoginFetchError {
+    UserInfo(anyhow::Error),
+    TenantDetail(anyhow::Error),
+}
+
+impl fmt::Display for LoginFetchError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UserInfo(err) => write!(f, "sso/code/userInfo: {err}"),
+            Self::TenantDetail(err) => write!(f, "console/tenant/detail: {err}"),
+        }
+    }
+}
+
+impl std::error::Error for LoginFetchError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::UserInfo(err) | Self::TenantDetail(err) => Some(err.as_ref()),
+        }
+    }
 }
 
 pub struct UserCenter {
@@ -43,15 +70,62 @@ impl UserCenter {
         })
     }
 
-    pub async fn user_info_by_verify_code(&self, verify_code: &str) -> Result<TokenUserInfo> {
+    pub async fn user_info_by_verify_code(
+        &self,
+        verify_code: &str,
+    ) -> Result<TokenUserInfo, LoginFetchError> {
         let data = self
             .invoke_biz(
                 "/sso/code/userInfo",
                 json!({ "verifyCode": verify_code }),
                 true,
             )
-            .await?;
-        parse_user_info(&data)
+            .await
+            .map_err(LoginFetchError::UserInfo)?;
+        let info = parse_user_info(&data).map_err(LoginFetchError::UserInfo)?;
+        self.enrich_with_tenant(info).await
+    }
+
+    /// PDF 3.2.6: `POST /console/tenant/detail` with `tenantId` yields `cityCode`.
+    async fn enrich_with_tenant(
+        &self,
+        mut info: TokenUserInfo,
+    ) -> Result<TokenUserInfo, LoginFetchError> {
+        let Some(tenant_id) = info
+            .tenant_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+        else {
+            tracing::warn!("userInfo.tenantId missing; X-User-Region will be empty");
+            return Ok(info);
+        };
+        let data = self
+            .invoke_biz(
+                "/console/tenant/detail",
+                json!({ "tenantId": tenant_id }),
+                true,
+            )
+            .await
+            .map_err(|err| {
+                LoginFetchError::TenantDetail(
+                    err.context(format!("POST /console/tenant/detail tenantId={tenant_id}")),
+                )
+            })?;
+        if let Some(record) = tenant_record(&data) {
+            info.city_code = region_code(record);
+            if info.tenant_name.is_none() {
+                info.tenant_name = json_nonempty_str(record, "tenantName");
+            }
+        }
+        if info.city_code.is_none() {
+            tracing::warn!(
+                tenant_id,
+                "tenant detail had no cityCode/districtCode/provinceCode"
+            );
+        }
+        Ok(info)
     }
 
     async fn ensure_ticket(&self) -> Result<Ticket> {
@@ -209,11 +283,36 @@ fn parse_user_info(data: &Value) -> Result<TokenUserInfo> {
     Ok(TokenUserInfo {
         user_id: user_id.to_string(),
         display_name: first_nonempty_str(user, &["realName", "nickName", "accountName"]),
-        tenant_name: user
-            .get("tenantName")
-            .and_then(Value::as_str)
-            .map(str::to_string),
+        tenant_id: first_nonempty_str(user, &["tenantId"]),
+        tenant_name: first_nonempty_str(user, &["tenantName"]),
+        city_code: None,
     })
+}
+
+fn tenant_record(data: &Value) -> Option<&Value> {
+    match data {
+        Value::Array(items) => items.first(),
+        Value::Object(_) => Some(data),
+        _ => None,
+    }
+}
+
+/// Prefer city (市), then district (区), then province (省).
+fn region_code(record: &Value) -> Option<String> {
+    json_nonempty_str(record, "cityCode")
+        .or_else(|| json_nonempty_str(record, "districtCode"))
+        .or_else(|| json_nonempty_str(record, "provinceCode"))
+}
+
+fn json_nonempty_str(v: &Value, key: &str) -> Option<String> {
+    match v.get(key)? {
+        Value::String(s) => {
+            let trimmed = s.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        }
+        Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
 }
 
 fn first_nonempty_str(user: &Value, keys: &[&str]) -> Option<String> {
@@ -305,13 +404,16 @@ mod tests {
             "accessToken": "t",
             "userInfo": {
                 "userId": "u1",
+                "tenantId": "tid-1",
                 "tenantName": "疾控"
             }
         });
         let u = parse_user_info(&data).expect("user");
         assert_eq!(u.user_id, "u1");
         assert_eq!(u.display_name, None);
+        assert_eq!(u.tenant_id.as_deref(), Some("tid-1"));
         assert_eq!(u.tenant_name.as_deref(), Some("疾控"));
+        assert_eq!(u.city_code, None);
     }
 
     #[test]
@@ -359,5 +461,23 @@ mod tests {
     fn parse_user_requires_user_id() {
         assert!(parse_user_info(&json!({"userInfo": {"accountName": "a"}})).is_err());
         assert!(parse_user_info(&json!({"accessToken": "t"})).is_err());
+    }
+
+    #[test]
+    fn region_code_prefers_city_then_district() {
+        assert_eq!(
+            region_code(&json!({"cityCode": "420100", "districtCode": "420102"})).as_deref(),
+            Some("420100")
+        );
+        assert_eq!(
+            region_code(&json!({"districtCode": "420102"})).as_deref(),
+            Some("420102")
+        );
+        assert_eq!(
+            tenant_record(&json!([{"cityCode": "1"}]))
+                .and_then(region_code)
+                .as_deref(),
+            Some("1")
+        );
     }
 }

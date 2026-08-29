@@ -341,8 +341,9 @@ pub fn read_agent_workspace_file_for_user(
 }
 
 /// Delete a file or directory inside the agent's workspace. Recursive
-/// for directories. Refuses to delete the workspace root itself or any
-/// of the protected bootstrap files.
+/// for directories. Missing paths succeed (idempotent DELETE). Refuses
+/// to delete the workspace root itself or any of the protected bootstrap
+/// files.
 pub fn delete_agent_workspace_path(
     config: &Config,
     agent_alias: &str,
@@ -376,9 +377,10 @@ pub fn delete_agent_workspace_path_for_user(
     let resolved: PathBuf = resolve_under(&root, raw)?;
     let metadata = match std::fs::metadata(&resolved) {
         Ok(m) => m,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            return Err(BrowseError::NotFound(raw.to_string()));
-        }
+        // Session dirs are created on first write. The workbench always
+        // DELETEs `sessions/<id>` when closing a chat, so a missing path
+        // is already gone, not an error.
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(err) => return Err(err.into()),
     };
     if metadata.is_dir() {
@@ -743,6 +745,14 @@ mod tests {
         let (_dir, cfg) = workspace_fixture();
         let err = delete_agent_workspace_path(&cfg, "alpha", "../../etc").unwrap_err();
         assert!(matches!(err, BrowseError::Escape(_)));
+    }
+
+    #[test]
+    fn delete_agent_workspace_path_missing_is_idempotent() {
+        let (_dir, cfg) = workspace_fixture();
+        delete_agent_workspace_path(&cfg, "alpha", "sessions/11111111-1111-1111-1111-111111111111")
+            .unwrap();
+        delete_agent_workspace_path(&cfg, "alpha", "notes/gone.md").unwrap();
     }
 
     #[test]

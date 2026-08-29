@@ -5,6 +5,7 @@ import { isTauri } from './tauri';
 import { generateUUID } from './uuid';
 import { SESSION_ID_KEY_PREFIX, getOrCreateSessionId } from './sessionId';
 import { releaseWebSocket } from './ws.release';
+import { sameOriginWebSocketUrl } from './wsUrl';
 
 export { getOrCreateSessionId, releaseWebSocket };
 
@@ -149,15 +150,7 @@ export class WebSocketClient {
   constructor(options: WebSocketClientOptions) {
     this.agentAlias = options.agentAlias;
     this.sessionId = options.sessionId ?? getOrCreateSessionId(this.agentAlias);
-    let defaultBase: string;
-    if (isTauri() && apiOrigin) {
-      // In Tauri, derive ws URL from the gateway origin.
-      defaultBase = apiOrigin.replace(/^http/, 'ws');
-    } else {
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      defaultBase = `${protocol}//${window.location.host}`;
-    }
-    this.baseUrl = options.baseUrl ?? defaultBase;
+    this.baseUrl = options.baseUrl ?? '';
     this.reconnectDelay = options.reconnectDelay ?? DEFAULT_RECONNECT_DELAY;
     this.maxReconnectDelay = options.maxReconnectDelay ?? MAX_RECONNECT_DELAY;
     this.autoReconnect = options.autoReconnect ?? true;
@@ -174,7 +167,13 @@ export class WebSocketClient {
     if (token) params.set('token', token);
     params.set('session_id', this.sessionId);
     params.set('agent', this.agentAlias);
-    const url = `${this.baseUrl}${basePath}/ws/chat?${params.toString()}`;
+    const path = `${basePath}/ws/chat?${params.toString()}`;
+    const url = this.baseUrl
+      ? `${this.baseUrl}${path}`
+      : sameOriginWebSocketUrl(
+          path,
+          isTauri() && apiOrigin ? apiOrigin : window.location.href,
+        );
 
     const protocols: string[] = ['zeroclaw.v1'];
     if (token) protocols.push(`bearer.${token}`);

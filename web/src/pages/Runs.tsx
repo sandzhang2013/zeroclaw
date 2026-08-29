@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Activity, ExternalLink, Loader2 } from 'lucide-react';
 import { runStatusBadge, type SopRunSummary } from '@/lib/sops';
-import { basePath } from '@/lib/basePath';
+import { apiOrigin, basePath } from '@/lib/basePath';
+import { isTauri } from '@/lib/tauri';
+import { sameOriginWebSocketUrl } from '@/lib/wsUrl';
 import { getToken } from '@/lib/auth';
 import { formatRelative } from '@/lib/format';
 import { t } from '@/lib/i18n';
@@ -32,8 +34,10 @@ export default function Runs() {
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
-    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const url = `${proto}//${location.host}${basePath || ''}/ws/sops/runs`;
+    const url = sameOriginWebSocketUrl(
+      `${basePath || ''}/ws/sops/runs`,
+      isTauri() && apiOrigin ? apiOrigin : window.location.href,
+    );
     const token = getToken();
     const protocols = token ? ['zeroclaw.v1', `bearer.${token}`] : ['zeroclaw.v1'];
 

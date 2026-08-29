@@ -1,6 +1,7 @@
 import { getToken } from './auth';
 import { apiOrigin, basePath } from './basePath';
 import { isTauri } from './tauri';
+import { sameOriginWebSocketUrl } from './wsUrl';
 
 export type JsonRpcId = number | string;
 
@@ -86,12 +87,12 @@ interface PendingRequest {
 const ACP_PROTOCOL = 'zeroclaw.acp.v1';
 const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
 
-function acpWebSocketBaseUrl(): string {
-  if (isTauri() && apiOrigin) {
-    return apiOrigin.replace(/^http/, 'ws');
-  }
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${protocol}//${window.location.host}`;
+function acpWebSocketUrl(query: string): string {
+  const path = `${basePath}/acp${query ? `?${query}` : ''}`;
+  return sameOriginWebSocketUrl(
+    path,
+    isTauri() && apiOrigin ? apiOrigin : window.location.href,
+  );
 }
 
 function parseFrame(data: string): AcpFrame | null {
@@ -125,7 +126,7 @@ export class AcpWebSocketClient {
     if (token) params.set('token', token);
 
     const query = params.toString();
-    const url = `${acpWebSocketBaseUrl()}${basePath}/acp${query ? `?${query}` : ''}`;
+    const url = acpWebSocketUrl(query);
     const protocols = token ? [ACP_PROTOCOL, `bearer.${token}`] : [ACP_PROTOCOL];
 
     this.ws = new WebSocket(url, protocols);

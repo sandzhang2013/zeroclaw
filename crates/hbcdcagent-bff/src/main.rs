@@ -7,16 +7,18 @@
 
 mod config;
 mod crypto;
+mod error_page;
 mod identity;
 mod proxy;
 mod session;
 mod user_center;
 
 use crate::config::Config;
+use crate::error_page::{LoginErrorKind, login_error_response};
 use crate::identity::{Identity, map_role, mock_user, mock_user_cookie_header, normalize_user_id};
 use crate::proxy::{AppState, fallback};
 use crate::session::{SessionStore, clear_cookie_header, cookie_header, sid_from_cookie_header};
-use crate::user_center::UserCenter;
+use crate::user_center::{LoginFetchError, UserCenter};
 use anyhow::Context;
 use axum::Router;
 use axum::extract::{Query, State};
@@ -69,9 +71,9 @@ pub(crate) fn router(cfg: Config) -> anyhow::Result<Router> {
     });
     Ok(Router::new()
         .route("/health", get(health))
-        .route("/auth/callback", get(callback))
-        .route("/auth/mock", get(mock_login))
-        .route("/auth/logout", get(logout).post(logout))
+        .route(Config::CALLBACK_PATH, get(callback))
+        .route(Config::MOCK_PATH, get(mock_login))
+        .route(Config::LOGOUT_PATH, get(logout).post(logout))
         .fallback(fallback)
         .with_state(state))
 }
@@ -124,23 +126,45 @@ async fn callback(
         .map(str::trim)
         .filter(|s| !s.is_empty())
     else {
-        return (StatusCode::BAD_REQUEST, "missing verifyCode").into_response();
+        return login_error_response(
+            StatusCode::BAD_REQUEST,
+            &state.cfg,
+            LoginErrorKind::MissingVerifyCode,
+        );
     };
     let info = match state.user_center.user_info_by_verify_code(code).await {
         Ok(info) => info,
-        Err(err) => {
+        Err(LoginFetchError::UserInfo(err)) => {
             tracing::warn!(error = %err, "verifyCode exchange failed");
-            return (StatusCode::BAD_GATEWAY, "login failed").into_response();
+            return login_error_response(
+                StatusCode::BAD_GATEWAY,
+                &state.cfg,
+                LoginErrorKind::ExchangeFailed,
+            );
+        }
+        Err(LoginFetchError::TenantDetail(err)) => {
+            tracing::warn!(error = %err, "tenant detail failed");
+            return login_error_response(
+                StatusCode::BAD_GATEWAY,
+                &state.cfg,
+                LoginErrorKind::TenantDetailFailed,
+            );
         }
     };
     let user_id = match normalize_user_id(&info.user_id) {
         Ok(id) => id,
-        Err(_) => return (StatusCode::BAD_REQUEST, "invalid userId").into_response(),
+        Err(_) => {
+            return login_error_response(
+                StatusCode::BAD_REQUEST,
+                &state.cfg,
+                LoginErrorKind::InvalidUserId,
+            );
+        }
     };
     let identity = Identity {
         display_name: info.display_name,
         role: map_role(&user_id, &state.cfg.ops_user_ids),
-        region: None,
+        region: info.city_code,
         org: info.tenant_name,
         user_id,
     };

@@ -94,6 +94,23 @@ async fn mock_user_info(
         return axum::Json(json!({"success": true, "retCode": "999999", "data": data}))
             .into_response();
     }
+    if code == "tenant-fail" {
+        let data = encrypt_data(
+            SECRET,
+            &json!({
+                "userInfo": {
+                    "userId": "alice",
+                    "realName": "爱丽丝",
+                    "tenantId": "tenant-bad",
+                    "tenantName": "武汉疾控"
+                }
+            })
+            .to_string(),
+        )
+        .expect("enc");
+        return axum::Json(json!({"success": true, "retCode": "999999", "data": data}))
+            .into_response();
+    }
     if code != "good-code" && code != "ops-code" {
         return axum::Json(json!({"success": false, "retCode": "UC0001", "retMsg": "bad code"}))
             .into_response();
@@ -109,8 +126,43 @@ async fn mock_user_info(
             "userInfo": {
                 "userId": user_id,
                 "realName": if code == "ops-code" { "系统运维" } else { "爱丽丝" },
+                "tenantId": "tenant-wh",
                 "tenantName": "武汉疾控"
             }
+        })
+        .to_string(),
+    )
+    .expect("enc");
+    axum::Json(json!({"success": true, "retCode": "999999", "data": data})).into_response()
+}
+
+async fn mock_tenant_detail(
+    headers: HeaderMap,
+    axum::Json(body): axum::Json<Value>,
+) -> impl IntoResponse {
+    let ts = header_text(&headers, "timeStamp");
+    let expected = sign(
+        "MD5",
+        &["app-id", TICKET, TICKET_SECRET, &ts, SECRET, "app-key"],
+    )
+    .expect("sign");
+    assert_eq!(header_text(&headers, "sign"), expected);
+    let cipher = body["encodeData"].as_str().expect("encodeData");
+    let plain: Value =
+        serde_json::from_str(&decrypt_data(SECRET, cipher).expect("dec")).expect("json");
+    let tenant_id = plain["tenantId"].as_str().unwrap_or("");
+    if tenant_id != "tenant-wh" {
+        return axum::Json(
+            json!({"success": false, "retCode": "UC0008", "retMsg": "unknown tenant"}),
+        )
+        .into_response();
+    }
+    let data = encrypt_data(
+        SECRET,
+        &json!({
+            "tenantId": "tenant-wh",
+            "tenantName": "武汉疾控",
+            "cityCode": "420100000000"
         })
         .to_string(),
     )
@@ -122,6 +174,7 @@ async fn start_user_center(state: Arc<MockUserCenter>) -> (String, tokio::task::
     let app = Router::new()
         .route("/auth/ticket", post(mock_ticket))
         .route("/sso/code/userInfo", post(mock_user_info))
+        .route("/console/tenant/detail", post(mock_tenant_detail))
         .with_state(state);
     serve(app).await
 }
@@ -141,6 +194,7 @@ async fn start_upstream() -> (String, tokio::task::JoinHandle<()>) {
         let user = header_text(req.headers(), HEADER_USER_ID);
         let role = header_text(req.headers(), HEADER_USER_ROLE);
         let org = header_text(req.headers(), HEADER_USER_ORG);
+        let region = header_text(req.headers(), HEADER_USER_REGION);
         let secret = header_text(req.headers(), HEADER_AUTH_SECRET);
         axum::Json(json!({
             "path": req.uri().path(),
@@ -148,6 +202,7 @@ async fn start_upstream() -> (String, tokio::task::JoinHandle<()>) {
             "user": user,
             "role": role,
             "org": org,
+            "region": region,
             "secret": secret,
         }))
     });
@@ -177,6 +232,22 @@ async fn json_body(resp: axum::response::Response) -> Value {
     serde_json::from_slice(&bytes).expect("json")
 }
 
+async fn html_page(resp: axum::response::Response) -> (StatusCode, String, String) {
+    let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.expect("body");
+    (
+        status,
+        content_type,
+        String::from_utf8(bytes.to_vec()).expect("utf8"),
+    )
+}
+
 #[tokio::test]
 async fn health_ok() {
     let (uc, uc_h) = start_user_center(MockUserCenter::ok()).await;
@@ -202,9 +273,9 @@ async fn callback_requires_verify_code() {
     let (up, up_h) = start_upstream().await;
     let app = router(Config::for_test(&uc, &up)).expect("router");
     for uri in [
-        "/auth/callback",
-        "/auth/callback?verifyCode=",
-        "/auth/callback?verifyCode=%20",
+        "/hbcdcagent/auth/callback",
+        "/hbcdcagent/auth/callback?verifyCode=",
+        "/hbcdcagent/auth/callback?verifyCode=%20",
     ] {
         let resp = app
             .clone()
@@ -216,7 +287,14 @@ async fn callback_requires_verify_code() {
             )
             .await
             .expect("resp");
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{uri}");
+        let (status, content_type, html) = html_page(resp).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}");
+        assert!(
+            content_type.starts_with("text/html"),
+            "{uri} content-type {content_type}"
+        );
+        assert!(html.contains("登录回调无效"), "{uri}");
+        assert!(html.contains("重新登录"), "{uri}");
     }
     uc_h.abort();
     up_h.abort();
@@ -230,7 +308,7 @@ async fn callback_success_sets_httponly_cookie_and_strips_code() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/auth/callback?verifyCode=good-code")
+                .uri("/hbcdcagent/auth/callback?verifyCode=good-code")
                 .body(Body::empty())
                 .expect("req"),
         )
@@ -261,13 +339,16 @@ async fn callback_rejects_unsafe_user_id() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/auth/callback?verifyCode=bad-id")
+                .uri("/hbcdcagent/auth/callback?verifyCode=bad-id")
                 .body(Body::empty())
                 .expect("req"),
         )
         .await
         .expect("resp");
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let (status, content_type, html) = html_page(resp).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(content_type.starts_with("text/html"));
+    assert!(html.contains("登录身份无效"));
     uc_h.abort();
     up_h.abort();
 }
@@ -280,13 +361,47 @@ async fn callback_unknown_code_is_bad_gateway() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/auth/callback?verifyCode=unknown")
+                .uri("/hbcdcagent/auth/callback?verifyCode=unknown")
                 .body(Body::empty())
                 .expect("req"),
         )
         .await
         .expect("resp");
-    assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+    let (status, content_type, html) = html_page(resp).await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert!(content_type.starts_with("text/html"));
+    assert!(html.contains("登录未能完成"));
+    assert!(html.contains("换用户 /sso/code/userInfo"));
+    assert!(html.contains("查租户区域代码 /console/tenant/detail"));
+    assert!(html.contains("失败"));
+    assert!(html.contains("重新登录"));
+    assert!(html.contains("http://sso/login?"));
+    assert!(!html.contains("login failed"));
+    uc_h.abort();
+    up_h.abort();
+}
+
+#[tokio::test]
+async fn callback_tenant_detail_failed_shows_region_step() {
+    let (uc, uc_h) = start_user_center(MockUserCenter::ok()).await;
+    let (up, up_h) = start_upstream().await;
+    let app = router(Config::for_test(&uc, &up)).expect("router");
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/hbcdcagent/auth/callback?verifyCode=tenant-fail")
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await
+        .expect("resp");
+    let (status, content_type, html) = html_page(resp).await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert!(content_type.starts_with("text/html"));
+    assert!(html.contains("查租户区域代码 /console/tenant/detail"));
+    assert!(html.contains("cityCode"));
+    assert!(html.contains("失败"));
+    assert!(html.contains("通过"));
     uc_h.abort();
     up_h.abort();
 }
@@ -312,7 +427,41 @@ async fn workbench_without_cookie_redirects_to_sso() {
         .and_then(|v| v.to_str().ok())
         .expect("loc");
     assert!(loc.starts_with("http://sso/login?"));
-    assert!(loc.contains("redirectUrl=http%3A%2F%2F88.8.130.150%3A50001%2Fauth%2Fcallback"));
+    assert!(
+        loc.contains(
+            "redirectUrl=http%3A%2F%2F88.8.130.150%3A50001%2Fhbcdcagent%2Fauth%2Fcallback"
+        )
+    );
+    uc_h.abort();
+    up_h.abort();
+}
+
+#[tokio::test]
+async fn workbench_without_sso_config_shows_login_error_page() {
+    let (uc, uc_h) = start_user_center(MockUserCenter::ok()).await;
+    let (up, up_h) = start_upstream().await;
+    let mut cfg = Config::for_test(&uc, &up);
+    cfg.login_url = None;
+    let app = router(cfg).expect("router");
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/hbcdcagent/workbench")
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await
+        .expect("resp");
+    let (status, content_type, html) = html_page(resp).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(content_type.starts_with("text/html"));
+    assert!(html.contains("无法进入工作台"));
+    assert!(html.contains("/hbcdcagent/auth/callback"));
+    assert!(html.contains("USER_CENTER_LOGIN_URL"));
+    assert!(html.contains("查租户区域代码 /console/tenant/detail"));
+    assert!(html.contains("未配置"));
+    assert!(html.contains("未执行"));
+    assert!(html.contains("重新登录"));
     uc_h.abort();
     up_h.abort();
 }
@@ -332,6 +481,17 @@ async fn api_without_cookie_is_unauthorized() {
         .await
         .expect("resp");
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        !content_type.contains("html"),
+        "API 401 must stay plain text, got {content_type}"
+    );
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.expect("body");
+    assert_eq!(bytes.as_ref(), b"login required");
     uc_h.abort();
     up_h.abort();
 }
@@ -441,7 +601,7 @@ async fn local_mock_login_sets_cookie_and_redirects() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/auth/mock?user=chenmin")
+                .uri("/hbcdcagent/auth/mock?user=chenmin")
                 .body(Body::empty())
                 .expect("req"),
         )
@@ -449,9 +609,7 @@ async fn local_mock_login_sets_cookie_and_redirects() {
         .expect("resp");
     assert_eq!(resp.status(), StatusCode::TEMPORARY_REDIRECT);
     assert_eq!(
-        resp.headers()
-            .get("location")
-            .and_then(|v| v.to_str().ok()),
+        resp.headers().get("location").and_then(|v| v.to_str().ok()),
         Some("/hbcdcagent/workbench")
     );
     let set_cookie = resp
@@ -485,7 +643,7 @@ async fn mock_login_hidden_when_sso_mode() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/auth/mock?user=chenmin")
+                .uri("/hbcdcagent/auth/mock?user=chenmin")
                 .body(Body::empty())
                 .expect("req"),
         )
@@ -506,7 +664,7 @@ async fn local_mock_login_rejects_unknown_user() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/auth/mock?user=evil")
+                .uri("/hbcdcagent/auth/mock?user=evil")
                 .body(Body::empty())
                 .expect("req"),
         )
@@ -522,7 +680,7 @@ async fn login(app: &axum::Router, code: &str) -> String {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/auth/callback?verifyCode={code}"))
+                .uri(format!("/hbcdcagent/auth/callback?verifyCode={code}"))
                 .body(Body::empty())
                 .expect("req"),
         )
@@ -562,6 +720,7 @@ async fn proxy_keeps_prefix_and_drops_forged_identity() {
     assert_eq!(body["user"], "alice");
     assert_eq!(body["role"], "普通用户");
     assert_eq!(body["org"], "武汉疾控");
+    assert_eq!(body["region"], "420100000000");
     assert_eq!(body["secret"], "bff-secret");
     uc_h.abort();
     up_h.abort();
@@ -630,7 +789,7 @@ async fn logout_invalidates_session() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/auth/logout")
+                .uri("/hbcdcagent/auth/logout")
                 .header("cookie", &cookie)
                 .body(Body::empty())
                 .expect("req"),
@@ -661,7 +820,7 @@ async fn gw0003_retries_after_new_ticket() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/auth/callback?verifyCode=good-code")
+                .uri("/hbcdcagent/auth/callback?verifyCode=good-code")
                 .body(Body::empty())
                 .expect("req"),
         )
@@ -693,9 +852,9 @@ async fn ws_proxy_splices_chinese_identity_and_frames() {
     use futures_util::StreamExt;
     use std::sync::Mutex;
     use tokio_tungstenite::connect_async;
+    use tokio_tungstenite::tungstenite::Message as WsMessage;
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     use tokio_tungstenite::tungstenite::http::header::SEC_WEBSOCKET_PROTOCOL;
-    use tokio_tungstenite::tungstenite::Message as WsMessage;
 
     #[derive(Clone)]
     struct Cap(Arc<Mutex<Option<(String, String, String)>>>);
@@ -709,9 +868,10 @@ async fn ws_proxy_splices_chinese_identity_and_frames() {
         let region = header_text(&headers, HEADER_USER_REGION);
         let org = header_text(&headers, HEADER_USER_ORG);
         *cap.0.lock().expect("lock") = Some((role, region, org));
-        ws.protocols(["zeroclaw.v1"]).on_upgrade(|mut socket| async move {
-            let _ = socket.send(Message::Text("ok".into())).await;
-        })
+        ws.protocols(["zeroclaw.v1"])
+            .on_upgrade(|mut socket| async move {
+                let _ = socket.send(Message::Text("ok".into())).await;
+            })
     }
 
     let cap = Cap(Arc::new(Mutex::new(None)));

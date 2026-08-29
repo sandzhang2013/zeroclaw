@@ -140,7 +140,10 @@ mod tests {
     fn mock_catalog_matches_picker_ids() {
         assert_eq!(MOCK_USERS.len(), 4);
         for user in MOCK_USERS {
-            assert_eq!(mock_user(user.user_id).expect("catalog").user_id, user.user_id);
+            assert_eq!(
+                mock_user(user.user_id).expect("catalog").user_id,
+                user.user_id
+            );
         }
         assert!(mock_user("evil").is_none());
         assert_eq!(mock_user("ops").expect("ops").role, ROLE_OPS);

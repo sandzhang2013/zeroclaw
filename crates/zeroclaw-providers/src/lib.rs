@@ -1992,6 +1992,7 @@ pub fn list_model_providers() -> Vec<ModelProviderInfo> {
             ("openrouter", "OpenRouter", false),
             ("anthropic", "Anthropic", false),
             ("openai", "OpenAI", false),
+            ("deepseek", "DeepSeek", false),
             ("telnyx", "Telnyx", false),
             ("azure", "Azure OpenAI", false),
             ("ollama", "Ollama", true),
@@ -2020,7 +2021,6 @@ pub fn list_model_providers() -> Vec<ModelProviderInfo> {
             ("groq", "Groq", false),
             ("mistral", "Mistral", false),
             ("xai", "xAI (Grok)", false),
-            ("deepseek", "DeepSeek", false),
             ("together", "Together AI", false),
             ("fireworks", "Fireworks AI", false),
             ("novita", "Novita AI", false),
@@ -3626,6 +3626,26 @@ mod tests {
                 model_provider.name
             );
         }
+    }
+
+    #[test]
+    fn deepseek_is_a_primary_picker_entry() {
+        let providers = list_model_providers();
+        let deepseek = providers
+            .iter()
+            .find(|provider| provider.name == "deepseek")
+            .expect("DeepSeek has a canonical slot and must appear in the picker");
+        assert_eq!(deepseek.display_name, "DeepSeek");
+        assert_eq!(deepseek.category, ModelProviderCategory::Primary);
+        let primary_names: Vec<&str> = providers
+            .iter()
+            .filter(|provider| provider.category == ModelProviderCategory::Primary)
+            .map(|provider| provider.name)
+            .collect();
+        assert!(
+            primary_names.contains(&"deepseek"),
+            "Quickstart's first-screen list is Primary; burying DeepSeek in OpenAiCompatible hides it"
+        );
     }
 
     #[test]

@@ -68,8 +68,16 @@ impl Config {
         })
     }
 
+    pub const CALLBACK_PATH: &'static str = "/hbcdcagent/auth/callback";
+    pub const MOCK_PATH: &'static str = "/hbcdcagent/auth/mock";
+    pub const LOGOUT_PATH: &'static str = "/hbcdcagent/auth/logout";
+
     pub fn workbench_path() -> &'static str {
         "/hbcdcagent/workbench"
+    }
+
+    pub fn callback_url(&self) -> String {
+        format!("{}{}", self.public_origin, Self::CALLBACK_PATH)
     }
 
     #[cfg(test)]
@@ -99,7 +107,7 @@ impl Config {
         let login = self.login_url.as_deref()?;
         let client_id = self.client_id.as_deref()?;
         let realm = self.realm.as_deref()?;
-        let redirect = format!("{}/auth/callback", self.public_origin);
+        let redirect = self.callback_url();
         Some(format!(
             "{login}?clientId={}&realm={}&terminal={}&redirectUrl={}",
             urlencoding_minimal(client_id),
@@ -188,7 +196,9 @@ mod tests {
             local_mock: false,
         };
         let url = cfg.login_redirect().expect("url");
-        assert!(url.contains("redirectUrl=http%3A%2F%2F88.8.130.150%3A50001%2Fauth%2Fcallback"));
+        assert!(url.contains(
+            "redirectUrl=http%3A%2F%2F88.8.130.150%3A50001%2Fhbcdcagent%2Fauth%2Fcallback"
+        ));
         assert!(url.contains("clientId=cid"));
     }
 

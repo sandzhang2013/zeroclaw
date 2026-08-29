@@ -35,13 +35,17 @@ Ship **`hbcdcagent-bff`**, a separate Axum binary in
 `crates/hbcdcagent-bff`. It:
 
 1. Exchanges `verifyCode` with the user-center OpenAPI (`/auth/ticket`
-   then `/sso/code/userInfo`), using a Rust port of the vendor sign/SM4
+   then `/sso/code/userInfo`), then loads tenant `cityCode` from
+   `/console/tenant/detail`, using a Rust port of the vendor sign/SM4
    rules.
 2. Stores identity in a server-side session and an HttpOnly cookie on
    the workbench origin.
 3. Reverse-proxies `/hbcdcagent` (HTTP and WebSocket) to loopback
    ZeroClaw **without stripping the prefix**, after stripping
    client-supplied identity headers and writing trusted-proxy headers.
+   Login itself is `/hbcdcagent/auth/callback` so the user-center
+   `redirectUrl` shares the workbench prefix; the BFF handles `/hbcdcagent/auth/*`
+   before proxying.
 
 The daemon stays login-free. Java vendor utilities stay reference
 implementations; they are not run on the workbench host.
@@ -53,9 +57,8 @@ implementations; they are not run on the workbench host.
 - `appSecret` lives only in BFF environment variables.
   `trusted_proxy_secret` is shared by BFF and daemon environment
   variables.
-- Role/region mapping tables remain BFF-owned. This slice defaults
-  non-ops users to `普通用户` and leaves `X-User-Region` empty until a
-  city-code table exists.
+- Role mapping remains BFF-owned. Non-ops users default to `普通用户`.
+  `X-User-Region` is the tenant `cityCode` from `/console/tenant/detail`.
 - In-memory sessions are single-instance; a restart requires a new
   `verifyCode` callback.
 

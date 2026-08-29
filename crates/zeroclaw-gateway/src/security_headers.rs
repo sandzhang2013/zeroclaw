@@ -15,7 +15,7 @@ const SECURITY_HEADERS: &[(&str, &str)] = &[
          style-src 'self' 'unsafe-inline'; \
          img-src 'self' data:; \
          font-src 'self'; \
-         connect-src 'self' ws: wss:; \
+         connect-src 'self'; \
          object-src 'none'; \
          frame-ancestors 'none'; \
          base-uri 'none'; \
@@ -88,7 +88,14 @@ mod tests {
             .unwrap();
         assert!(csp.contains("default-src 'self'"));
         assert!(csp.contains("script-src 'self'"));
-        assert!(csp.contains("connect-src 'self' ws: wss:"));
+        assert!(
+            csp.contains("connect-src 'self'"),
+            "CSP3 'self' already allows same-origin WebSocket; do not add scheme-wide ws:/wss:"
+        );
+        assert!(
+            !csp.split("connect-src").nth(1).unwrap_or("").contains("ws:"),
+            "connect-src must not allow arbitrary ws: hosts"
+        );
         assert!(csp.contains("frame-ancestors 'none'"));
     }
 

@@ -19895,6 +19895,20 @@ impl Config {
         self.env_overridden_paths.contains(path)
     }
 
+    /// Merge built-in default `auto_approve` entries into
+    /// `risk_profiles.default` when that alias exists.
+    ///
+    /// This is load-time in-memory canonicalization and is not written back
+    /// to disk. Serde replaces a user-supplied `auto_approve` list instead of
+    /// merging, so load re-adds the framework defaults (`weather`,
+    /// `calculator`, …). Drift comparison must apply the same hook to the
+    /// on-disk parse so this merge is not reported as operator-visible drift.
+    pub fn ensure_default_risk_profile_auto_approve(&mut self) {
+        if let Some(default_profile) = self.risk_profiles.get_mut("default") {
+            default_profile.ensure_default_auto_approve();
+        }
+    }
+
     pub async fn load_or_init() -> Result<Self> {
         let (default_zeroclaw_dir, default_workspace_dir) = default_config_and_data_dirs()?;
 
@@ -20119,9 +20133,7 @@ impl Config {
             // single-instance bridge); a config that arrives without it
             // is a legitimate multi-aliased shape and must not have one
             // injected at load time.
-            if let Some(default_profile) = config.risk_profiles.get_mut("default") {
-                default_profile.ensure_default_auto_approve();
-            }
+            config.ensure_default_risk_profile_auto_approve();
 
             // Detect unknown top-level config keys by comparing the raw
             // TOML table keys against what Config actually deserializes.

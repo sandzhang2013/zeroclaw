@@ -1,7 +1,8 @@
 use crate::config::Config;
+use crate::error_page::{LoginErrorKind, login_error_response};
 use crate::identity::{
     HEADER_AUTH_SECRET, HEADER_USER_ID, HEADER_USER_ORG, HEADER_USER_REGION, HEADER_USER_ROLE,
-    IDENTITY_HEADERS, MOCK_COOKIE_NAME, Identity, mock_user, normalize_user_id,
+    IDENTITY_HEADERS, Identity, MOCK_COOKIE_NAME, mock_user, normalize_user_id,
 };
 use crate::session::{SessionStore, cookie_value, sid_from_cookie_header};
 use crate::user_center::UserCenter;
@@ -253,10 +254,7 @@ async fn proxy_ws(state: Arc<AppState>, mut req: Request) -> Response {
         req.headers_mut().insert(header::HOST, value);
     }
     remove_hop_by_hop(req.headers_mut(), true);
-    let path = target
-        .path_and_query()
-        .map(|pq| pq.as_str())
-        .unwrap_or("/");
+    let path = target.path_and_query().map(|pq| pq.as_str()).unwrap_or("/");
     *req.uri_mut() = match path.parse() {
         Ok(uri) => uri,
         Err(_) => return (StatusCode::BAD_GATEWAY, "bad upstream URI").into_response(),
@@ -324,7 +322,7 @@ fn unauthenticated(cfg: &Config, path: &str) -> Response {
     }
     match cfg.login_redirect() {
         Some(url) => Redirect::temporary(&url).into_response(),
-        None => (StatusCode::UNAUTHORIZED, "login required").into_response(),
+        None => login_error_response(StatusCode::UNAUTHORIZED, cfg, LoginErrorKind::NoLoginEntry),
     }
 }
 

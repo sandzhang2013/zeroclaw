@@ -43,6 +43,6 @@ hbcdcagent_start_bff
 
 echo "✅ 用户中心方式已启动"
 echo "   入口：${HBCDCAGENT_BFF_PUBLIC_ORIGIN}/hbcdcagent/workbench"
-echo "   redirectUrl 应登记为 ${HBCDCAGENT_BFF_PUBLIC_ORIGIN}/auth/callback"
+echo "   redirectUrl 应登记为 ${HBCDCAGENT_BFF_PUBLIC_ORIGIN}/hbcdcagent/auth/callback"
 
 hbcdcagent_wait

@@ -307,6 +307,8 @@ pub async fn handle_agent_workspace_raw(
 }
 
 /// `DELETE /api/agents/{alias}/workspace/path` body `{ path: "<rel>" }`.
+/// Missing paths return 200: session dirs are created on first write, and
+/// the workbench always deletes `sessions/<id>` when closing a chat.
 pub async fn handle_agent_workspace_delete(
     State(state): State<AppState>,
     headers: HeaderMap,

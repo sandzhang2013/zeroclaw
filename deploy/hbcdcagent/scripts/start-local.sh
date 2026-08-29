@@ -52,7 +52,7 @@ hbcdcagent_start_bff
 
 echo "✅ 本地模拟用户已启动"
 echo "   点这个登录（会写 cookie 并跳转工作台）："
-echo "     ${HBCDCAGENT_BFF_PUBLIC_ORIGIN}/auth/mock?user=chenmin"
+echo "     ${HBCDCAGENT_BFF_PUBLIC_ORIGIN}/hbcdcagent/auth/mock?user=chenmin"
 echo "   工作台：${HBCDCAGENT_BFF_PUBLIC_ORIGIN}/hbcdcagent/workbench"
 echo "   可选 user=chenmin|liuyang|zhoujing|ops"
 echo "   从其他机器访问时设置 HBCDCAGENT_BFF_PUBLIC_ORIGIN=http://<公网主机>:50001"

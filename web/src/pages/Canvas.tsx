@@ -2,7 +2,9 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { usePolling } from '@/hooks/usePolling';
 import { Monitor, Trash2, History, RefreshCw } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
-import { basePath } from '@/lib/basePath';
+import { apiOrigin, basePath } from '@/lib/basePath';
+import { isTauri } from '@/lib/tauri';
+import { sameOriginWebSocketUrl } from '@/lib/wsUrl';
 import { getToken } from '@/lib/auth';
 import { Badge, Button, Card, PageHeader } from '@/components/ui';
 import { t } from '@/lib/i18n';
@@ -60,9 +62,11 @@ export default function Canvas() {
 
   // Build WebSocket URL for canvas
   const getWsUrl = useCallback((id: string) => {
-    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const base = basePath || '';
-    return `${proto}//${location.host}${base}/ws/canvas/${encodeURIComponent(id)}`;
+    const path = `${basePath || ''}/ws/canvas/${encodeURIComponent(id)}`;
+    return sameOriginWebSocketUrl(
+      path,
+      isTauri() && apiOrigin ? apiOrigin : window.location.href,
+    );
   }, []);
 
   // Connect to canvas WebSocket

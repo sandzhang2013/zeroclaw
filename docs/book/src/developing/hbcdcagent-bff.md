@@ -16,7 +16,7 @@ cookie. Do not treat that as production login.
 ```text
 Browser
   → http://<workbench-host>:50001     hbcdcagent-bff
-       GET /auth/callback?verifyCode=
+       GET /hbcdcagent/auth/callback?verifyCode=
        /hbcdcagent/*  (HTML, /api, /ws)
           strip client X-User-* / X-Auth-Secret
           set those headers from the BFF session
@@ -26,7 +26,7 @@ Browser
 ```
 
 Register the user-center `redirectUrl` as
-`http://<workbench-host>:50001/auth/callback`, not the daemon port and
+`http://<workbench-host>:50001/hbcdcagent/auth/callback`, not the daemon port and
 not a workbench URL that carries `userId`.
 
 ## Build and run
@@ -55,7 +55,7 @@ Optional demo mode: set `HBCDCAGENT_BFF_LOCAL_MOCK=true` to skip SSO and
 derive the identity from a `zeroclaw_mock_user` cookie instead. Allowed
 ids: `chenmin`, `liuyang`, `zhoujing`, `ops` (`MOCK_USERS` in
 `crates/hbcdcagent-bff/src/identity.rs`). Open
-`/auth/mock?user=chenmin` to set the cookie, or load `/hbcdcagent/workbench`
+`/hbcdcagent/auth/mock?user=chenmin` to set the cookie, or load `/hbcdcagent/workbench`
 without a cookie to reach the SPA picker. API and WebSocket still return
 401 until a cookie is present. Demo only — do not enable in production.
 
@@ -66,7 +66,8 @@ The BFF does not depend on `zeroclaw-*` crates. Sign and SM4 follow
 
 Same contract as [trusted proxy](../architecture/decisions/ADR-014-platform-chat-embed.md)
 and `crates/zeroclaw-gateway/src/trusted_proxy.rs`: `X-Auth-Secret`,
-`X-User-Id`, `X-User-Role`, optional region/org. UTF-8 header bytes for
+`X-User-Id`, `X-User-Role`, optional region/org. `X-User-Region` is the tenant `cityCode` from
+`POST /console/tenant/detail` after the `verifyCode` exchange. UTF-8 header bytes for
 Chinese role/region values. Query `user_id` remains ignored by the
 daemon.
 
@@ -81,8 +82,14 @@ Delivery-pack start scripts live in `deploy/hbcdcagent/scripts/`. Both
 local mock and user-center SSO run `zeroclaw daemon` plus
 `hbcdcagent-bff` against `web/dist`. Local mode sets
 `HBCDCAGENT_BFF_LOCAL_MOCK=true` and logs
-`/auth/mock?user=chenmin`; SSO mode loads `config/.env` and leaves mock
+`/hbcdcagent/auth/mock?user=chenmin`; SSO mode loads `config/.env` and leaves mock
 off. Do not point those scripts at a Vite source tree.
+
+Callback and HTML navigation failures render a self-contained Chinese
+page with the five login steps (SSO jump, callback `verifyCode`,
+`/sso/code/userInfo`, `/console/tenant/detail` cityCode, session) and a status for each: 已配置 / 通过 /
+未配置 / 失败 / 未执行. Missing SSO env names are listed; secrets are
+not. API and WebSocket still return `401 login required` as text.
 
 WebSocket proxying splices the HTTP upgrade onto the daemon so Chinese
 `X-User-Role` / region / org bytes and `zeroclaw.v1` pass through.
