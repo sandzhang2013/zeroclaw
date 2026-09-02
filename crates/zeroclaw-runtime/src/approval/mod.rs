@@ -184,6 +184,12 @@ impl ApprovalManager {
         self.autonomy_ceiling
     }
 
+    /// Live session overlay, already clamped by [`Self::set_autonomy_level`].
+    #[must_use]
+    pub fn live_autonomy(&self) -> AutonomyLevel {
+        *self.autonomy_level.lock()
+    }
+
     /// Check whether a tool call requires interactive approval.
     /// Returns `true` if the call needs a prompt, `false` if it can proceed.
     pub fn needs_approval(&self, tool_name: &str) -> bool {
@@ -588,8 +594,10 @@ mod tests {
     #[test]
     fn set_autonomy_level_cannot_raise_above_profile() {
         let mgr = ApprovalManager::from_risk_profile(&supervised_config());
+        assert_eq!(mgr.live_autonomy(), AutonomyLevel::Supervised);
         assert!(mgr.needs_approval("file_write"));
         mgr.set_autonomy_level(AutonomyLevel::Full);
+        assert_eq!(mgr.live_autonomy(), AutonomyLevel::Supervised);
         assert!(
             mgr.needs_approval("file_write"),
             "supervised profile must keep prompting even if a client asks for full"
@@ -603,10 +611,13 @@ mod tests {
     #[test]
     fn set_autonomy_level_can_drop_and_restore_when_profile_is_full() {
         let mgr = ApprovalManager::from_risk_profile(&full_config());
+        assert_eq!(mgr.live_autonomy(), AutonomyLevel::Full);
         assert!(!mgr.needs_approval("file_write"));
         mgr.set_autonomy_level(AutonomyLevel::Supervised);
+        assert_eq!(mgr.live_autonomy(), AutonomyLevel::Supervised);
         assert!(mgr.needs_approval("file_write"));
         mgr.set_autonomy_level(AutonomyLevel::Full);
+        assert_eq!(mgr.live_autonomy(), AutonomyLevel::Full);
         assert!(!mgr.needs_approval("file_write"));
     }
 

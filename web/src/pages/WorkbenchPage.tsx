@@ -18,6 +18,10 @@ export default function WorkbenchPage() {
   const [user, setUser] = useState<PlatformUser | null>(() => resolveWorkbenchUser());
 
   useEffect(() => {
+    if (user?.source === 'mock') saveMockUser(user);
+  }, [user]);
+
+  useEffect(() => {
     document.title = t('workbench.brand');
   }, []);
 

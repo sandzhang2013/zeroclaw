@@ -16,6 +16,7 @@ test('isWorkbenchPath accepts prefixed and unprefixed workbench URLs', () => {
 test('shouldSkipPairing skips Vite, workbench, and BFF-injected users', () => {
   assert.equal(shouldSkipPairing({ dev: true, pathname: '/dashboard' }), true);
   assert.equal(shouldSkipPairing({ pathname: '/hbcdcagent/workbench' }), true);
+  assert.equal(shouldSkipPairing({ pathname: '/hbcdcagent/dashboard' }), true);
   assert.equal(
     shouldSkipPairing({
       pathname: '/hbcdcagent/dashboard',

@@ -107,7 +107,7 @@ export function gatewaySessionsToRecover(
   for (const row of rows) {
     if (!row.agent_alias || row.channel_id || row.message_count <= 0) continue;
     if (row.session_id === defaultSessionId) continue;
-    if (userId && row.user_id && row.user_id !== userId) continue;
+    if (userId && row.user_id !== userId) continue;
     const title = typeof row.name === 'string' && row.name.trim() ? row.name.trim() : undefined;
     out.push({
       sessionId: row.session_id,

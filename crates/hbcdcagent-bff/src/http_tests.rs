@@ -163,6 +163,7 @@ async fn mock_tenant_detail(
         &json!({
             "tenantId": "tenant-wh",
             "tenantName": "武汉疾控",
+            "devisionType": 2,
             "cityCode": "420100000000"
         })
         .to_string(),
@@ -689,6 +690,7 @@ async fn local_mock_workbench_without_cookie_serves_spa() {
     let bytes = to_bytes(resp.into_body(), usize::MAX).await.expect("body");
     let html = String::from_utf8(bytes.to_vec()).expect("utf8");
     assert!(html.contains("workbench</body>"));
+    assert!(html.contains(r#"window.__ZEROCLAW_BASE__="/hbcdcagent""#));
     assert!(!html.contains("__ZEROCLAW_PLATFORM_USER__"));
     uc_h.abort();
     up_h.abort();
@@ -875,7 +877,9 @@ async fn html_proxy_injects_platform_user() {
             r#"window.__ZEROCLAW_PLATFORM_USER__={"userId":"alice","displayName":"爱丽丝""#
         )
     );
-    assert!(html.contains("<head><script>window.__ZEROCLAW_PLATFORM_USER__="));
+    assert!(html.contains(r#"window.__ZEROCLAW_BASE__="/hbcdcagent""#));
+    assert!(html.contains("<head><script>window.__ZEROCLAW_BASE__="));
+    assert!(html.contains("window.__ZEROCLAW_PLATFORM_USER__="));
     assert!(html.contains("workbench</body>"));
     uc_h.abort();
     up_h.abort();

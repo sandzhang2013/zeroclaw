@@ -139,6 +139,13 @@ test('gatewaySessionsToRecover keeps owned transcripts and skips empty or foreig
         last_activity: '2026-08-21T00:00:00.000Z',
       },
       {
+        session_id: 'unowned-uuid',
+        agent_alias: 'deepseek',
+        message_count: 5,
+        channel_id: null,
+        last_activity: '2026-08-21T01:00:00.000Z',
+      },
+      {
         session_id: 'owned-uuid',
         agent_alias: 'deepseek',
         message_count: 8,

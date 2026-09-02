@@ -197,7 +197,7 @@ fn checklist(cfg: &Config, kind: LoginErrorKind) -> Vec<Step> {
     let (tenant_status, tenant_detail) = match kind {
         LoginErrorKind::TenantDetailFailed => (
             StepStatus::Failed,
-            format!("{openapi}/console/tenant/detail，请求 tenantId，读取 cityCode（区域代码）"),
+            format!("{openapi}/console/tenant/detail，请求 tenantId，按 devisionType 读 provinceCode/cityCode/districtCode"),
         ),
         LoginErrorKind::InvalidUserId => (
             StepStatus::Pending,
@@ -405,6 +405,7 @@ mod tests {
         let cfg = Config::for_test("http://uc", "http://up");
         let html = render(&cfg, LoginErrorKind::TenantDetailFailed, None);
         assert!(html.contains("卡住的是 /console/tenant/detail"));
+        assert!(html.contains("devisionType"));
         assert!(html.contains("cityCode"));
         assert!(html.contains("失败"));
         assert!(html.contains("通过"));

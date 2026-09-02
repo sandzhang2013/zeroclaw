@@ -1326,18 +1326,21 @@ async fn process_chat_message(
             Some(session_key_owned.clone()),
             zeroclaw_runtime::agent::loop_::scope_user_attrs(
                 frozen_user.clone(),
-                zeroclaw_runtime::agent::cost::TOOL_LOOP_TURN_USAGE.scope(
-                    turn_usage.clone(),
-                    zeroclaw_runtime::agent::cost::TOOL_LOOP_COST_TRACKING_CONTEXT.scope(
-                        cost_tracking_context.clone(),
-                        agent
-                            .turn_streamed_with_steering_state(
-                                &content_owned,
-                                event_tx,
-                                Some(cancel_token.clone()),
-                                Some(&mut steering_rx),
-                            )
-                            .instrument(span),
+                zeroclaw_runtime::agent::loop_::scope_turn_user_text(
+                    Some(content_owned.clone()),
+                    zeroclaw_runtime::agent::cost::TOOL_LOOP_TURN_USAGE.scope(
+                        turn_usage.clone(),
+                        zeroclaw_runtime::agent::cost::TOOL_LOOP_COST_TRACKING_CONTEXT.scope(
+                            cost_tracking_context.clone(),
+                            agent
+                                .turn_streamed_with_steering_state(
+                                    &content_owned,
+                                    event_tx,
+                                    Some(cancel_token.clone()),
+                                    Some(&mut steering_rx),
+                                )
+                                .instrument(span),
+                        ),
                     ),
                 ),
             ),

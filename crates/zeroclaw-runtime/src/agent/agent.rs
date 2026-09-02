@@ -1072,6 +1072,18 @@ impl Agent {
         self.autonomy_level
     }
 
+    /// Live session overlay (WebSocket workbench mode), not the config snapshot.
+    #[must_use]
+    pub fn live_autonomy(&self) -> crate::security::AutonomyLevel {
+        if let Some(policy) = &self.security_policy {
+            return policy.effective_autonomy();
+        }
+        if let Some(manager) = &self.approval_manager {
+            return manager.live_autonomy();
+        }
+        self.autonomy_level
+    }
+
     /// Apply a session-scoped autonomy override (WebSocket workbench mode switch).
     /// Updates the live policy cell, approval manager, and safety prompt level.
     /// Requested levels above the config snapshot are clamped down.
@@ -1085,6 +1097,7 @@ impl Agent {
         if let Some(manager) = &self.approval_manager {
             manager.set_autonomy_level(level);
         }
+        debug_assert_eq!(self.live_autonomy(), level);
     }
 
     fn new_turn_id() -> String {

@@ -18,6 +18,47 @@ pub const MODEL_IDENTITY_ARG_KEYS: &[&str] =
 /// Also stripped from model args for non-ops before the frozen region is written.
 pub const GEO_ARG_KEYS: &[&str] = &["region", "city", "cities"];
 
+/// Default geography for ops MCP calls when the user did not name a city.
+pub const DEFAULT_OPS_GEO: &str = "全省";
+
+/// Longer aliases first so `武汉市` wins over `武汉`.
+const HUBEI_CITY_ALIASES: &[(&str, &str)] = &[
+    ("神农架林区", "神农架林区"),
+    ("神农架", "神农架林区"),
+    ("武汉市", "武汉市"),
+    ("黄冈市", "黄冈市"),
+    ("黄石市", "黄石市"),
+    ("荆州市", "荆州市"),
+    ("荆门市", "荆门市"),
+    ("襄阳市", "襄阳市"),
+    ("十堰市", "十堰市"),
+    ("宜昌市", "宜昌市"),
+    ("孝感市", "孝感市"),
+    ("鄂州市", "鄂州市"),
+    ("随州市", "随州市"),
+    ("咸宁市", "咸宁市"),
+    ("仙桃市", "仙桃市"),
+    ("潜江市", "潜江市"),
+    ("天门市", "天门市"),
+    ("恩施州", "恩施州"),
+    ("恩施", "恩施州"),
+    ("武汉", "武汉市"),
+    ("黄冈", "黄冈市"),
+    ("黄石", "黄石市"),
+    ("荆州", "荆州市"),
+    ("荆门", "荆门市"),
+    ("襄阳", "襄阳市"),
+    ("十堰", "十堰市"),
+    ("宜昌", "宜昌市"),
+    ("孝感", "孝感市"),
+    ("鄂州", "鄂州市"),
+    ("随州", "随州市"),
+    ("咸宁", "咸宁市"),
+    ("仙桃", "仙桃市"),
+    ("潜江", "潜江市"),
+    ("天门", "天门市"),
+];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UserIdError {
     Empty,
@@ -126,11 +167,15 @@ impl UserAttrs {
             .collect()
     }
 
-    /// After stripping model identity, bind non-ops MCP args to the frozen region.
+    /// After stripping model identity, bind MCP geo args from frozen identity.
     ///
-    /// Ops keep header-only identity so they can query any area. A normal user
-    /// without a frozen region fails closed instead of sending an unscoped
-    /// `getcase`. Legacy pairing (`mcp_identity() == Ok(None)`) is unchanged.
+    /// - Ops: geography follows the **user turn text**, not the model.
+    ///   No named city → [`DEFAULT_OPS_GEO`] (`全省`). An explicit city
+    ///   (e.g. 武汉 / 武汉市) → that canonical city. Model-chosen cities that
+    ///   the user never named are discarded (common when asking about 湖北省).
+    /// - Non-ops: overwrite geo keys with the frozen region. Missing frozen
+    ///   region fails closed.
+    /// - Legacy pairing (`mcp_identity() == Ok(None)`) is unchanged.
     pub fn bind_mcp_tool_args(
         args: &mut serde_json::Value,
         geo_schema_keys: &[String],
@@ -141,6 +186,20 @@ impl UserAttrs {
             Ok(None) => Ok(()),
             Ok(Some(attrs)) => {
                 if attrs.is_ops() {
+                    let geo = ops_geo_from_turn(current_turn_user_text().as_deref());
+                    if let serde_json::Value::Object(map) = args {
+                        for key in GEO_ARG_KEYS {
+                            map.remove(*key);
+                        }
+                        for key in geo_schema_keys {
+                            let value = if key == "cities" {
+                                geo.cities_arg()
+                            } else {
+                                geo.city_arg()
+                            };
+                            map.insert(key.clone(), serde_json::Value::String(value));
+                        }
+                    }
                     return Ok(());
                 }
                 if let serde_json::Value::Object(map) = args {
@@ -166,6 +225,50 @@ impl UserAttrs {
         }
     }
 
+    /// System-prompt block so the model treats workbench isolation as
+    /// canonical and does not parrot upstream 「全省=武汉哨点」 footnotes.
+    #[must_use]
+    pub fn data_scope_prompt(&self) -> String {
+        let role = self.role.as_deref().unwrap_or(ROLE_NORMAL);
+        let region = self
+            .region
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(if self.is_ops() {
+                DEFAULT_OPS_GEO
+            } else {
+                "（未绑定）"
+            });
+        if self.is_ops() {
+            format!(
+                "## Data scope (workbench)\n\n\
+                 Logged-in role: {role}. Default geography: {region}.\n\n\
+                 Disease-report geography is bound by the runtime from the user text, \
+                 not by you. No named city → `{DEFAULT_OPS_GEO}`; a named city \
+                 (武汉 / 宜昌) → that city.\n\n\
+                 If a tool says `{DEFAULT_OPS_GEO}` actually resolves to 武汉市监测数据 \
+                 (全省核心哨点口径), that is the upstream API's note for a province-wide \
+                 query. You may mention that 口径 when the user asked for {DEFAULT_OPS_GEO}. \
+                 Do not use it to explain why a city-level login only sees its own city."
+            )
+        } else {
+            format!(
+                "## Data scope (workbench)\n\n\
+                 Logged-in role: {role}. Visible region: {region}.\n\n\
+                 This workbench isolates data by login region. Tool city/region \
+                 arguments are overwritten to `{region}` (武汉用户=武汉市, \
+                 宜昌用户=宜昌市). Do not widen the query to `{DEFAULT_OPS_GEO}` \
+                 even if the user says 全省.\n\n\
+                 If a tool result says `{DEFAULT_OPS_GEO}` is actually 武汉市监测数据 \
+                 or 全省核心哨点口径, ignore it for this user. That note describes \
+                 the upstream API's province-wide mapping, not this login. \
+                 Present the numbers as `{region}` data. Do not tell the user \
+                 that 全省 is secretly Wuhan sentinel data."
+            )
+        }
+    }
+
     /// Transport-only identity object. Never merge into model-visible tool args.
     #[must_use]
     pub fn transport_json(&self) -> serde_json::Value {
@@ -175,6 +278,62 @@ impl UserAttrs {
             "region": self.region,
             "org": self.organization,
         })
+    }
+}
+
+/// Current turn's raw user text when the gateway scoped it.
+#[must_use]
+pub fn current_turn_user_text() -> Option<String> {
+    crate::TOOL_LOOP_TURN_USER_TEXT
+        .try_with(std::clone::Clone::clone)
+        .ok()
+        .flatten()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OpsGeo {
+    cities: Vec<String>,
+}
+
+impl OpsGeo {
+    fn province() -> Self {
+        Self {
+            cities: vec![DEFAULT_OPS_GEO.to_string()],
+        }
+    }
+
+    fn city_arg(&self) -> String {
+        self.cities
+            .first()
+            .cloned()
+            .unwrap_or_else(|| DEFAULT_OPS_GEO.to_string())
+    }
+
+    fn cities_arg(&self) -> String {
+        self.cities.join(",")
+    }
+}
+
+/// Cities the user named in the turn. Empty → treat as province-wide.
+fn cities_named_in_turn(text: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    for &(alias, canonical) in HUBEI_CITY_ALIASES {
+        if text.contains(alias) && !found.iter().any(|c| c == canonical) {
+            found.push(canonical.to_string());
+        }
+    }
+    found
+}
+
+fn ops_geo_from_turn(text: Option<&str>) -> OpsGeo {
+    let Some(text) = text.map(str::trim).filter(|s| !s.is_empty()) else {
+        return OpsGeo::province();
+    };
+    let named = cities_named_in_turn(text);
+    if named.is_empty() {
+        OpsGeo::province()
+    } else {
+        OpsGeo { cities: named }
     }
 }
 
@@ -188,6 +347,15 @@ pub fn mcp_identity() -> Result<Option<UserAttrs>, &'static str> {
         None => Ok(None),
         Some(None) => Err("MCP call refused: missing frozen user identity"),
         Some(Some(attrs)) => Ok(Some(attrs)),
+    }
+}
+
+/// Prompt block for the current frozen identity, if a BFF turn is scoped.
+#[must_use]
+pub fn current_data_scope_prompt() -> Option<String> {
+    match current_user_attrs() {
+        Some(Some(attrs)) => Some(attrs.data_scope_prompt()),
+        _ => None,
     }
 }
 
@@ -303,22 +471,77 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bind_mcp_tool_args_does_not_force_region_for_ops() {
+    async fn bind_mcp_tool_args_ops_defaults_province_when_user_omits_city() {
         crate::TOOL_LOOP_USER_ATTRS
             .scope(
-                Some(
-                    UserAttrs::new("ops")
-                        .with_role(ROLE_OPS)
-                        .with_region("全省"),
+                Some(UserAttrs::new("ops").with_role(ROLE_OPS)),
+                crate::TOOL_LOOP_TURN_USER_TEXT.scope(
+                    Some("湖北省近期流感情况如何".into()),
+                    async {
+                        let mut args = serde_json::json!({
+                            "city": "武汉市",
+                            "region": "武汉市",
+                            "cities": "武汉市,宜昌市",
+                            "disease": "流感"
+                        });
+                        let keys = vec![
+                            "region".to_string(),
+                            "city".to_string(),
+                            "cities".to_string(),
+                        ];
+                        UserAttrs::bind_mcp_tool_args(&mut args, &keys).unwrap();
+                        assert_eq!(args["region"], DEFAULT_OPS_GEO);
+                        assert_eq!(args["city"], DEFAULT_OPS_GEO);
+                        assert_eq!(args["cities"], DEFAULT_OPS_GEO);
+                        assert_eq!(args["disease"], "流感");
+                    },
                 ),
-                async {
-                    let mut args = serde_json::json!({ "region": "宜昌市" });
-                    let keys = vec!["region".to_string()];
-                    UserAttrs::bind_mcp_tool_args(&mut args, &keys).unwrap();
-                    assert_eq!(args["region"], "宜昌市");
-                },
             )
             .await;
+    }
+
+    #[tokio::test]
+    async fn bind_mcp_tool_args_ops_uses_explicit_wuhan_from_user_text() {
+        crate::TOOL_LOOP_USER_ATTRS
+            .scope(
+                Some(UserAttrs::new("ops").with_role(ROLE_OPS)),
+                crate::TOOL_LOOP_TURN_USER_TEXT.scope(
+                    Some("武汉的流感怎么样".into()),
+                    async {
+                        let mut args = serde_json::json!({ "city": "宜昌市" });
+                        let keys = vec!["city".to_string()];
+                        UserAttrs::bind_mcp_tool_args(&mut args, &keys).unwrap();
+                        assert_eq!(args["city"], "武汉市");
+                    },
+                ),
+            )
+            .await;
+    }
+
+    #[tokio::test]
+    async fn bind_mcp_tool_args_ops_keeps_multiple_named_cities() {
+        crate::TOOL_LOOP_USER_ATTRS
+            .scope(
+                Some(UserAttrs::new("ops").with_role(ROLE_OPS)),
+                crate::TOOL_LOOP_TURN_USER_TEXT.scope(
+                    Some("对比武汉和宜昌的流感".into()),
+                    async {
+                        let mut args = serde_json::json!({ "cities": "十堰市" });
+                        let keys = vec!["cities".to_string(), "city".to_string()];
+                        UserAttrs::bind_mcp_tool_args(&mut args, &keys).unwrap();
+                        assert_eq!(args["cities"], "武汉市,宜昌市");
+                        assert_eq!(args["city"], "武汉市");
+                    },
+                ),
+            )
+            .await;
+    }
+
+    #[test]
+    fn cities_named_in_turn_ignores_province_words() {
+        assert!(cities_named_in_turn("全省法定传染病概况").is_empty());
+        assert!(cities_named_in_turn("湖北省流感").is_empty());
+        assert_eq!(cities_named_in_turn("看看武汉市"), vec!["武汉市".to_string()]);
     }
 
     #[test]
@@ -380,5 +603,28 @@ mod tests {
             normalize_user_id("alice\0"),
             Err(UserIdError::Unsafe)
         ));
+    }
+
+    #[test]
+    fn data_scope_prompt_tells_city_users_to_ignore_province_sentinel_note() {
+        let text = UserAttrs::new("chenmin")
+            .with_role(ROLE_NORMAL)
+            .with_region("武汉市")
+            .data_scope_prompt();
+        assert!(text.contains("武汉市"));
+        assert!(text.contains("ignore"));
+        assert!(text.contains("全省核心哨点口径"));
+        assert!(!text.contains("You may mention that"));
+    }
+
+    #[test]
+    fn data_scope_prompt_lets_ops_mention_province_api_note() {
+        let text = UserAttrs::new("ops")
+            .with_role(ROLE_OPS)
+            .with_region("全省")
+            .data_scope_prompt();
+        assert!(text.contains(ROLE_OPS));
+        assert!(text.contains("You may mention that"));
+        assert!(text.contains(DEFAULT_OPS_GEO));
     }
 }

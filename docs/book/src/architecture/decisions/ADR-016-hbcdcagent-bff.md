@@ -35,9 +35,9 @@ Ship **`hbcdcagent-bff`**, a separate Axum binary in
 `crates/hbcdcagent-bff`. It:
 
 1. Exchanges `verifyCode` with the user-center OpenAPI (`/auth/ticket`
-   then `/sso/code/userInfo`), then loads tenant `cityCode` from
-   `/console/tenant/detail`, using a Rust port of the vendor sign/SM4
-   rules.
+   then `/sso/code/userInfo`), then loads the tenant region from
+   `/console/tenant/detail` (`devisionType` 1/2/3 → province/city/district
+   code), using a Rust port of the vendor sign/SM4 rules.
 2. Stores identity in a server-side session and an HttpOnly cookie on
    the workbench origin.
 3. Reverse-proxies `/hbcdcagent` (HTTP and WebSocket) to loopback
@@ -58,7 +58,8 @@ implementations; they are not run on the workbench host.
   `trusted_proxy_secret` is shared by BFF and daemon environment
   variables.
 - Role mapping remains BFF-owned. Non-ops users default to `普通用户`.
-  `X-User-Region` is the tenant `cityCode` from `/console/tenant/detail`.
+  `X-User-Region` is the tenant region code from `/console/tenant/detail`
+  (`devisionType` 1=`provinceCode`, 2=`cityCode`, 3=`districtCode`).
 - In-memory sessions are single-instance; a restart requires a new
   `verifyCode` callback.
 - `HBCDCAGENT_BFF_UPSTREAM` must be an `http` origin. Parse failures and

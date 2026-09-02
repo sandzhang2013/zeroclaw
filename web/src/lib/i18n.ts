@@ -90,6 +90,9 @@ const translations: Record<Locale, Record<string, string>> = {
     'agent.disconnected': '已断开',
     'agent.reconnecting': '重新连接中...',
     'agent.thinking': '思考中...',
+    'agentchat.thinking': '思考过程',
+    'acp.agent_thought': '智能体思考',
+    'acp.role_thought': '思考',
     'agent.tool_call': '工具调用',
     'agent.tool_result': '工具结果',
     'agent.connection_error': '连接错误，正在尝试重连...',
@@ -14286,7 +14289,7 @@ const translations: Record<Locale, Record<string, string>> = {
 // Current locale state
 // ---------------------------------------------------------------------------
 
-let currentLocale: Locale = 'en';
+let currentLocale: Locale = 'zh';
 
 export function getLocale(): Locale {
   return currentLocale;

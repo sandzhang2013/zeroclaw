@@ -125,12 +125,6 @@ function dedupeSessions(sessions: WorkbenchSession[]): WorkbenchSession[] {
   });
 }
 
-function findSessionByAgent(sessions: WorkbenchSession[], agentAlias: string): WorkbenchSession | undefined {
-  const def = sessions.find((s) => s.agentAlias === agentAlias && s.taskId === '__default__');
-  if (def) return def;
-  return sessions.find((s) => s.agentAlias === agentAlias);
-}
-
 function loadPersisted(userId?: string): Partial<PersistedStateV3> {
   try {
     const raw = readWorkspaceSnapshot(userId);
@@ -199,15 +193,13 @@ export default function ChatWorkspace({
   });
   const [sessions, setSessions] = useState<WorkbenchSession[]>(() => {
     const stored = persisted.current.sessions ?? [];
-    const existing = findSessionByAgent(stored, initialAlias);
-    const seed: WorkbenchSession[] = existing ? stored : [...stored, makeDefaultSession(initialAlias)];
-    return dedupeSessions(seed.map(withUpdatedAt));
+    return dedupeSessions(stored.map(withUpdatedAt));
   });
-  const [activeSessionId, setActiveSessionId] = useState<string>(() => {
-    const stored = persisted.current.activeSessionId;
-    if (typeof stored === 'string') return stored;
-    return findSessionByAgent(sessions, initialAlias)?.id ?? makeSessionId(initialAlias, '__default__');
-  });
+  // Login / user switch always lands on the composer. Auto-opening a stored
+  // task reconnects its gateway UUID and trips SESSION_FORBIDDEN when that
+  // UUID was stamped by the previous user.
+  const [activeSessionId, setActiveSessionId] = useState('');
+  const [mountedSessionIds, setMountedSessionIds] = useState<Set<string>>(() => new Set());
   const [activeFolderId, setActiveFolderId] = useState<string>(DEFAULT_FOLDER_ID);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readBool(SIDEBAR_COLLAPSED_KEY, false));
   const [rightCollapsed, setRightCollapsed] = useState(() => readBool(RIGHT_COLLAPSED_KEY, false));
@@ -299,11 +291,14 @@ export default function ChatWorkspace({
   }, [visibleSessionIds, syncIndicators]);
 
   useEffect(() => {
-    setSessions((prev) => {
-      if (findSessionByAgent(prev, initialAlias)) return prev;
-      return [...prev, makeDefaultSession(initialAlias, activeFolderId)];
+    if (!activeSessionId) return;
+    setMountedSessionIds((prev) => {
+      if (prev.has(activeSessionId)) return prev;
+      const next = new Set(prev);
+      next.add(activeSessionId);
+      return next;
     });
-  }, [initialAlias]);
+  }, [activeSessionId]);
 
   useEffect(() => {
     const snapshot: PersistedStateV3 = { folders, sessions, activeSessionId };
@@ -519,7 +514,7 @@ export default function ChatWorkspace({
             userRole={userRole}
           />
         )}
-        {sessions.map((session) => {
+        {sessions.filter((session) => mountedSessionIds.has(session.id)).map((session) => {
           const visible = session.id === activeSessionId;
           return (
             <div

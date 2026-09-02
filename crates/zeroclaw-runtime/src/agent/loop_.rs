@@ -454,6 +454,7 @@ pub fn filter_by_allowed_tools(
 // Re-export from zeroclaw-types for backwards compatibility.
 pub use zeroclaw_api::TOOL_LOOP_SESSION_KEY;
 pub use zeroclaw_api::TOOL_LOOP_THREAD_ID;
+pub use zeroclaw_api::TOOL_LOOP_TURN_USER_TEXT;
 pub use zeroclaw_api::TOOL_LOOP_USER_ATTRS;
 
 // Re-export tool call parsing from the standalone parser crate.
@@ -495,6 +496,16 @@ where
     F: std::future::Future,
 {
     TOOL_LOOP_USER_ATTRS.scope(attrs, future).await
+}
+
+/// Run a future with the turn's raw user text in task-local storage.
+/// Ops MCP geo binding reads this to distinguish province-wide asks from an
+/// explicit city name.
+pub async fn scope_turn_user_text<F>(text: Option<String>, future: F) -> F::Output
+where
+    F: std::future::Future,
+{
+    TOOL_LOOP_TURN_USER_TEXT.scope(text, future).await
 }
 
 pub(crate) fn compute_excluded_mcp_tools(

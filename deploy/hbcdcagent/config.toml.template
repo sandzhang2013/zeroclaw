@@ -42,10 +42,9 @@ model_provider = "openai.deepseek"
 risk_profile = "default"
 runtime_profile = "default"
 
-# ── 风险配置：内网关闭联网，只允许 python3/Rscript ────
+# 工作台「自主 / 监督 / 只读」可在此天花板内切换。普通用户仍被角色限制为监督。
 [risk_profiles.default]
-allowed_commands = ["python3", "Rscript"]
-excluded_tools = ["web_search", "web_fetch"]
+level = "full"
 
 [runtime_profiles.default]
 max_context_tokens = 128000

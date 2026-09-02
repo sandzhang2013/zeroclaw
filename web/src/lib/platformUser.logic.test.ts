@@ -6,6 +6,7 @@ import {
   normalizeRole,
   parseMockUserCookie,
   parsePlatformPayload,
+  pickWorkbenchIdentity,
   roleI18nKey,
   switchableWorkbenchUser,
   workspaceStorageId,
@@ -108,6 +109,10 @@ test('parseMockUserCookie reads among other cookies and decodes URI', () => {
   assert.equal(hex?.userId, 'liuyang');
   assert.equal(parseMockUserCookie('zeroclaw_mock_user=%E0%A4%A'), null);
   assert.equal(parseMockUserCookie('zeroclaw_mock_user=ops')?.role, '运维');
+  assert.equal(
+    parseMockUserCookie('zeroclaw_mock_user=chenmin; zeroclaw_mock_user=ops')?.userId,
+    'ops',
+  );
   assert.equal(canOpenDashboard(undefined), false);
   assert.equal(canOpenDashboard('admin'), false);
 });
@@ -124,4 +129,30 @@ test('catalog injects stay mock so the sidebar can return to the picker', () => 
   const sso = parsePlatformPayload({ userId: 'alice', displayName: '爱丽丝' });
   assert.ok(sso);
   assert.equal(switchableWorkbenchUser(sso).source, 'platform');
+});
+
+test('pickWorkbenchIdentity prefers mock cookie over a stale HTML inject', () => {
+  const switched = pickWorkbenchIdentity({
+    injected: { userId: 'chenmin', displayName: '陈敏', role: '普通用户' },
+    cookieHeader: 'zeroclaw_mock_user=ops',
+  });
+  assert.equal(switched?.userId, 'ops');
+  assert.equal(canOpenDashboard(switched?.role), true);
+
+  const fromInject = pickWorkbenchIdentity({
+    injected: { userId: 'ops', displayName: '系统运维', role: '运维' },
+    cookieHeader: '',
+  });
+  assert.equal(fromInject?.userId, 'ops');
+  assert.equal(fromInject?.source, 'mock');
+
+  const sso = pickWorkbenchIdentity({
+    injected: { userId: 'alice', displayName: '爱丽丝', role: '运维' },
+  });
+  assert.equal(sso?.userId, 'alice');
+  assert.equal(sso?.source, 'platform');
+  assert.equal(canOpenDashboard(sso?.role), true);
+
+  const stored = pickWorkbenchIdentity({ storedUserId: 'liuyang' });
+  assert.equal(stored?.userId, 'liuyang');
 });

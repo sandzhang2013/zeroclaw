@@ -46,6 +46,11 @@ tokio::task_local! {
     /// from the connection Principal; read by MCP, memory, and skills.
     pub static TOOL_LOOP_USER_ATTRS: Option<crate::user_attrs::UserAttrs>;
 
+    /// Raw user text for the current agent turn. Scoped next to user attrs so
+    /// ops MCP geo binding can tell "湖北省" (default 全省) from an explicit
+    /// city name like "武汉".
+    pub static TOOL_LOOP_TURN_USER_TEXT: Option<String>;
+
     /// Native extended thinking parameters, set by the outer orchestration
     /// functions and read by `run_tool_call_loop` when building `ChatRequest`.
     pub static NATIVE_THINKING_OVERRIDE: Option<crate::model_provider::NativeThinkingParams>;

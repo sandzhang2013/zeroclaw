@@ -210,6 +210,8 @@ export interface Session {
   /** Owning channel as `<type>.<alias>` for channel-driven sessions
    * (Discord, Matrix, …). `null` for gateway WebSocket sessions. */
   channel_id: string | null;
+  /** Frozen BFF identity that stamped this session. Absent on pre-identity rows. */
+  user_id?: string | null;
 }
 
 export type ChannelReadinessState = 'ready' | 'missing' | 'unknown';

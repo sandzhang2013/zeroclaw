@@ -190,6 +190,10 @@ pub fn build_system_prompt_with_mode_and_autonomy(
              - When unsure whether a tool call succeeded, ask the user rather than guessing.\n\n",
         );
     }
+    if let Some(scope) = zeroclaw_api::user_attrs::current_data_scope_prompt() {
+        prompt.push_str(&scope);
+        prompt.push_str("\n\n");
+    }
 
     // ── 1. Tooling ──────────────────────────────────────────────
     if !tools.is_empty() && !native_tool_specs_present {

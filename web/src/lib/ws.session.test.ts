@@ -57,7 +57,7 @@ test('first identity login inherits the pre-identity session UUID', () => {
   assert.equal(store.has('zeroclaw_session_id.deepseek'), false);
 });
 
-test('leftover unscoped UUID is claimed even if the first user already minted one', () => {
+test('existing scoped UUID is kept; leftover unscoped is dropped not stolen', () => {
   const store = new Map<string, string>();
   Object.defineProperty(globalThis, 'localStorage', {
     value: {
@@ -74,10 +74,33 @@ test('leftover unscoped UUID is claimed even if the first user already minted on
 
   store.set('zeroclaw_session_id.alice.deepseek', '11111111-1111-4111-8111-111111111111');
   store.set('zeroclaw_session_id.deepseek', '22222222-2222-4222-8222-222222222222');
-  assert.equal(getOrCreateSessionId('deepseek', 'alice'), '22222222-2222-4222-8222-222222222222');
+  assert.equal(getOrCreateSessionId('deepseek', 'alice'), '11111111-1111-4111-8111-111111111111');
   assert.equal(store.has('zeroclaw_session_id.deepseek'), false);
-  assert.equal(getOrCreateSessionId('deepseek', 'bob'), getOrCreateSessionId('deepseek', 'bob'));
-  assert.notEqual(getOrCreateSessionId('deepseek', 'bob'), '22222222-2222-4222-8222-222222222222');
+  const bob = getOrCreateSessionId('deepseek', 'bob');
+  assert.notEqual(bob, '22222222-2222-4222-8222-222222222222');
+  assert.notEqual(bob, '11111111-1111-4111-8111-111111111111');
+});
+
+test('second identity does not inherit a leftover unscoped UUID', () => {
+  const store = new Map<string, string>();
+  Object.defineProperty(globalThis, 'localStorage', {
+    value: {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        store.set(key, value);
+      },
+      removeItem: (key: string) => {
+        store.delete(key);
+      },
+    },
+    configurable: true,
+  });
+
+  const alice = getOrCreateSessionId('deepseek', 'alice');
+  store.set('zeroclaw_session_id.deepseek', alice);
+  const bob = getOrCreateSessionId('deepseek', 'bob');
+  assert.notEqual(bob, alice);
+  assert.equal(store.has('zeroclaw_session_id.deepseek'), false);
 });
 
 test('generateUUID is RFC 4122 version 4', () => {

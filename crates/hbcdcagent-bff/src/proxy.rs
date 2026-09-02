@@ -134,11 +134,7 @@ async fn forward_http(
     match state.http.request(req).await {
         Ok(resp) => {
             let resp = resp.map(Body::new).into_response();
-            if let Some(identity) = identity {
-                Ok(inject_platform_user(resp, identity).await)
-            } else {
-                Ok(resp)
-            }
+            Ok(inject_workbench_html(resp, identity).await)
         }
         Err(err) => {
             tracing::warn!(error = %err, "upstream request failed");
@@ -203,6 +199,25 @@ fn platform_user_script(identity: &Identity) -> Option<String> {
     ))
 }
 
+fn path_prefix_script() -> String {
+    let json = serde_json::to_string(Config::PATH_PREFIX)
+        .unwrap_or_else(|_| "\"/hbcdcagent\"".to_string());
+    format!(
+        "<script>window.__ZEROCLAW_BASE__={json};</script>\
+         <script>try{{var k='zeroclaw-locale';if(!localStorage.getItem(k))localStorage.setItem(k,'zh');}}catch(_e){{}}</script>"
+    )
+}
+
+fn workbench_head_script(identity: Option<&Identity>) -> String {
+    let mut script = path_prefix_script();
+    if let Some(identity) = identity
+        && let Some(user) = platform_user_script(identity)
+    {
+        script.push_str(&user);
+    }
+    script
+}
+
 fn inject_script_into_html(html: &str, script: &str) -> String {
     let lower = html.to_ascii_lowercase();
     if let Some(pos) = lower.find("<head>") {
@@ -217,13 +232,11 @@ fn inject_script_into_html(html: &str, script: &str) -> String {
     }
 }
 
-async fn inject_platform_user(resp: Response, identity: &Identity) -> Response {
+async fn inject_workbench_html(resp: Response, identity: Option<&Identity>) -> Response {
     if !should_inject_html(resp.headers()) {
         return resp;
     }
-    let Some(script) = platform_user_script(identity) else {
-        return resp;
-    };
+    let script = workbench_head_script(identity);
     let (mut parts, body) = resp.into_parts();
     let bytes = match to_bytes(body, MAX_HTML_INJECT_BYTES).await {
         Ok(b) => b,
@@ -477,10 +490,12 @@ mod tests {
     }
 
     #[test]
-    fn html_injects_camel_case_platform_user() {
-        let script = platform_user_script(&sample_identity()).expect("script");
+    fn html_injects_path_prefix_and_platform_user() {
+        let script = workbench_head_script(Some(&sample_identity()));
         let html = inject_script_into_html("<html><head></head><body></body></html>", &script);
-        assert!(html.contains("<head><script>window.__ZEROCLAW_PLATFORM_USER__="));
+        assert!(html.contains(r#"window.__ZEROCLAW_BASE__="/hbcdcagent""#));
+        assert!(html.contains("<head><script>window.__ZEROCLAW_BASE__="));
+        assert!(html.contains("window.__ZEROCLAW_PLATFORM_USER__="));
         assert!(html.contains(r#""userId":"chenmin""#));
         assert!(html.contains(r#""displayName":"陈敏""#));
         assert!(html.contains(r#""role":"普通用户""#));
@@ -554,6 +569,13 @@ mod tests {
 
         let ops = mock_identity(&cfg, Some("zeroclaw_mock_user=ops")).expect("ops");
         assert_eq!(ops.role, crate::identity::ROLE_OPS);
+
+        let last = mock_identity(
+            &cfg,
+            Some("zeroclaw_mock_user=chenmin; zeroclaw_mock_user=ops"),
+        )
+        .expect("last cookie wins");
+        assert_eq!(last.user_id, "ops");
 
         assert!(mock_identity(&cfg, Some("zeroclaw_mock_user=evil")).is_none());
         assert!(mock_identity(&cfg, Some("hbcdcagent_session=abc")).is_none());

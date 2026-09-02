@@ -23,7 +23,7 @@ pub struct TokenUserInfo {
     pub display_name: Option<String>,
     pub tenant_id: Option<String>,
     pub tenant_name: Option<String>,
-    /// `cityCode` from `/console/tenant/detail` (区划代码).
+    /// Region code from `/console/tenant/detail`, chosen by `devisionType`.
     pub city_code: Option<String>,
 }
 
@@ -86,7 +86,9 @@ impl UserCenter {
         self.enrich_with_tenant(info).await
     }
 
-    /// PDF 3.2.6: `POST /console/tenant/detail` with `tenantId` yields `cityCode`.
+    /// PDF 3.2.6: `POST /console/tenant/detail` with `tenantId`.
+    /// Region code follows `devisionType`: 1=`provinceCode`, 2=`cityCode`,
+    /// 3=`districtCode`.
     async fn enrich_with_tenant(
         &self,
         mut info: TokenUserInfo,
@@ -122,7 +124,7 @@ impl UserCenter {
         if info.city_code.is_none() {
             tracing::warn!(
                 tenant_id,
-                "tenant detail had no cityCode/districtCode/provinceCode"
+                "tenant detail had no region for devisionType (provinceCode/cityCode/districtCode)"
             );
         }
         Ok(info)
@@ -297,11 +299,28 @@ fn tenant_record(data: &Value) -> Option<&Value> {
     }
 }
 
-/// Prefer city (市), then district (区), then province (省).
+/// `devisionType` from the user-center (API spelling). `divisionType` accepted.
+/// 1=省 → provinceCode, 2=市 → cityCode, 3=区县 → districtCode.
 fn region_code(record: &Value) -> Option<String> {
-    json_nonempty_str(record, "cityCode")
-        .or_else(|| json_nonempty_str(record, "districtCode"))
-        .or_else(|| json_nonempty_str(record, "provinceCode"))
+    let field = match division_level(record)? {
+        1 => "provinceCode",
+        2 => "cityCode",
+        3 => "districtCode",
+        _ => return None,
+    };
+    json_nonempty_str(record, field)
+}
+
+fn division_level(record: &Value) -> Option<u8> {
+    let raw = record
+        .get("devisionType")
+        .or_else(|| record.get("divisionType"))?;
+    let n = match raw {
+        Value::Number(n) => n.as_u64()?,
+        Value::String(s) => s.trim().parse::<u64>().ok()?,
+        _ => return None,
+    };
+    (1..=3).contains(&n).then_some(n as u8)
 }
 
 fn json_nonempty_str(v: &Value, key: &str) -> Option<String> {
@@ -464,19 +483,44 @@ mod tests {
     }
 
     #[test]
-    fn region_code_prefers_city_then_district() {
+    fn region_code_follows_devision_type() {
+        let all = json!({
+            "devisionType": 2,
+            "provinceCode": "420000",
+            "cityCode": "420100",
+            "districtCode": "420102"
+        });
+        assert_eq!(region_code(&all).as_deref(), Some("420100"));
         assert_eq!(
-            region_code(&json!({"cityCode": "420100", "districtCode": "420102"})).as_deref(),
-            Some("420100")
+            region_code(&json!({
+                "devisionType": "1",
+                "provinceCode": "420000",
+                "cityCode": "420100"
+            }))
+            .as_deref(),
+            Some("420000")
         );
         assert_eq!(
-            region_code(&json!({"districtCode": "420102"})).as_deref(),
+            region_code(&json!({
+                "divisionType": 3,
+                "cityCode": "420100",
+                "districtCode": "420102"
+            }))
+            .as_deref(),
             Some("420102")
         );
         assert_eq!(
-            tenant_record(&json!([{"cityCode": "1"}]))
-                .and_then(region_code)
-                .as_deref(),
+            region_code(&json!({"cityCode": "420100", "districtCode": "420102"})),
+            None,
+            "missing devisionType must not guess city over province"
+        );
+        assert_eq!(
+            tenant_record(&json!([{
+                "devisionType": 2,
+                "cityCode": "1"
+            }]))
+            .and_then(region_code)
+            .as_deref(),
             Some("1")
         );
     }

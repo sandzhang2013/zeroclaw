@@ -18,5 +18,9 @@ export function shouldSkipPairing(input: {
 }): boolean {
   if (input.dev) return true;
   if (parsePlatformPayload(input.platformUser)) return true;
-  return isWorkbenchPath(input.pathname);
+  if (isWorkbenchPath(input.pathname)) return true;
+  // BFF (path_prefix=/hbcdcagent) uses X-User-* instead of device pairing,
+  // including /dashboard. Direct daemon at site root still pairs.
+  const stripped = stripWebPrefix(input.pathname, DEFAULT_WEB_PREFIX);
+  return stripped !== input.pathname;
 }

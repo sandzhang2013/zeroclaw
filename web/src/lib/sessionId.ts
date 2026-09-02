@@ -6,6 +6,10 @@ function storageOwner(userId?: string): string {
   return (userId ?? '').replace(/[^a-zA-Z0-9._:-]/g, '_').slice(0, 128);
 }
 
+function inheritFlagKey(agentAlias: string): string {
+  return `${SESSION_ID_KEY_PREFIX}.inherited.${agentAlias}`;
+}
+
 /** localStorage key for the default per-agent session UUID.
  * Owner is only in the key — the stored value is a bare UUID. */
 export function sessionIdStorageKey(agentAlias: string, userId?: string): string {
@@ -25,20 +29,31 @@ export function persistSessionId(agentAlias: string, id: string, userId?: string
  * into the UUID. When `userId` is set, each login gets a distinct UUID so
  * switching mock users does not reuse another user's gateway session.
  *
- * The first identity login inherits a pre-identity (unscoped) UUID so
- * existing transcripts stay visible; later users mint their own. */
+ * The first identity login may inherit a leftover pre-identity (unscoped)
+ * UUID so existing transcripts stay visible. Later users never adopt that
+ * UUID: the gateway already stamped an owner, and reconnecting would
+ * surface SESSION_FORBIDDEN. */
 export function getOrCreateSessionId(agentAlias: string, userId?: string): string {
   const key = sessionIdStorageKey(agentAlias, userId);
   if (userId) {
     const legacyKey = sessionIdStorageKey(agentAlias);
     const inherited = localStorage.getItem(legacyKey);
-    if (inherited) {
-      // Leftover unscoped UUID is claimed even if this user already minted a
-      // new one (empty workbench after the first mock-user login).
+    const flagKey = inheritFlagKey(agentAlias);
+    const alreadyClaimed = localStorage.getItem(flagKey) === '1';
+    const existing = localStorage.getItem(key);
+    if (existing) {
+      localStorage.setItem(flagKey, '1');
+      if (inherited) localStorage.removeItem(legacyKey);
+      return existing;
+    }
+    if (inherited && !alreadyClaimed) {
       localStorage.setItem(key, inherited);
       localStorage.removeItem(legacyKey);
+      localStorage.setItem(flagKey, '1');
       return inherited;
     }
+    if (inherited) localStorage.removeItem(legacyKey);
+    localStorage.setItem(flagKey, '1');
   }
   let id = localStorage.getItem(key);
   if (!id) {

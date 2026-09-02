@@ -1753,6 +1753,9 @@ pub async fn handle_api_sessions_list(
             if let Some(name) = meta.name {
                 entry["name"] = serde_json::Value::String(name);
             }
+            if let Some(user_id) = meta.user_id {
+                entry["user_id"] = serde_json::Value::String(user_id);
+            }
             entry
         })
         .collect();
@@ -3567,6 +3570,7 @@ pub(crate) mod tests {
         let sessions = json["sessions"].as_array().unwrap();
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0]["session_id"], "alice-s");
+        assert_eq!(sessions[0]["user_id"], "alice");
     }
 
     #[tokio::test]

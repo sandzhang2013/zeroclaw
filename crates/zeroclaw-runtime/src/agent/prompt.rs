@@ -60,6 +60,7 @@ impl SystemPromptBuilder {
                 Box::new(DateTimeSection),
                 Box::new(IdentitySection),
                 Box::new(ToolHonestySection),
+                Box::new(DataScopeSection),
                 Box::new(ToolsSection),
                 Box::new(SafetySection),
                 Box::new(ShellSection),
@@ -92,6 +93,7 @@ impl SystemPromptBuilder {
 
 pub struct IdentitySection;
 pub struct ToolHonestySection;
+pub struct DataScopeSection;
 pub struct ToolsSection;
 pub struct SafetySection;
 pub struct SkillsSection;
@@ -151,6 +153,16 @@ impl PromptSection for ToolHonestySection {
              - When unsure whether a tool call succeeded, ask the user rather than guessing."
                 .into(),
         )
+    }
+}
+
+impl PromptSection for DataScopeSection {
+    fn name(&self) -> &str {
+        "data_scope"
+    }
+
+    fn build(&self, _ctx: &PromptContext<'_>) -> Result<String> {
+        Ok(zeroclaw_api::user_attrs::current_data_scope_prompt().unwrap_or_default())
     }
 }
 
@@ -1055,6 +1067,13 @@ mod tests {
             name: name.to_string(),
             dialect,
         }
+    }
+
+    #[test]
+    fn data_scope_section_is_silent_without_frozen_identity() {
+        let tools: Vec<Box<dyn Tool>> = vec![];
+        let ctx = shell_ctx(&tools, None);
+        assert!(DataScopeSection.build(&ctx).unwrap().is_empty());
     }
 
     #[test]

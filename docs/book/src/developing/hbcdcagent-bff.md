@@ -87,18 +87,32 @@ The BFF does not depend on `zeroclaw-*` crates. Sign and SM4 follow
 
 Same contract as [trusted proxy](../architecture/decisions/ADR-014-platform-chat-embed.md)
 and `crates/zeroclaw-gateway/src/trusted_proxy.rs`: `X-Auth-Secret`,
-`X-User-Id`, `X-User-Role`, optional region/org. `X-User-Region` is the tenant `cityCode` from
-`POST /console/tenant/detail` after the `verifyCode` exchange. UTF-8 header bytes for
+`X-User-Id`, `X-User-Role`, optional region/org. `X-User-Region` comes from
+`POST /console/tenant/detail` after the `verifyCode` exchange, selected by
+`devisionType`: `1` → `provinceCode`, `2` → `cityCode`, `3` → `districtCode`.
+UTF-8 header bytes for
 Chinese role/region values. Query `user_id` remains ignored by the
-daemon.
+daemon. MCP geography: non-ops calls are rewritten to the frozen
+`X-User-Region`. Ops (`运维`) calls follow the user turn text: no named
+city → `全省`; an explicit city (e.g. 武汉) → that city. Model-chosen
+geography is ignored when it disagrees with the user text. The system
+prompt also tells the model that an upstream “全省 = 武汉哨点口径”
+footnote is the API’s province-wide mapping, not workbench isolation:
+city logins stay on their city and must not repeat that note.
+Workbench
+autonomy (`只读` / `监督` / `自主`) is a per-message overlay; the risk
+profile `level` is the ceiling (delivery template uses `full` so ops can
+raise to 自主; ordinary users stay capped at 监督).
 
 Workbench HTML responses also get a `<head>` script:
 
+`window.__ZEROCLAW_BASE__ = "/hbcdcagent"` and
 `window.__ZEROCLAW_PLATFORM_USER__ = { userId, displayName, role, region, org }`
-(camelCase). The SPA reads this and skips mock login and the device
-pairing gate (also skipped on `/hbcdcagent/workbench` when the gateway
-did not inject `__ZEROCLAW_BASE__`). JSON, API, and WebSocket bodies are
-unchanged. `displayName` is `realName`, then `nickName`, then
+(camelCase). The SPA reads the prefix so `/api` and `/ws` stay under
+`/hbcdcagent` (cookie `Path=/hbcdcagent` is then sent; a missing prefix
+opens `ws://…/ws/chat` and the browser reports close 1006). It also
+skips mock login and the device pairing gate. JSON, API, and WebSocket
+bodies are unchanged. `displayName` is `realName`, then `nickName`, then
 `accountName`, then `userId`.
 
 Delivery-pack start scripts live in `deploy/hbcdcagent/scripts/`. Both

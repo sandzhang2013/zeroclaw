@@ -126,15 +126,16 @@ pub fn sso_state_matches(cookie_header: Option<&str>, query_state: Option<&str>)
 pub fn cookie_value(header: Option<&str>, name: &str) -> Option<String> {
     let header = header?;
     let prefix = format!("{name}=");
+    let mut found = None;
     for part in header.split(';') {
         let part = part.trim();
         if let Some(v) = part.strip_prefix(&prefix)
             && !v.is_empty()
         {
-            return Some(v.to_string());
+            found = Some(v.to_string());
         }
     }
-    None
+    found
 }
 
 #[cfg(test)]
@@ -173,6 +174,15 @@ mod tests {
         assert_eq!(
             cookie_value(Some(raw), "zeroclaw_mock_user").as_deref(),
             Some("chenmin")
+        );
+        assert_eq!(
+            cookie_value(
+                Some("zeroclaw_mock_user=chenmin; zeroclaw_mock_user=ops"),
+                "zeroclaw_mock_user"
+            )
+            .as_deref(),
+            Some("ops"),
+            "duplicate cookies: last value wins (Path=/hbcdcagent after Path=/)"
         );
         assert!(cookie_value(Some(raw), "nope").is_none());
     }

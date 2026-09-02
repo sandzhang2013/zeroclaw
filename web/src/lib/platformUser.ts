@@ -1,3 +1,5 @@
+import { DEFAULT_WEB_PREFIX } from './webPrefix.ts';
+
 /** Prototype identity for the workbench. Production skips the picker:
  * the embedding platform injects `window.__ZEROCLAW_PLATFORM_USER__`.
  * Mock login sets a same-origin cookie; the Vite dev proxy (fake BFF)
@@ -95,18 +97,14 @@ export function parsePlatformPayload(raw: unknown): PlatformUser | null {
   };
 }
 
-function readInjectedUser(): PlatformUser | null {
-  try {
-    return parsePlatformPayload(window.__ZEROCLAW_PLATFORM_USER__);
-  } catch {
-    return null;
-  }
-}
-
 export function parseMockUserCookie(cookieHeader: string | undefined | null): PlatformUser | null {
   if (!cookieHeader) return null;
-  const match = /(?:^|;\s*)zeroclaw_mock_user=([^;]*)/.exec(cookieHeader);
-  const encoded = match?.[1];
+  const re = /(?:^|;\s*)zeroclaw_mock_user=([^;]*)/g;
+  let encoded: string | undefined;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(cookieHeader)) !== null) {
+    encoded = match[1];
+  }
   if (!encoded) return null;
   let userId: string;
   try {
@@ -117,14 +115,27 @@ export function parseMockUserCookie(cookieHeader: string | undefined | null): Pl
   return MOCK_USERS.find((u) => u.userId === userId) ?? null;
 }
 
+function mockCookiePath(): string {
+  return DEFAULT_WEB_PREFIX || '/';
+}
+
 function writeMockUserCookie(userId: string): void {
   if (typeof document === 'undefined') return;
-  document.cookie = `${MOCK_USER_COOKIE}=${encodeURIComponent(userId)}; Path=/; SameSite=Lax`;
+  const path = mockCookiePath();
+  // Drop the legacy Path=/ copy so it cannot win over Path=/hbcdcagent.
+  if (path !== '/') {
+    document.cookie = `${MOCK_USER_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax`;
+  }
+  document.cookie = `${MOCK_USER_COOKIE}=${encodeURIComponent(userId)}; Path=${path}; SameSite=Lax`;
 }
 
 function clearMockUserCookie(): void {
   if (typeof document === 'undefined') return;
-  document.cookie = `${MOCK_USER_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax`;
+  const path = mockCookiePath();
+  document.cookie = `${MOCK_USER_COOKIE}=; Path=${path}; Max-Age=0; SameSite=Lax`;
+  if (path !== '/') {
+    document.cookie = `${MOCK_USER_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax`;
+  }
 }
 
 export function loadMockUser(): PlatformUser | null {
@@ -154,9 +165,32 @@ export function clearMockUser(): void {
   } catch { /* noop */ }
 }
 
-export function resolveWorkbenchUser(): PlatformUser | null {
-  const injected = readInjectedUser();
+/**
+ * Cookie / picker wins over a stale HTML inject. Switching mock users does
+ * not reload the document, so `__ZEROCLAW_PLATFORM_USER__` can still be the
+ * first login. Production SSO has no mock cookie and keeps the inject.
+ */
+export function pickWorkbenchIdentity(input: {
+  injected?: unknown;
+  cookieHeader?: string | null;
+  storedUserId?: string | null;
+}): PlatformUser | null {
+  const fromCookie = parseMockUserCookie(input.cookieHeader);
+  if (fromCookie) return fromCookie;
+  const injected = parsePlatformPayload(input.injected);
   if (injected) return switchableWorkbenchUser(injected);
+  if (input.storedUserId) {
+    return MOCK_USERS.find((u) => u.userId === input.storedUserId) ?? null;
+  }
+  return null;
+}
+
+export function resolveWorkbenchUser(): PlatformUser | null {
+  const injected =
+    typeof window !== 'undefined' ? window.__ZEROCLAW_PLATFORM_USER__ : undefined;
+  const cookieHeader = typeof document !== 'undefined' ? document.cookie : undefined;
+  const picked = pickWorkbenchIdentity({ injected, cookieHeader });
+  if (picked) return picked;
   return loadMockUser();
 }
 
