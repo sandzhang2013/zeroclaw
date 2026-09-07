@@ -1,10 +1,11 @@
 import { memo, useState, useEffect, useRef, useCallback } from 'react';
-import { Navigate, useParams } from 'react-router-dom';
-import { ArrowUp, Square, User, AlertCircle, Copy, Check, X, Trash2, Minimize2, Maximize2, ChevronDown, Wrench, PanelRightClose, PanelRightOpen, Plus, Mic, Loader2, Pencil } from 'lucide-react';
+import { Link, Navigate, useParams } from 'react-router-dom';
+import { ArrowUp, Square, User, AlertCircle, Copy, Check, X, Trash2, Minimize2, Maximize2, ChevronDown, Wrench, PanelRightClose, PanelRightOpen, Plus, Mic, Loader2, Pencil, FolderOpen, ImagePlus } from 'lucide-react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { AgentProvider, useAgent, type ChatMessage } from '@/contexts/AgentContext';
 import { labelForProviderRef, resolveProviderRefArg } from '@/contexts/modelPicker.logic';
+import SessionPicker from '@/components/SessionPicker';
 import { useDraft } from '@/hooks/useDraft';
 import { t } from '@/lib/i18n';
 import {
@@ -20,7 +21,7 @@ import { ArtifactCard } from '@/components/ArtifactCard';
 import { OutlineEditModal } from '@/components/OutlineEditModal';
 import ApprovalBanner from '@/components/ApprovalBanner';
 import { AutonomySelect } from '@/components/AutonomySelect';
-import { uploadAgentWorkspaceFile } from '@/lib/api';
+import { ApiError, uploadAgentWorkspaceFile, uploadChatImage } from '@/lib/api';
 import {
   DEFAULT_WORKBENCH_AUTONOMY,
   loadWorkbenchAutonomy,
@@ -206,6 +207,8 @@ export function AgentChatInner({
     modelLoading,
     deleteMessage,
     clearAllMessages,
+    startNewSession,
+    hydrated,
     addLocalMessage,
     abortSession,
     pendingApproval,
@@ -215,8 +218,24 @@ export function AgentChatInner({
     sessionId,
   } = useAgent();
 
-  const { draft, clearDraft } = useDraft(`${DRAFT_KEY_PREFIX}.${agentAlias}`);
+  // Keyed by conversation, not just alias: with the same agent open in two
+  // panes an alias-only key would make both share one draft.
+  const draftKey = `${DRAFT_KEY_PREFIX}.${agentAlias}.${sessionId}`;
+  const { draft, saveDraft, clearDraft } = useDraft(draftKey);
   const [input, setInput] = useState(draft);
+  const inputValueRef = useRef(input);
+  const writeInput = useCallback((value: string) => {
+    inputValueRef.current = value;
+    setInput(value);
+  }, []);
+  const saveDraftRef = useRef(saveDraft);
+  saveDraftRef.current = saveDraft;
+  const applyInput = useCallback((next: string | ((prev: string) => string)) => {
+    const value = typeof next === 'function' ? next(inputValueRef.current) : next;
+    writeInput(value);
+    saveDraftRef.current(value);
+  }, [writeInput]);
+  const isWorkbench = Boolean(onRenameSession || onToggleRightPanel || autonomyScope);
   const [outlineDraft, setOutlineDraft] = useState<string | null>(null);
   const persistAutonomyScope = autonomyScope ?? sessionId;
   const maxAutonomy = maxAutonomyForRole(userRole);
@@ -267,6 +286,10 @@ export function AgentChatInner({
       titleInputRef.current?.select();
     }
   }, [renamingTitle]);
+
+  useEffect(() => {
+    writeInput(draft);
+  }, [draftKey, draft, writeInput]);
 
   function startTitleRename() {
     if (!onRenameSession) return;
@@ -331,9 +354,17 @@ export function AgentChatInner({
         return true;
 
       case 'clear':
-      case 'new':
         clearAllMessages();
         addLocalMessage(t('agent.cmd_cleared'));
+        return true;
+
+      // Was an alias for /clear, which deleted the conversation. Now that an
+      // agent can hold several, "new" means what it says: start another one and
+      // leave this one on the gateway (issue #7543).
+      case 'new':
+        if (!startNewSession()) {
+          addLocalMessage(t('agent.sessions_unavailable'));
+        }
         return true;
 
       case 'model': {
@@ -386,7 +417,7 @@ export function AgentChatInner({
         addLocalMessage(t('agent.cmd_unknown').replace('{cmd}', `/${command}`));
         return true;
     }
-  }, [addLocalMessage, clearAllMessages, currentModel, availableModels, modelLabels, switchModel, modelLoading]);
+  }, [addLocalMessage, clearAllMessages, startNewSession, currentModel, availableModels, modelLabels, switchModel, modelLoading]);
 
   const handleSend = () => {
     const trimmed = input.trim();
@@ -396,7 +427,7 @@ export function AgentChatInner({
     if (isSlashCommand(trimmed)) {
       runCommand(trimmed);
       setShowCommandHint(false);
-      setInput('');
+      writeInput('');
       clearDraft();
       if (inputRef.current) {
         inputRef.current.style.height = 'auto';
@@ -424,7 +455,7 @@ export function AgentChatInner({
     });
     setAttachHint(null);
     setShowCommandHint(false);
-    setInput('');
+    writeInput('');
     clearDraft();
     if (inputRef.current) {
       inputRef.current.style.height = 'auto';
@@ -550,9 +581,37 @@ export function AgentChatInner({
     }
   };
 
+  const [uploading, setUploading] = useState(false);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const uploadImages = useCallback(async (files: Iterable<File>) => {
+    const list = Array.from(files);
+    if (list.length === 0) return;
+    setUploading(true);
+    try {
+      for (const file of list) {
+        if (file.type && !file.type.startsWith('image/')) {
+          addLocalMessage(t('agent.upload_not_image').replace('{name}', file.name));
+          continue;
+        }
+        try {
+          const res = await uploadChatImage(agentAlias, file);
+          applyInput((prev) => `${prev && !prev.endsWith(' ') ? `${prev} ` : prev}${res.marker} `);
+        } catch (err) {
+          const message = err instanceof ApiError
+            ? err.envelope.message
+            : err instanceof Error ? err.message : String(err);
+          addLocalMessage(t('agent.upload_failed').replace('{error}', message));
+        }
+      }
+    } finally {
+      setUploading(false);
+      inputRef.current?.focus();
+    }
+  }, [agentAlias, addLocalMessage, applyInput]);
+
   const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value;
-    setInput(value);
+    applyInput(value);
     // Show the command popover while typing the command token (a single
     // leading '/' with no space yet). Hide once the user moves to arguments or
     // the token no longer matches any command.
@@ -568,9 +627,9 @@ export function AgentChatInner({
   const applyCommandHint = useCallback((spec: CommandSpec) => {
     setShowCommandHint(false);
     const takesArgs = spec.usage.includes('[');
-    setInput(`/${spec.name}${takesArgs ? ' ' : ''}`);
+    applyInput(`/${spec.name}${takesArgs ? ' ' : ''}`);
     inputRef.current?.focus();
-  }, []);
+  }, [applyInput]);
 
   const matchedCommands: CommandSpec[] = /^\/[^/\s]*$/.test(input)
     ? matchCommands(input.slice(1))
@@ -763,6 +822,19 @@ export function AgentChatInner({
           </div>
         </div>
         <div className="flex items-center shrink-0 ml-2 gap-0.5">
+          {!isWorkbench && (
+            <>
+              <SessionPicker agentAlias={agentAlias} />
+              <Link
+                to={`/agent/${encodeURIComponent(agentAlias)}/workspace`}
+                className="inline-flex items-center gap-1 px-2 h-6 rounded-[var(--radius-md)] text-xs font-medium text-pc-text-secondary transition-colors hover:text-pc-text hover:bg-[var(--pc-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--pc-focus)]"
+                title={t('agentchat.open_workspace')}
+              >
+                <FolderOpen className="h-3.5 w-3.5" />
+                {t('agentchat.files')}
+              </Link>
+            </>
+          )}
           <button
             type="button"
             onClick={toggleCompact}
@@ -820,8 +892,14 @@ export function AgentChatInner({
         {messages.length === 0 && !initialPrompt && (
           <div className="flex flex-col items-center justify-center h-full text-center animate-fade-in text-pc-text-muted">
             <AgentAvatar className="mb-4 h-14 w-14" />
-            <p className="text-base font-semibold mb-1 text-pc-text">{t('workbench.brand')}</p>
-            <p className="text-sm text-pc-text-muted">{t('agent.start_conversation')}</p>
+            {hydrated ? (
+              <>
+                <p className="text-base font-semibold mb-1 text-pc-text">{isWorkbench ? t('workbench.brand') : t('agentchat.empty_title')}</p>
+                <p className="text-sm text-pc-text-muted">{t('agent.start_conversation')}</p>
+              </>
+            ) : (
+              <p className="text-sm text-pc-text-muted">{t('agent.session_loading')}</p>
+            )}
           </div>
         )}
 
@@ -930,6 +1008,17 @@ export function AgentChatInner({
               e.target.value = '';
             }}
           />
+          <input
+            ref={imageInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            className="hidden"
+            onChange={(e) => {
+              if (e.target.files) void uploadImages(e.target.files);
+              e.target.value = '';
+            }}
+          />
           <div className="relative flex w-full min-w-0 flex-col rounded-2xl border border-pc-border bg-pc-elevated px-3 pt-3 pb-2">
             {attachments.length > 0 && (
               <ul className="mb-2 flex flex-wrap gap-1.5">
@@ -976,10 +1065,12 @@ export function AgentChatInner({
               onCompositionEnd={() => { isComposingRef.current = false; }}
               placeholder={!connected
                 ? t('agent.connecting')
-                : typing
-                  ? t('agent.running')
-                  : t('agent.type_message')}
-              disabled={!connected || typing}
+                : !hydrated
+                  ? t('agent.session_loading')
+                  : typing
+                    ? t('agent.running')
+                    : t('agent.type_message')}
+              disabled={!connected || typing || !hydrated}
               className="w-full min-w-0 bg-transparent text-sm resize-none text-pc-text placeholder:text-pc-text-muted outline-none focus:outline-none focus-visible:outline-none disabled:opacity-40"
               style={{ minHeight: '2.5rem', maxHeight: '10rem', paddingTop: '2px', paddingBottom: '8px' }}
             />
@@ -988,12 +1079,24 @@ export function AgentChatInner({
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
-                  disabled={!connected || typing}
+                  disabled={!connected || typing || !hydrated}
                   className="flex-shrink-0 inline-flex size-8 items-center justify-center rounded-md text-pc-text-muted hover:bg-[var(--pc-hover)] hover:text-pc-text disabled:opacity-40"
                   aria-label={t('workbench.attach_file')}
                   title={t('workbench.attach_file')}
                 >
                   <Plus className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => imageInputRef.current?.click()}
+                  disabled={!connected || typing || !hydrated || uploading}
+                  className="flex-shrink-0 inline-flex size-8 items-center justify-center rounded-md text-pc-text-muted hover:bg-[var(--pc-hover)] hover:text-pc-text disabled:opacity-40"
+                  aria-label={t('agent.attach_image')}
+                  title={t('agent.attach_image')}
+                >
+                  {uploading
+                    ? <Loader2 className="h-4 w-4 animate-spin" />
+                    : <ImagePlus className="h-4 w-4" />}
                 </button>
                 <AutonomySelect
                   value={autonomy}
@@ -1087,6 +1190,7 @@ export function AgentChatInner({
                     onClick={handleSend}
                     disabled={
                       !connected
+                      || !hydrated
                       || attachments.some((a) => a.status === 'uploading')
                       || (!input.trim() && attachments.filter((a) => a.status === 'ready').length === 0)
                     }

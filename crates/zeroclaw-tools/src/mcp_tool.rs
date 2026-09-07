@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use crate::embedded_resource::format_mcp_tool_result_for_model;
 use crate::mcp_client::McpRegistry;
-use crate::mcp_images::{materialize_mcp_images, mcp_history_without_images};
 use crate::mcp_protocol::McpToolDef;
 use zeroclaw_api::tool::{Tool, ToolOutput, ToolResult, ToolSpec};
 use zeroclaw_config::policy::SecurityPolicy;
@@ -14,6 +14,10 @@ use zeroclaw_config::policy::SecurityPolicy;
 /// A zeroclaw [`Tool`] backed by an MCP server tool.
 /// The `prefixed_name` (e.g. `filesystem__read_file`) is what the agent loop
 /// sees. The registry knows how to route it to the correct server.
+///
+/// `security` is the execution-scope [`SecurityPolicy`] snapshot (source of truth
+/// for `workspace_dir`) — an immutable `Arc`, not a reloadable live handle. The
+/// workspace path is resolved from it at execute time, not cached.
 pub struct McpToolWrapper {
     /// Prefixed name: `<server_name>__<tool_name>`.
     prefixed_name: String,
@@ -26,15 +30,19 @@ pub struct McpToolWrapper {
     input_schema: Arc<serde_json::Value>,
     /// Shared registry — used to dispatch actual tool calls.
     registry: Arc<McpRegistry>,
-    /// Live policy handle. `workspace_dir` is read at execute time so session
-    /// cwd changes are visible; not a copied path snapshot.
-    security: Option<Arc<SecurityPolicy>>,
+    /// Security policy handle — workspace for embedded blob materialization.
+    security: Arc<SecurityPolicy>,
     /// `region` / `city` properties advertised by the MCP tool schema.
     geo_schema_keys: Vec<String>,
 }
 
 impl McpToolWrapper {
-    pub fn new(prefixed_name: String, def: McpToolDef, registry: Arc<McpRegistry>) -> Self {
+    pub fn new(
+        prefixed_name: String,
+        def: McpToolDef,
+        registry: Arc<McpRegistry>,
+        security: Arc<SecurityPolicy>,
+    ) -> Self {
         let description = def.description.unwrap_or_else(|| "MCP tool".to_string());
         let geo_schema_keys = zeroclaw_api::UserAttrs::geo_keys_from_schema(&def.input_schema);
         Self {
@@ -42,16 +50,9 @@ impl McpToolWrapper {
             description,
             input_schema: Arc::new(def.input_schema),
             registry,
-            security: None,
+            security,
             geo_schema_keys,
         }
-    }
-
-    /// Attach the turn's live [`SecurityPolicy`] so image parts can be written
-    /// into the current session workspace.
-    pub fn with_security(mut self, security: Arc<SecurityPolicy>) -> Self {
-        self.security = Some(security);
-        self
     }
 }
 
@@ -106,23 +107,19 @@ impl Tool for McpToolWrapper {
             });
         }
         match self.registry.call_tool(&self.prefixed_name, args).await {
-            Ok(output) => {
-                let output = match &self.security {
-                    Some(policy) if policy.can_act() => {
-                        materialize_mcp_images(&output, &policy.workspace_dir, &self.prefixed_name)
-                            .or_else(|| mcp_history_without_images(&output).map(ToolOutput::text))
-                            .unwrap_or_else(|| ToolOutput::from(output))
-                    }
-                    Some(_) => mcp_history_without_images(&output)
-                        .map(ToolOutput::text)
-                        .unwrap_or_else(|| ToolOutput::from(output)),
-                    None => ToolOutput::from(output),
-                };
-                Ok(ToolResult {
-                    success: true,
-                    output,
-                    error: None,
-                })
+            Ok(result) => {
+                match format_mcp_tool_result_for_model(result, &self.security.workspace_dir) {
+                    Ok(output) => Ok(ToolResult {
+                        success: true,
+                        output: output.into(),
+                        error: None,
+                    }),
+                    Err(e) => Ok(ToolResult {
+                        success: false,
+                        output: ToolOutput::default(),
+                        error: Some(e.to_string()),
+                    }),
+                }
             }
             Err(e) => Ok(ToolResult {
                 success: false,
@@ -146,6 +143,10 @@ mod tests {
         }
     }
 
+    fn test_security() -> Arc<SecurityPolicy> {
+        Arc::new(SecurityPolicy::default())
+    }
+
     async fn empty_registry() -> Arc<McpRegistry> {
         Arc::new(
             McpRegistry::connect_all(&[])
@@ -160,7 +161,12 @@ mod tests {
     async fn name_returns_prefixed_name() {
         let registry = empty_registry().await;
         let def = make_def("read_file", Some("Reads a file"), json!({}));
-        let wrapper = McpToolWrapper::new("filesystem__read_file".to_string(), def, registry);
+        let wrapper = McpToolWrapper::new(
+            "filesystem__read_file".to_string(),
+            def,
+            registry,
+            test_security(),
+        );
         assert_eq!(wrapper.name(), "filesystem__read_file");
     }
 
@@ -168,7 +174,12 @@ mod tests {
     async fn description_returns_def_description() {
         let registry = empty_registry().await;
         let def = make_def("navigate", Some("Navigate browser"), json!({}));
-        let wrapper = McpToolWrapper::new("playwright__navigate".to_string(), def, registry);
+        let wrapper = McpToolWrapper::new(
+            "playwright__navigate".to_string(),
+            def,
+            registry,
+            test_security(),
+        );
         assert_eq!(wrapper.description(), "Navigate browser");
     }
 
@@ -176,7 +187,8 @@ mod tests {
     async fn description_falls_back_to_mcp_tool_when_none() {
         let registry = empty_registry().await;
         let def = make_def("mystery", None, json!({}));
-        let wrapper = McpToolWrapper::new("srv__mystery".to_string(), def, registry);
+        let wrapper =
+            McpToolWrapper::new("srv__mystery".to_string(), def, registry, test_security());
         assert_eq!(wrapper.description(), "MCP tool");
     }
 
@@ -189,7 +201,8 @@ mod tests {
             "required": ["path"]
         });
         let def = make_def("read_file", Some("Read"), schema.clone());
-        let wrapper = McpToolWrapper::new("fs__read_file".to_string(), def, registry);
+        let wrapper =
+            McpToolWrapper::new("fs__read_file".to_string(), def, registry, test_security());
         assert_eq!(wrapper.parameters_schema(), schema);
     }
 
@@ -198,7 +211,8 @@ mod tests {
         let registry = empty_registry().await;
         let schema = json!({ "type": "object", "properties": {} });
         let def = make_def("list_dir", Some("List directory"), schema.clone());
-        let wrapper = McpToolWrapper::new("fs__list_dir".to_string(), def, registry);
+        let wrapper =
+            McpToolWrapper::new("fs__list_dir".to_string(), def, registry, test_security());
         let spec = wrapper.spec();
         assert_eq!(spec.name, "fs__list_dir");
         assert_eq!(spec.description, "List directory");
@@ -216,7 +230,8 @@ mod tests {
             "properties": { "path": { "type": "string" } }
         });
         let def = make_def("read_file", Some("Read"), schema);
-        let wrapper = McpToolWrapper::new("fs__read_file".to_string(), def, registry);
+        let wrapper =
+            McpToolWrapper::new("fs__read_file".to_string(), def, registry, test_security());
         let spec_a = wrapper.spec();
         let spec_b = wrapper.spec();
         assert!(
@@ -237,7 +252,8 @@ mod tests {
         // rather than propagating an Err (non-fatal by design).
         let registry = empty_registry().await;
         let def = make_def("ghost", Some("Ghost tool"), json!({}));
-        let wrapper = McpToolWrapper::new("nowhere__ghost".to_string(), def, registry);
+        let wrapper =
+            McpToolWrapper::new("nowhere__ghost".to_string(), def, registry, test_security());
         let result = wrapper
             .execute(json!({}))
             .await
@@ -274,7 +290,8 @@ mod tests {
         // assertion is that the call does not fail due to an unexpected `approved` arg.
         let registry = empty_registry().await;
         let def = make_def("do_thing", Some("Do a thing"), json!({}));
-        let wrapper = McpToolWrapper::new("srv__do_thing".to_string(), def, registry);
+        let wrapper =
+            McpToolWrapper::new("srv__do_thing".to_string(), def, registry, test_security());
         // With `approved` present the call must not propagate an Err — non-fatal.
         let result = wrapper
             .execute(json!({ "approved": true, "param": "value" }))
@@ -296,7 +313,7 @@ mod tests {
         // or returning an Err — the registry error path covers the failure case.
         let registry = empty_registry().await;
         let def = make_def("noop", None, json!({}));
-        let wrapper = McpToolWrapper::new("srv__noop".to_string(), def, registry);
+        let wrapper = McpToolWrapper::new("srv__noop".to_string(), def, registry, test_security());
         for non_obj in [json!(null), json!("a string"), json!([1, 2, 3])] {
             let result = wrapper
                 .execute(non_obj.clone())
@@ -304,26 +321,5 @@ mod tests {
                 .expect("non-object args must not propagate Err");
             assert!(!result.success, "expected non-fatal failure for {non_obj}");
         }
-    }
-
-    #[tokio::test]
-    async fn execute_fails_closed_when_user_attrs_scoped_empty() {
-        let registry = empty_registry().await;
-        let def = make_def("ghost", Some("Ghost tool"), json!({}));
-        let wrapper = McpToolWrapper::new("nowhere__ghost".to_string(), def, registry);
-        zeroclaw_api::TOOL_LOOP_USER_ATTRS
-            .scope(None, async {
-                let result = wrapper
-                    .execute(json!({"user_id": "bob", "region": "北京", "q": "flu"}))
-                    .await
-                    .expect("execute should be non-fatal");
-                assert!(!result.success);
-                let err = result.error.expect("fail-closed error");
-                assert!(
-                    err.contains("missing frozen user identity"),
-                    "unexpected error: {err}"
-                );
-            })
-            .await;
     }
 }

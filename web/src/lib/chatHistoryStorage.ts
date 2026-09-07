@@ -43,12 +43,25 @@ export function saveChatHistory(sessionId: string, messages: PersistedChatBubble
   }
 }
 
-export function clearChatHistory(sessionId: string): void {
+/**
+ * Drop a conversation's cached transcript.
+ *
+ * Deleting a conversation has to take the local copy with it: the cache is
+ * readable in the browser long after the gateway row is gone, which is not what
+ * "delete" promises, and one key per conversation would otherwise accumulate
+ * for as long as the origin's storage lives.
+ */
+export function removeChatHistory(sessionId: string): void {
   try {
     localStorage.removeItem(storageKey(sessionId));
   } catch {
-    // private mode
+    // Private mode — nothing was cached to begin with.
   }
+}
+
+/** Workbench alias for `removeChatHistory`. */
+export function clearChatHistory(sessionId: string): void {
+  removeChatHistory(sessionId);
 }
 
 /** Map server-persisted rows into UI messages (timestamps are synthetic for ordering). */

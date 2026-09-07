@@ -17,7 +17,11 @@ export type WsErrorHandler = (ev: Event) => void;
 export interface WebSocketClientOptions {
   /** Agent alias to bind this socket to (required by the gateway). */
   agentAlias: string;
-  /** Explicit session ID. When omitted the default per-agent session is used. */
+  /** Conversation to resume or create. The gateway keys persisted history by
+   * this id, so the caller owns it (see `lib/chatSessions`) rather than the
+   * socket inventing one — that is what lets one agent hold several
+   * independent conversations. When omitted the identity-scoped default
+   * per-agent session is used. */
   sessionId?: string;
   /** Base URL override. Defaults to current host with ws(s) protocol. */
   baseUrl?: string;

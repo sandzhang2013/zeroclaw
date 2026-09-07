@@ -99,6 +99,11 @@ function makeSessionId(agentAlias: string, taskId: string): string {
   return `${agentAlias}::${taskId}`;
 }
 
+function gatewayIdFor(session: WorkbenchSession, userId?: string): string | null {
+  if (session.taskId === '__default__') return getOrCreateSessionId(session.agentAlias, userId);
+  return resolveTaskSessionId(session.agentAlias, session.taskId);
+}
+
 function stampNow(): number {
   return Date.now();
 }
@@ -225,6 +230,19 @@ export default function ChatWorkspace({
   const [indicators, setIndicators] = useState<Record<string, SessionIndicator>>({});
 
   const visibleSessionIds = useMemo(() => new Set([activeSessionId]), [activeSessionId]);
+
+  // Conversations held by sibling panes — two sockets on one gateway session
+  // diverge and abort/clear would cancel each other (0.8.5 keepSiblings).
+  const reservedBySessionId = useMemo(() => {
+    const map: Record<string, string[]> = {};
+    for (const session of sessions) {
+      map[session.id] = sessions
+        .filter((s) => s.id !== session.id)
+        .map((s) => gatewayIdFor(s, userId))
+        .filter((id): id is string => Boolean(id));
+    }
+    return map;
+  }, [sessions, userId]);
 
   const syncIndicators = useCallback(() => {
     const next: Record<string, SessionIndicator> = {};
@@ -530,6 +548,7 @@ export default function ChatWorkspace({
                 userId={userId}
                 userRole={userRole}
                 taskId={session.taskId === '__default__' ? undefined : session.taskId}
+                reservedSessionIds={reservedBySessionId[session.id]}
               >
                 <div
                   className="flex flex-col min-h-0 min-w-0 overflow-hidden bg-pc-surface"
