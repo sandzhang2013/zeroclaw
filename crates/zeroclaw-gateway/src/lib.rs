@@ -21,7 +21,7 @@ pub mod api_sections;
 pub mod api_skills;
 pub mod api_sop;
 pub mod api_sop_author;
-mod api_sop_webhook;
+pub mod api_sop_webhook;
 #[cfg(feature = "webauthn")]
 pub mod api_webauthn;
 #[cfg(any(
@@ -30,6 +30,7 @@ pub mod api_webauthn;
     feature = "channel-whatsapp-cloud"
 ))]
 pub mod api_webhook;
+pub mod api_workbench;
 pub mod auth_rate_limit;
 pub mod canvas;
 pub mod hardware_context;
@@ -1616,6 +1617,7 @@ pub async fn run_gateway(
         .route("/hooks/claude-code", post(api::handle_claude_code_hook))
         // ── Web Dashboard API routes ──
         .route("/api/status", get(api::handle_api_status))
+        .route("/api/workbench/home", get(api_workbench::handle_workbench_home))
         .route("/api/version/check", get(version::handle_version_check))
         .route("/api/version/upgrade", post(version::handle_version_upgrade))
         .route(

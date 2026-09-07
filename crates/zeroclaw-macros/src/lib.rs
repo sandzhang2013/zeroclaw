@@ -1312,6 +1312,17 @@ pub fn derive_configurable(input: TokenStream) -> TokenStream {
                 } else {
                     quote! {}
                 };
+                let seed_natural_key = if let Some(nk_field) = &natural_key_field {
+                    // `name`/`hint` below cover the historical Vec keys;
+                    // also seed the declared natural-key field (`id`, etc.).
+                    quote! {
+                        let _ = self.#field_ident[new_idx].set_prop(
+                            &format!("{inner_prefix}.{}", #nk_field), map_key,
+                        );
+                    }
+                } else {
+                    quote! {}
+                };
                 create_map_key_arms.push(quote! {
                     {
                         let prefix = Self::configurable_prefix();
@@ -1337,6 +1348,7 @@ pub fn derive_configurable(input: TokenStream) -> TokenStream {
                             let _ = self.#field_ident[new_idx].set_prop(
                                 &format!("{inner_prefix}.hint"), map_key,
                             );
+                            #seed_natural_key
                             return Ok(true);
                         }
                     }

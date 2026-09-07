@@ -1,24 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Activity,
-  BarChart3,
-  Building2,
   ChevronDown,
-  ClipboardList,
-  FileText,
   Folder,
-  Map,
-  Search,
-  ShieldAlert,
-  Syringe,
   ArrowUp,
   Mic,
   Plus,
   X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { t } from '@/lib/i18n';
-import { getStatus } from '@/lib/api';
+import { t, getLocale } from '@/lib/i18n';
+import { getStatus, getWorkbenchHome } from '@/lib/api';
 import { DEFAULT_FOLDER_ID, type WorkbenchFolder } from '@/pages/ChatWorkspace';
 import { AutonomySelect } from '@/components/AutonomySelect';
 import {
@@ -34,35 +25,11 @@ import {
   CHAT_UPLOAD_MAX_FILES,
   uniqueUploadFileName,
 } from '@/lib/chatUpload';
-
-type TabId = 'query' | 'monitor' | 'report';
-
-const TABS: { id: TabId; labelKey: string }[] = [
-  { id: 'query', labelKey: 'workbench.home_tab_query' },
-  { id: 'monitor', labelKey: 'workbench.home_tab_monitor' },
-  { id: 'report', labelKey: 'workbench.home_tab_report' },
-];
-
-const CAPS: Record<TabId, { icon: LucideIcon; labelKey: string; promptKey: string }[]> = {
-  query: [
-    { icon: Activity, labelKey: 'workbench.home_cap_outbreak', promptKey: 'workbench.home_cap_outbreak_prompt' },
-    { icon: Syringe, labelKey: 'workbench.home_cap_vaccine', promptKey: 'workbench.home_cap_vaccine_prompt' },
-    { icon: Search, labelKey: 'workbench.home_cap_cases', promptKey: 'workbench.home_cap_cases_prompt' },
-    { icon: Building2, labelKey: 'workbench.home_cap_orgs', promptKey: 'workbench.home_cap_orgs_prompt' },
-  ],
-  monitor: [
-    { icon: BarChart3, labelKey: 'workbench.home_cap_trend', promptKey: 'workbench.home_cap_trend_prompt' },
-    { icon: ShieldAlert, labelKey: 'workbench.home_cap_cluster', promptKey: 'workbench.home_cap_cluster_prompt' },
-    { icon: Activity, labelKey: 'workbench.home_cap_alert', promptKey: 'workbench.home_cap_alert_prompt' },
-    { icon: Map, labelKey: 'workbench.home_cap_region', promptKey: 'workbench.home_cap_region_prompt' },
-  ],
-  report: [
-    { icon: FileText, labelKey: 'workbench.home_cap_brief', promptKey: 'workbench.home_cap_brief_prompt' },
-    { icon: ClipboardList, labelKey: 'workbench.home_cap_weekly', promptKey: 'workbench.home_cap_weekly_prompt' },
-    { icon: FileText, labelKey: 'workbench.home_cap_special', promptKey: 'workbench.home_cap_special_prompt' },
-    { icon: ClipboardList, labelKey: 'workbench.home_cap_minutes', promptKey: 'workbench.home_cap_minutes_prompt' },
-  ],
-};
+import {
+  fallbackHomeCatalog,
+  homeCapIcon,
+  type WorkbenchHomeCatalog,
+} from '@/lib/workbenchHomeCatalog';
 
 type HomeAttach = {
   id: string;
@@ -87,7 +54,8 @@ export function WorkbenchHome({
   userRole?: string;
 }) {
   const [input, setInput] = useState('');
-  const [tab, setTab] = useState<TabId>('query');
+  const [catalog, setCatalog] = useState<WorkbenchHomeCatalog>(() => fallbackHomeCatalog());
+  const [tab, setTab] = useState<string>(() => fallbackHomeCatalog().tabs[0]?.id ?? 'query');
   const [model, setModel] = useState<string>('');
   const maxAutonomy = maxAutonomyForRole(userRole);
   const [autonomy, setAutonomy] = useState<WorkbenchAutonomy>(() =>
@@ -121,6 +89,31 @@ export function WorkbenchHome({
       });
     return () => { cancelled = true; };
   }, [agentAlias]);
+
+  useEffect(() => {
+    let cancelled = false;
+    getWorkbenchHome(getLocale())
+      .then((data) => {
+        if (cancelled) return;
+        setCatalog(data);
+        setTab((current) =>
+          data.tabs.some((item) => item.id === current)
+            ? current
+            : (data.tabs[0]?.id ?? current),
+        );
+      })
+      .catch(() => {
+        if (cancelled) return;
+        const fallback = fallbackHomeCatalog(getLocale());
+        setCatalog(fallback);
+        setTab((current) =>
+          fallback.tabs.some((item) => item.id === current)
+            ? current
+            : (fallback.tabs[0]?.id ?? current),
+        );
+      });
+    return () => { cancelled = true; };
+  }, []);
 
   function submit() {
     const trimmed = input.trim();
@@ -196,7 +189,7 @@ export function WorkbenchHome({
               className="inline-flex items-center rounded-full p-1"
               style={{ background: 'color-mix(in srgb, var(--pc-text-primary) 8%, transparent)' }}
             >
-              {TABS.map((item) => {
+              {catalog.tabs.map((item) => {
                 const active = item.id === tab;
                 return (
                   <button
@@ -208,7 +201,7 @@ export function WorkbenchHome({
                       active ? 'bg-pc-text text-pc-base' : 'text-pc-text hover:bg-[var(--pc-hover)]',
                     ].join(' ')}
                   >
-                    {t(item.labelKey)}
+                    {item.label}
                   </button>
                 );
               })}
@@ -217,17 +210,20 @@ export function WorkbenchHome({
         </div>
 
         <div className="mb-4 flex h-11 items-center gap-2 overflow-x-auto">
-          {CAPS[tab].map(({ icon: Icon, labelKey, promptKey }) => (
-            <button
-              key={labelKey}
-              type="button"
-              onClick={() => applyPrompt(t(promptKey))}
-              className="inline-flex shrink-0 items-center gap-2 rounded-full border border-pc-border bg-pc-surface px-[18px] py-[9px] text-sm text-pc-text-secondary transition-colors hover:bg-[var(--pc-hover)] hover:text-pc-text"
-            >
-              <Icon className="size-4 shrink-0" />
-              {t(labelKey)}
-            </button>
-          ))}
+          {(catalog.tabs.find((item) => item.id === tab) ?? catalog.tabs[0])?.caps.map((cap) => {
+            const Icon = homeCapIcon(cap.icon);
+            return (
+              <button
+                key={cap.id}
+                type="button"
+                onClick={() => applyPrompt(cap.prompt)}
+                className="inline-flex shrink-0 items-center gap-2 rounded-full border border-pc-border bg-pc-surface px-[18px] py-[9px] text-sm text-pc-text-secondary transition-colors hover:bg-[var(--pc-hover)] hover:text-pc-text"
+              >
+                <Icon className="size-4 shrink-0" />
+                {cap.label}
+              </button>
+            );
+          })}
         </div>
 
         <div

@@ -212,6 +212,34 @@ Ignore unknown message types. Invalid JSON triggers an error response.
 }
 ```
 
+### GET /api/workbench/home
+Resolved workbench homepage tabs and chips. Any authenticated workbench user may read this; operators edit the source list at `workbench.home.caps` via `/api/config`. Empty config falls back to the built-in catalog.
+
+**Query Parameters:**
+- `locale` (string, optional) — `zh` or `en`; otherwise the gateway `locale`, then `zh`
+
+**Response 200:**
+```json
+{
+  "source": "builtin",
+  "tabs": [
+    {
+      "id": "query",
+      "label": "数据查询",
+      "caps": [
+        {
+          "id": "outbreak",
+          "icon": "activity",
+          "kind": "chat",
+          "label": "疫情概况",
+          "prompt": "帮我查询并概述近期全省传染病疫情情况。"
+        }
+      ]
+    }
+  ]
+}
+```
+
 ### GET /api/health
 Component health snapshot (requires auth).
 ```json

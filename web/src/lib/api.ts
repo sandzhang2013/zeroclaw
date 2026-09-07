@@ -17,6 +17,7 @@ import type {
 import type { components } from "./api-generated";
 import { clearToken, getToken, setToken } from "./auth";
 import { apiOrigin, basePath, gatewayUrl } from "./basePath";
+import type { WorkbenchHomeCatalog } from "./workbenchHomeCatalog";
 
 // ---------------------------------------------------------------------------
 // Base fetch wrapper
@@ -348,6 +349,12 @@ export async function getPublicHealth(): Promise<{
 export function getStatus(agent?: string): Promise<StatusResponse> {
   const qs = agent ? `?agent=${encodeURIComponent(agent)}` : "";
   return apiFetch<StatusResponse>(`/api/status${qs}`);
+}
+
+/** Resolved homepage tabs/chips. Ops edit `workbench.home.caps`; this is the read view. */
+export function getWorkbenchHome(locale?: string): Promise<WorkbenchHomeCatalog> {
+  const qs = locale ? `?locale=${encodeURIComponent(locale)}` : "";
+  return apiFetch(`/api/workbench/home${qs}`);
 }
 
 export function getHealth(): Promise<HealthSnapshot> {

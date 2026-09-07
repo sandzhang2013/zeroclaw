@@ -669,6 +669,14 @@ pub struct Config {
     #[serde(default)]
     #[nested]
     pub escalation: EscalationConfig,
+
+    /// Workbench homepage starter catalog (`[workbench]`). Operators edit
+    /// `workbench.home.caps` from the dashboard Config explorer (ops-only).
+    /// The homepage reads the resolved list via `GET /api/workbench/home`.
+    #[serde(default)]
+    #[nested]
+    #[group = "Agent"]
+    pub workbench: crate::workbench::WorkbenchConfig,
 }
 
 /// Multi-client workspace isolation configuration.
@@ -18983,6 +18991,7 @@ impl Default for Config {
             sop: SopConfig::default(),
             shell_tool: ShellToolConfig::default(),
             escalation: EscalationConfig::default(),
+            workbench: crate::workbench::WorkbenchConfig::default(),
         }
     }
 }
@@ -21055,6 +21064,7 @@ impl Config {
     /// obviously invalid values early instead of failing at arbitrary runtime points.
     pub fn validate(&self) -> Result<()> {
         validate_memory_rerank_config(&self.memory)?;
+        crate::workbench::validate_home_caps(&self.workbench.home.caps)?;
 
         let websocket_ping_interval_secs = self.gateway.websocket_ping_interval_secs;
         if websocket_ping_interval_secs > GATEWAY_WEBSOCKET_PING_INTERVAL_MAX_SECS {
@@ -28006,6 +28016,7 @@ auto_save = true
             sop: SopConfig::default(),
             shell_tool: ShellToolConfig::default(),
             escalation: EscalationConfig::default(),
+            workbench: crate::workbench::WorkbenchConfig::default(),
             env_overridden_paths: std::collections::HashSet::new(),
             pre_override_snapshots: std::collections::HashMap::new(),
             onepassword_reference_snapshots: std::collections::HashMap::new(),
@@ -28962,6 +28973,7 @@ default_temperature = 0.7
             sop: SopConfig::default(),
             shell_tool: ShellToolConfig::default(),
             escalation: EscalationConfig::default(),
+            workbench: crate::workbench::WorkbenchConfig::default(),
             env_overridden_paths: std::collections::HashSet::new(),
             pre_override_snapshots: std::collections::HashMap::new(),
             onepassword_reference_snapshots: std::collections::HashMap::new(),

@@ -502,7 +502,8 @@ fn picker_items_for(
         | Section::RiskProfiles
         | Section::RuntimeProfiles
         | Section::ModelRoutes
-        | Section::EmbeddingRoutes => {
+        | Section::EmbeddingRoutes
+        | Section::WorkbenchHomeCaps => {
             PickerDispatch::Items(one_tier_alias_map_picker(cfg, section.as_str()))
         }
         Section::Hardware | Section::Mcp | Section::Skills | Section::QuickstartState => {
@@ -939,7 +940,8 @@ pub async fn handle_section_select(
         | Section::RiskProfiles
         | Section::RuntimeProfiles
         | Section::ModelRoutes
-        | Section::EmbeddingRoutes => {
+        | Section::EmbeddingRoutes
+        | Section::WorkbenchHomeCaps => {
             let section_key = section_enum.as_str();
             let created = match zeroclaw_config::alias_refs::create_map_key_checked(
                 &mut working,
@@ -1793,6 +1795,7 @@ mod tests {
             ("skill_bundles", "ops_skills"),
             ("risk_profiles", "tight"),
             ("runtime_profiles", "fast_model"),
+            ("workbench.home.caps", "hello"),
         ];
         for (section, alias) in cases {
             let mut cfg = empty_cfg();
@@ -1838,6 +1841,10 @@ mod tests {
             Section::SkillBundles,
             Section::RiskProfiles,
             Section::RuntimeProfiles,
+            Section::McpServers,
+            Section::ModelRoutes,
+            Section::EmbeddingRoutes,
+            Section::WorkbenchHomeCaps,
         ];
         let direct_form = [Section::Hardware, Section::Mcp];
         for section in all {

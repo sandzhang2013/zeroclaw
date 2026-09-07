@@ -116,6 +116,7 @@ pub fn humanize_section_key(key: &str) -> String {
         "providers.models" => return "Model providers".to_string(),
         "providers.tts" => return "TTS providers".to_string(),
         "providers.transcription" => return "Transcription providers".to_string(),
+        "workbench.home.caps" => return "Workbench home".to_string(),
         _ => {}
     }
     let mut s = key.replace(['_', '-', '.'], " ");
@@ -424,6 +425,16 @@ sections! {
         help:  "Scheduled tasks. Each cron entry binds a schedule expression to a \
                 prompt, channel, and target.",
     },
+    WorkbenchHomeCaps => {
+        key:   "workbench.home.caps",
+        shape: OneTierAliasMap,
+        group: Agent,
+        help:  "Workbench homepage starter chips. Each entry is a tab chip \
+                (query / monitor / report, or a custom tab id) with a label and \
+                the prompt inserted into the composer. Empty list falls back to \
+                the built-in catalog on GET /api/workbench/home. Ops edit this \
+                list; other roles only see the homepage.",
+    },
 
     // Tier 9 — Exposure. Gateway public-internet exposure. Only
     // relevant when a webhook-mode channel needs a public URL.
@@ -520,6 +531,7 @@ pub fn section_has_signal(cfg: &crate::schema::Config, section: Section) -> bool
         | Section::Mcp
         | Section::McpBundles
         | Section::KnowledgeBundles
+        | Section::WorkbenchHomeCaps
         | Section::QuickstartState => false,
     }
 }
@@ -606,6 +618,7 @@ mod tests {
             Section::SkillBundles,
             Section::RiskProfiles,
             Section::RuntimeProfiles,
+            Section::WorkbenchHomeCaps,
         ];
         for section in alias_map_sections {
             assert!(

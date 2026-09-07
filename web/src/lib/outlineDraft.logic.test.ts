@@ -10,7 +10,7 @@ import {
   shouldShowOutlineEditButton,
 } from './outlineDraft.ts';
 
-/** Keep in sync with `workbench.home_cap_*_prompt` in i18n.ts (zh + en). */
+/** Keep in sync with builtin prompts in `zeroclaw_config::workbench` and `fallbackHomeCatalog`. */
 const REPORT_PROMPTS = [
   '帮我起草一份疾控工作简报提纲，结构清晰、重点突出。',
   '帮我起草本周传染病监测周报提纲。',
