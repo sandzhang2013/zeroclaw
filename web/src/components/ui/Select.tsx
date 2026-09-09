@@ -8,11 +8,13 @@
 // ComboBox uses. Click anywhere on the control opens it.
 
 import { useEffect, useId, useRef, useState } from "react";
-import { Check, ChevronsUpDown } from "lucide-react";
+import { Check, ChevronsUpDown, type LucideIcon } from "lucide-react";
 
 export interface SelectOption {
   value: string;
   label: string;
+  /** Optional glyph shown next to the label in the trigger and list. */
+  icon?: LucideIcon;
 }
 
 export interface SelectProps {
@@ -47,6 +49,7 @@ export function Select({
   const listboxId = `${id ?? reactId}-listbox`;
 
   const selected = options.find((o) => o.value === value);
+  const SelectedIcon = selected?.icon;
 
   // On open, highlight the currently-selected option (or the first).
   useEffect(() => {
@@ -121,8 +124,9 @@ export function Select({
         onKeyDown={onKeyDown}
         className="input-electric flex w-full cursor-pointer items-center justify-between gap-2 px-3 py-2 text-left text-sm"
       >
-        <span className={selected ? "truncate" : "truncate text-pc-text-faint"}>
-          {selected ? selected.label : (placeholder ?? "")}
+        <span className={`flex min-w-0 items-center gap-2 ${selected ? "" : "text-pc-text-faint"}`}>
+          {SelectedIcon ? <SelectedIcon className="h-4 w-4 shrink-0" aria-hidden /> : null}
+          <span className="truncate">{selected ? selected.label : (placeholder ?? "")}</span>
         </span>
         <ChevronsUpDown className="h-4 w-4 shrink-0 text-pc-text-muted" />
       </button>
@@ -131,11 +135,12 @@ export function Select({
           ref={listRef}
           id={listboxId}
           role="listbox"
-          className="absolute z-30 mt-1 max-h-60 w-full overflow-y-auto rounded-[var(--radius-md)] border border-pc-border bg-pc-surface p-1 shadow-[var(--pc-shadow-md)]"
+          className="absolute z-50 mt-1 max-h-60 w-full overflow-y-auto rounded-[var(--radius-md)] border border-pc-border bg-pc-surface p-1 shadow-[var(--pc-shadow-md)]"
         >
           {options.map((o, i) => {
             const sel = o.value === value;
             const act = i === active;
+            const OptionIcon = o.icon;
             return (
               <li key={`${i}-${o.value}`}>
                 <button
@@ -155,6 +160,7 @@ export function Select({
                   <Check
                     className={`h-3.5 w-3.5 shrink-0 ${sel ? "text-pc-accent" : "opacity-0"}`}
                   />
+                  {OptionIcon ? <OptionIcon className="h-4 w-4 shrink-0" aria-hidden /> : null}
                   <span className="truncate">{o.label}</span>
                 </button>
               </li>

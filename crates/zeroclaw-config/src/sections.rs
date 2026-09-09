@@ -429,11 +429,9 @@ sections! {
         key:   "workbench.home.caps",
         shape: OneTierAliasMap,
         group: Agent,
-        help:  "Workbench homepage starter chips. Each entry is a tab chip \
-                (query / monitor / report, or a custom tab id) with a label and \
-                the prompt inserted into the composer. Empty list falls back to \
-                the built-in catalog on GET /api/workbench/home. Ops edit this \
-                list; other roles only see the homepage.",
+                help:  "Workbench homepage starter chips. Ops edit the nested tab/chip \
+                catalog in the dedicated homepage editor (or this Config section). \
+                Empty list falls back to the built-in catalog on GET /api/workbench/home.",
     },
 
     // Tier 9 — Exposure. Gateway public-internet exposure. Only

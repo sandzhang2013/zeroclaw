@@ -286,7 +286,7 @@ fn is_false(b: &bool) -> bool {
 // ── Error helpers ───────────────────────────────────────────────────
 
 /// Convert a `ConfigApiError` into an axum `Response` with the correct status.
-fn error_response(err: ConfigApiError) -> Response {
+pub(crate) fn error_response(err: ConfigApiError) -> Response {
     let status =
         StatusCode::from_u16(err.code.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     (status, axum::Json(err)).into_response()
@@ -391,7 +391,7 @@ fn scoped_validate(
 /// holds the guard, so re-locking here would deadlock. The `debug_assert!`
 /// below catches a caller that passed a look-alike guard from the wrong
 /// mutex instead of the one actually held.
-async fn persist_and_swap(
+pub(crate) async fn persist_and_swap(
     state: &AppState,
     mut new_config: zeroclaw_config::schema::Config,
     _guard: &ConfigWriteGuard,
@@ -3951,10 +3951,8 @@ auto_approve = ["file_read", "memory_recall", "disease-report__getcase"]
 
     #[test]
     fn every_gateway_secret_is_classified() {
-        const OPERATOR_EDITED_GATEWAY_SECRETS: &[&str] = &[
-            "gateway.trusted_proxy_secret",
-            "gateway.webhook_secret",
-        ];
+        const OPERATOR_EDITED_GATEWAY_SECRETS: &[&str] =
+            &["gateway.trusted_proxy_secret", "gateway.webhook_secret"];
 
         let cfg = zeroclaw_config::schema::Config::default();
         let unclassified: Vec<String> = cfg

@@ -345,7 +345,9 @@ async function unmount(renderer: ReactTestRenderer): Promise<void> {
   await act(async () => { renderer.unmount(); });
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  const { setLocale } = await import('../lib/i18n.ts');
+  setLocale('en');
   storage.clear();
   configPutCalls = [];
   missingSessions = new Set();

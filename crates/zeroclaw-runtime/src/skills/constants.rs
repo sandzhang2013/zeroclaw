@@ -3,6 +3,9 @@
 /// Canonical manifest filename per the open Agent Skills spec.
 pub const SKILL_MANIFEST_FILENAME: &str = "SKILL.md";
 
+/// Sidecar that keeps a skill installed but out of the next turn's prompt.
+pub const SKILL_DISABLED_MARKER: &str = ".disabled";
+
 /// Pre-spec manifest filenames still accepted by the audit loader for
 /// back-compat with installed skills. Never written by the service.
 pub const SKILL_DEPRECATED_MANIFESTS: &[&str] = &["SKILL.toml", "manifest.toml"];

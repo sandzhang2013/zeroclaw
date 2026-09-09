@@ -7,6 +7,7 @@ import { WorkbenchSidebar, type SessionIndicator } from '@/components/WorkbenchS
 import { ResultsPanel } from '@/components/ResultsPanel';
 import { WorkbenchHome } from '@/components/WorkbenchHome';
 import { ConfirmDialog } from '@/components/ui';
+import { MySkillsPage } from '@/components/MySkillsPage';
 import { deleteAgentWorkspacePath, deleteSession, getSessions } from '@/lib/api';
 import {
   adoptTaskSession,
@@ -18,6 +19,8 @@ import {
 import { persistSessionId } from '@/lib/sessionId';
 import { generateUUID } from '@/lib/uuid';
 import { t } from '@/lib/i18n';
+import { nextStoredSessionTitle, type HomeSkillRef } from '@/lib/homeSend';
+import { clearSessionHomeSkill, restoreSessionHomeSkill } from '@/lib/homeSessionSkill';
 import {
   saveWorkbenchAutonomy,
   clampWorkbenchAutonomy,
@@ -70,6 +73,8 @@ export interface WorkbenchSession {
   title?: string;
   /** Last activity, epoch milliseconds. */
   updatedAt?: number;
+  /** Homepage skill tag carried into this conversation. */
+  homeSkill?: HomeSkillRef;
 }
 
 interface PersistedStateV1 {
@@ -217,6 +222,7 @@ export default function ChatWorkspace({
     files: File[];
   } | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const [showSkills, setShowSkills] = useState(false);
   const deletingRef = useRef(false);
   const showHome = !sessions.some((s) => s.id === activeSessionId);
 
@@ -279,11 +285,17 @@ export default function ChatWorkspace({
         setSessions((list) => {
           const current = list.find((sess) => sess.id === sessionId);
           if (!current) return list;
-          const stored = sanitizeSessionTitle(current.title);
-          const fromPreview = sanitizeSessionTitle(preview);
-          const nextTitle = fromPreview && stored && fromPreview.startsWith(stored) && fromPreview.length > stored.length
-            ? fromPreview
-            : (stored ?? fromPreview ?? current.title);
+          const nextTitle = nextStoredSessionTitle({
+            stored: current.title,
+            preview,
+            skillLabel: current.homeSkill?.label,
+          });
+          if (!nextTitle) {
+            if (!grew) return list;
+            return list.map((sess) => (
+              sess.id === sessionId ? { ...sess, updatedAt: stampNow() } : sess
+            ));
+          }
           if (!grew && nextTitle === current.title) return list;
           return list.map((sess) => (
             sess.id === sessionId
@@ -368,19 +380,27 @@ export default function ChatWorkspace({
   }, [activeAlias, location.pathname, navigate]);
 
   const selectSession = useCallback((sessionId: string) => {
+    setShowSkills(false);
     setActiveSessionId(sessionId);
     const session = sessions.find((s) => s.id === sessionId);
     if (session) setActiveFolderId(session.folderId);
   }, [sessions]);
 
   const newSession = useCallback(() => {
+    setShowSkills(false);
     setActiveSessionId('');
   }, []);
 
-  const startSessionFromHome = useCallback((text: string, autonomy: WorkbenchAutonomy, files: File[] = []) => {
+  const startSessionFromHome = useCallback((
+    text: string,
+    autonomy: WorkbenchAutonomy,
+    files: File[] = [],
+    titleHint?: string,
+    skill?: HomeSkillRef,
+  ) => {
     const folderId = folders.some((f) => f.id === activeFolderId) ? activeFolderId : DEFAULT_FOLDER_ID;
     const taskId = createTaskSessionId(activeAlias);
-    const titleSource = text.trim().split('\n')[0] || files[0]?.name || '';
+    const titleSource = (titleHint || text).trim().split('\n')[0] || files[0]?.name || '';
     const session: WorkbenchSession = {
       id: makeSessionId(activeAlias, taskId),
       agentAlias: activeAlias,
@@ -388,11 +408,13 @@ export default function ChatWorkspace({
       folderId,
       updatedAt: stampNow(),
       title: sanitizeSessionTitle(titleSource) ?? undefined,
+      homeSkill: skill,
     };
     const capped = clampWorkbenchAutonomy(autonomy, maxAutonomyForRole(userRole));
     saveWorkbenchAutonomy(session.id, capped);
     setPendingPrompt({ sessionId: session.id, text, autonomy: capped, files });
     setSessions((prev) => [...prev, session]);
+    setShowSkills(false);
     setActiveSessionId(session.id);
   }, [activeAlias, activeFolderId, folders, userRole]);
 
@@ -519,10 +541,17 @@ export default function ChatWorkspace({
         userRole={userRole}
         userRegion={userRegion}
         onSwitchUser={onSwitchUser}
+        skillsOpen={showSkills}
+        onOpenMySkills={() => {
+          setShowSkills(true);
+          setActiveSessionId('');
+        }}
       />
 
       <div ref={splitRef} className="flex flex-1 min-w-0 min-h-0 bg-pc-surface">
-        {showHome && (
+        {showSkills ? (
+          <MySkillsPage agent={activeAlias} onClose={() => setShowSkills(false)} />
+        ) : showHome && (
           <WorkbenchHome
             onSend={startSessionFromHome}
             folders={folders}
@@ -532,7 +561,7 @@ export default function ChatWorkspace({
             userRole={userRole}
           />
         )}
-        {sessions.filter((session) => mountedSessionIds.has(session.id)).map((session) => {
+        {!showSkills && sessions.filter((session) => mountedSessionIds.has(session.id)).map((session) => {
           const visible = session.id === activeSessionId;
           return (
             <div
@@ -566,6 +595,13 @@ export default function ChatWorkspace({
                     initialFiles={pendingPrompt?.sessionId === session.id ? pendingPrompt.files : undefined}
                     autonomyScope={session.id}
                     userRole={userRole}
+                    sessionSkill={session.homeSkill}
+                    onClearSessionSkill={() => {
+                      setSessions((prev) => clearSessionHomeSkill(prev, session.id));
+                    }}
+                    onRestoreSessionSkill={(skill) => {
+                      setSessions((prev) => restoreSessionHomeSkill(prev, session.id, skill));
+                    }}
                     onInitialPromptConsumed={() => {
                       setPendingPrompt((p) => (p?.sessionId === session.id ? null : p));
                     }}

@@ -1,13 +1,13 @@
-import { memo, useState, useEffect, useRef, useCallback } from 'react';
+import { memo, useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Link, Navigate, useParams } from 'react-router-dom';
-import { ArrowUp, Square, User, AlertCircle, Copy, Check, X, Trash2, Minimize2, Maximize2, ChevronDown, Wrench, PanelRightClose, PanelRightOpen, Plus, Mic, Loader2, Pencil, FolderOpen, ImagePlus } from 'lucide-react';
+import { ArrowUp, Square, User, AlertCircle, Copy, Check, X, Trash2, Minimize2, Maximize2, ChevronDown, Wrench, PanelRightClose, PanelRightOpen, Plus, Mic, Loader2, Pencil, FolderOpen, ImagePlus, Sparkles } from 'lucide-react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { AgentProvider, useAgent, type ChatMessage } from '@/contexts/AgentContext';
 import { labelForProviderRef, resolveProviderRefArg } from '@/contexts/modelPicker.logic';
 import SessionPicker from '@/components/SessionPicker';
 import { useDraft } from '@/hooks/useDraft';
-import { t } from '@/lib/i18n';
+import { t, getLocale } from '@/lib/i18n';
 import {
   COMMANDS,
   helpText,
@@ -19,9 +19,11 @@ import {
 import ToolCallCard from '@/components/ToolCallCard';
 import { ArtifactCard } from '@/components/ArtifactCard';
 import { OutlineEditModal } from '@/components/OutlineEditModal';
+import { SavePersonalSkillModal } from '@/components/SavePersonalSkillModal';
+import { ThinkingTranscript } from '@/components/ThinkingTranscript';
 import ApprovalBanner from '@/components/ApprovalBanner';
 import { AutonomySelect } from '@/components/AutonomySelect';
-import { ApiError, uploadAgentWorkspaceFile, uploadChatImage } from '@/lib/api';
+import { ApiError, savePersonalSkill, uploadAgentWorkspaceFile, uploadChatImage } from '@/lib/api';
 import {
   DEFAULT_WORKBENCH_AUTONOMY,
   loadWorkbenchAutonomy,
@@ -44,8 +46,22 @@ import { artifactKind } from '@/lib/artifactKind';
 import { groupIllustratedBubbles, shouldAttachStreamingToGroup } from '@/lib/chatIllustrated';
 import { extractMcpToolText, extractToolImages, stripImageMarkers } from '@/lib/chatImages';
 import { ChatImagePreview } from '@/components/ChatImagePreview';
-import { sanitizeSessionTitle } from '@/lib/workbenchSession';
+import { sanitizeSessionTitle, stripSessionTitleTimestamp } from '@/lib/workbenchSession';
 import { composeOutlineContinuePrompt, shouldShowOutlineEditButton } from '@/lib/outlineDraft';
+import { composeHomeMessage, parseHomeSkillDisplay, titleFromUserMessage, type HomeSkillRef } from '@/lib/homeSend';
+import {
+  inferHomeSkillFromMessages,
+  resolveActiveHomeSkill,
+  shouldRestoreHomeSkill,
+} from '@/lib/homeSessionSkill';
+import { HomeSkillChip } from '@/components/HomeSkillChip';
+import { homeCapIcon } from '@/lib/workbenchHomeCatalog';
+import {
+  draftPersonalSkill,
+  shouldShowSaveSkillButton,
+  skillSlug,
+  type PersonalSkillDraft,
+} from '@/lib/personalSkill';
 import { basePath } from '@/lib/basePath';
 
 const DRAFT_KEY_PREFIX = 'agent-chat';
@@ -178,6 +194,9 @@ export function AgentChatInner({
   initialFiles,
   autonomyScope,
   userRole,
+  sessionSkill,
+  onClearSessionSkill,
+  onRestoreSessionSkill,
 }: {
   agentAlias: string;
   onStatus?: (s: AgentChatStatus) => void;
@@ -191,6 +210,9 @@ export function AgentChatInner({
   initialFiles?: File[];
   autonomyScope?: string;
   userRole?: string;
+  sessionSkill?: HomeSkillRef;
+  onClearSessionSkill?: () => void;
+  onRestoreSessionSkill?: (skill: HomeSkillRef) => void;
 }) {
   const {
     messages,
@@ -236,7 +258,32 @@ export function AgentChatInner({
     saveDraftRef.current(value);
   }, [writeInput]);
   const isWorkbench = Boolean(onRenameSession || onToggleRightPanel || autonomyScope);
+  const [skillDismissed, setSkillDismissed] = useState(false);
+  useEffect(() => {
+    setSkillDismissed(false);
+  }, [autonomyScope, sessionSkill?.id, sessionSkill?.label]);
+  const inferredSkill = useMemo(
+    () => inferHomeSkillFromMessages(messages),
+    [messages],
+  );
+  const activeSkill = resolveActiveHomeSkill({
+    sessionSkill,
+    inferredSkill,
+    dismissed: skillDismissed,
+  });
+  useEffect(() => {
+    const restore = shouldRestoreHomeSkill({
+      dismissed: skillDismissed,
+      sessionSkill,
+      inferredSkill,
+    });
+    if (restore) onRestoreSessionSkill?.(restore);
+  }, [skillDismissed, sessionSkill, inferredSkill, onRestoreSessionSkill]);
   const [outlineDraft, setOutlineDraft] = useState<string | null>(null);
+  const [skillDraft, setSkillDraft] = useState<PersonalSkillDraft | null>(null);
+  const [skillSaving, setSkillSaving] = useState(false);
+  const [skillError, setSkillError] = useState<string | null>(null);
+  const [skillNotice, setSkillNotice] = useState<string | null>(null);
   const persistAutonomyScope = autonomyScope ?? sessionId;
   const maxAutonomy = maxAutonomyForRole(userRole);
   const [autonomy, setAutonomy] = useState<WorkbenchAutonomy>(() =>
@@ -307,18 +354,23 @@ export function AgentChatInner({
   // Report live status up to the workbench (sidebar indicators + session title).
   useEffect(() => {
     const first = messages.find((m) => m.role === 'user' && !m.ephemeral && !m.notice);
-    const preview = sanitizeSessionTitle(first?.content.trim().split('\n')[0] ?? '') ?? undefined;
+    const preview = first
+      ? (sanitizeSessionTitle(titleFromUserMessage(first.content, sessionSkill?.label)) ?? undefined)
+      : undefined;
     onStatus?.({ typing, messageCount: messages.length, preview });
-  }, [typing, messages, onStatus]);
+  }, [typing, messages, onStatus, sessionSkill?.label]);
 
-  const headingTitle = sanitizeSessionTitle(sessionTitle) ?? (sessionTitle?.trim() || agentAlias);
+  const headingTitle =
+    sanitizeSessionTitle(sessionTitle)
+    ?? sanitizeSessionTitle(sessionSkill?.label)
+    ?? (sessionTitle?.trim() || agentAlias);
   // Scroll to bottom on new messages / streaming.
   // Note: WebSocket lifecycle, hydration, and tool_call/tool_result handling
   // moved to AgentContext (PR #6101). Tool activity is filtered at render
   // time below using `showToolActivity`, not at the message-handler layer.
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, typing, streamingContent]);
+  }, [messages, typing, streamingContent, streamingThinking]);
 
   useEffect(() => {
     const finished = wasTypingRef.current && !typing;
@@ -440,12 +492,20 @@ export function AgentChatInner({
     if (!trimmed && ready.length === 0) return;
 
     const text = trimmed.startsWith('//') ? trimmed.slice(1) : trimmed;
+    const tagged = activeSkill
+      ? composeHomeMessage({
+          userText: text,
+          skill: activeSkill,
+          locale: getLocale(),
+          includePrompt: false,
+        })
+      : text;
     const payload = ready.length
       ? composeUploadMessage(
-          text,
+          tagged,
           ready.map((a) => ({ cwdRel: a.cwdRel, filename: a.filename, mime: a.mime })),
         )
-      : text;
+      : tagged;
     sendMessage(payload, clampWorkbenchAutonomy(autonomy, maxAutonomy));
     setAttachments((prev) => {
       for (const a of prev) {
@@ -641,6 +701,34 @@ export function AgentChatInner({
     setOutlineDraft(text);
   }, []);
 
+  const handleOpenSaveSkill = useCallback((assistantText: string, userText: string) => {
+    const draft = draftPersonalSkill({ userText, assistantText });
+    setSkillError(null);
+    setSkillDraft(draft);
+  }, []);
+
+  const handleSaveSkill = useCallback(async () => {
+    if (!skillDraft) return;
+    const name = skillSlug(skillDraft.name);
+    if (!name) return;
+    setSkillSaving(true);
+    setSkillError(null);
+    try {
+      await savePersonalSkill({
+        agent: agentAlias,
+        name,
+        description: skillDraft.description,
+        body: skillDraft.body,
+      });
+      setSkillDraft(null);
+      setSkillNotice(t('workbench.save_skill_done'));
+    } catch (err) {
+      setSkillError(err instanceof ApiError ? err.message : t('workbench.save_skill_failed'));
+    } finally {
+      setSkillSaving(false);
+    }
+  }, [agentAlias, skillDraft]);
+
   const handleCopy = useCallback((msgId: string, content: string) => {
     const onSuccess = () => {
       setCopiedId(msgId);
@@ -769,6 +857,18 @@ export function AgentChatInner({
         }}
         busy={!connected || typing}
       />
+      <SavePersonalSkillModal
+        open={skillDraft != null}
+        draft={skillDraft ?? { name: '', description: '', body: '' }}
+        onChange={(next) => setSkillDraft(next)}
+        onClose={() => {
+          setSkillDraft(null);
+          setSkillError(null);
+        }}
+        onSave={() => { void handleSaveSkill(); }}
+        busy={skillSaving}
+        error={skillError}
+      />
       {dragOver && (
         <div className="pointer-events-none absolute inset-3 z-40 flex items-center justify-center rounded-xl border-2 border-dashed border-pc-accent bg-pc-accent/10">
           <p className="text-sm font-medium text-pc-accent">{t('workbench.attach_drop')}</p>
@@ -884,6 +984,18 @@ export function AgentChatInner({
           {error}
         </div>
       )}
+      {skillNotice && (
+        <div className="px-4 py-2 border-b border-pc-border bg-pc-elevated text-pc-text-secondary flex items-center justify-between gap-2 text-sm animate-fade-in">
+          <span>{skillNotice}</span>
+          <button
+            type="button"
+            onClick={() => setSkillNotice(null)}
+            className="text-xs text-pc-text-muted hover:text-pc-text"
+          >
+            {t('common.close')}
+          </button>
+        </div>
+      )}
 
       {/* Messages area. */}
       <div
@@ -907,12 +1019,14 @@ export function AgentChatInner({
           const bubbles = groupIllustratedBubbles(messages, showToolActivity);
           const last = bubbles.at(-1);
           const streamInLast = Boolean(typing && shouldAttachStreamingToGroup(last));
+          const lastUser = [...messages].reverse().find((m) => m.role === 'user');
+          const lastUserText = lastUser ? messageModelText(lastUser) : '';
           return (
             <>
               {bubbles.map((items, idx) => {
                 const prev = bubbles[idx - 1];
                 const previousUserText = prev?.[0]?.role === 'user'
-                  ? messageDisplayText(prev[0])
+                  ? messageModelText(prev[0])
                   : '';
                 return (
                 <MessageItem
@@ -923,8 +1037,10 @@ export function AgentChatInner({
                   showToolActivity={showToolActivity}
                   isCopied={items.some((m) => copiedId === m.id)}
                   previousUserText={previousUserText}
+                  lastUserText={lastUserText}
                   onCopy={handleCopy}
                   onEditOutline={handleEditOutline}
+                  onSaveSkill={handleOpenSaveSkill}
                   onDelete={handleDeleteMessage}
                   streaming={streamInLast && idx === bubbles.length - 1
                     ? { content: streamingContent, thinking: streamingThinking }
@@ -938,10 +1054,11 @@ export function AgentChatInner({
                   {streamingContent || streamingThinking ? (
                     <div className="min-w-0 flex-1 rounded-[var(--radius-lg)] px-4 py-3 border border-pc-border bg-pc-elevated text-pc-text">
                       {streamingThinking && (
-                        <details className="mb-2" open={!streamingContent}>
-                          <summary className="text-xs cursor-pointer select-none text-pc-text-muted">{t('agentchat.thinking')}{!streamingContent && '...'}</summary>
-                          <pre className="text-xs mt-1 whitespace-pre-wrap break-words leading-relaxed overflow-auto max-h-60 p-2 rounded-[var(--radius-sm)] text-pc-text-muted bg-pc-code">{streamingThinking}</pre>
-                        </details>
+                        <ThinkingTranscript
+                          text={streamingThinking}
+                          live
+                          open={!streamingContent}
+                        />
                       )}
                       {streamingContent && <p className="text-sm whitespace-pre-wrap break-words leading-relaxed">{streamingContent}</p>}
                     </div>
@@ -1049,6 +1166,17 @@ export function AgentChatInner({
                 ))}
               </ul>
             )}
+            <div className="flex min-w-0 items-start gap-2">
+              {activeSkill ? (
+                <HomeSkillChip
+                  label={activeSkill.label}
+                  icon={homeCapIcon(activeSkill.icon ?? '')}
+                  onClear={() => {
+                    setSkillDismissed(true);
+                    onClearSessionSkill?.();
+                  }}
+                />
+              ) : null}
             <textarea
               ref={inputRef}
               rows={1}
@@ -1071,9 +1199,10 @@ export function AgentChatInner({
                     ? t('agent.running')
                     : t('agent.type_message')}
               disabled={!connected || typing || !hydrated}
-              className="w-full min-w-0 bg-transparent text-sm resize-none text-pc-text placeholder:text-pc-text-muted outline-none focus:outline-none focus-visible:outline-none disabled:opacity-40"
+              className="min-w-0 flex-1 bg-transparent text-sm resize-none text-pc-text placeholder:text-pc-text-muted outline-none focus:outline-none focus-visible:outline-none disabled:opacity-40"
               style={{ minHeight: '2.5rem', maxHeight: '10rem', paddingTop: '2px', paddingBottom: '8px' }}
             />
+            </div>
             <div className="flex w-full min-w-0 items-center justify-between gap-2">
               <div className="flex min-w-0 items-center gap-0.5">
                 <button
@@ -1213,15 +1342,11 @@ export function AgentChatInner({
 }
 
 // Channel-user (and some agent) messages arrive with a leading
-// `[YYYY-MM-DD HH:MM:SS TZ] ` prefix the gateway prepends. The zone is a chrono
-// `%Z` abbreviation (e.g. CEST) that JS `Date` can't reliably parse, so we
-// don't try — we just strip the prefix for display and copy; the bubble shows
-// its own wall-clock caption separately. Anchored to the start so a bracketed
-// datetime appearing mid-message (a log line, an error report) is left intact.
-const SERVER_TIMESTAMP_RE = /^\s*\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [^\]]+\]\s*/;
-
+// `[YYYY-MM-DD HH:MM:SS TZ]` prefix, or the runtime enrichment
+// `[CURRENT DATE & TIME: …]` stored in session history. The bubble shows its
+// own wall-clock caption; a bracketed datetime mid-message is left intact.
 function stripServerTimestamp(content: string): string {
-  return content.replace(SERVER_TIMESTAMP_RE, '');
+  return stripSessionTitleTimestamp(content);
 }
 
 // Each chat message is rendered through this memoized component so that
@@ -1236,8 +1361,10 @@ interface MessageItemProps {
   showToolActivity: boolean;
   isCopied: boolean;
   previousUserText?: string;
+  lastUserText?: string;
   onCopy: (id: string, content: string) => void;
   onEditOutline: (content: string) => void;
+  onSaveSkill: (assistantText: string, userText: string) => void;
   onDelete: (id: string) => void;
   streaming?: { content: string; thinking: string } | null;
 }
@@ -1257,12 +1384,18 @@ function ChatMarkdown({ content, compact }: { content: string; compact: boolean 
   );
 }
 
-function messageDisplayText(msg: ChatMessage | undefined): string {
+function messageModelText(msg: ChatMessage | undefined): string {
   if (!msg) return '';
   const cleanContent = msg.local || msg.ephemeral ? msg.content : stripServerTimestamp(msg.content);
-  const withoutUpload = msg.role === 'user' ? displayUploadMessage(cleanContent) : cleanContent;
-  if (msg.role !== 'agent') return withoutUpload;
-  return splitChatHtmlBlocks(stripImageMarkers(withoutUpload)).markdown;
+  return msg.role === 'user' ? displayUploadMessage(cleanContent) : cleanContent;
+}
+
+function messageDisplayText(msg: ChatMessage | undefined): string {
+  if (!msg) return '';
+  const raw = messageModelText(msg);
+  if (msg.role === 'user') return parseHomeSkillDisplay(raw).visible;
+  if (msg.role !== 'agent') return raw;
+  return splitChatHtmlBlocks(stripImageMarkers(raw)).markdown;
 }
 
 function MessageBody({
@@ -1276,9 +1409,15 @@ function MessageBody({
   showToolActivity: boolean;
   hideImageCaption: boolean;
 }) {
-  const shownContent = messageDisplayText(msg);
   const isUser = msg.role === 'user';
-  const userLong = isUser && (shownContent.includes('\n') || shownContent.length > 40);
+  const raw = messageModelText(msg);
+  const attached = isUser ? parseHomeSkillDisplay(raw) : null;
+  const shownContent = isUser ? (attached?.visible ?? '') : messageDisplayText(msg);
+  const userLong = isUser && (
+    Boolean(attached?.skillLabel)
+    || shownContent.includes('\n')
+    || shownContent.length > 40
+  );
   if (msg.toolCall) {
     const imageArtifact = msg.toolCall.artifact
       && artifactKind(msg.toolCall.artifact.mime, msg.toolCall.artifact.filename) === 'image'
@@ -1305,7 +1444,14 @@ function MessageBody({
     return <ChatMarkdown content={shownContent} compact={compact} />;
   }
   return (
-    <p className={`${compact ? 'text-xs' : 'text-sm'} whitespace-pre-wrap break-words leading-relaxed ${isUser ? (userLong ? 'text-left' : 'text-right') : ''}`}>{shownContent}</p>
+    <div className={isUser && attached?.skillLabel ? 'text-left' : undefined}>
+      {attached?.skillLabel ? (
+        <HomeSkillChip label={attached.skillLabel} />
+      ) : null}
+      {shownContent ? (
+        <p className={`${attached?.skillLabel ? 'mt-1.5 ' : ''}${compact ? 'text-xs' : 'text-sm'} whitespace-pre-wrap break-words leading-relaxed ${isUser ? (userLong ? 'text-left' : 'text-right') : ''}`}>{shownContent}</p>
+      ) : null}
+    </div>
   );
 }
 
@@ -1316,8 +1462,10 @@ const MessageItem = memo(function MessageItem({
   showToolActivity,
   isCopied,
   previousUserText,
+  lastUserText,
   onCopy,
   onEditOutline,
+  onSaveSkill,
   onDelete,
   streaming,
 }: MessageItemProps) {
@@ -1325,9 +1473,13 @@ const MessageItem = memo(function MessageItem({
   const msg = rows[0];
   if (!msg) return null;
   const shownContent = rows.map(messageDisplayText).filter((text) => text.trim()).join('\n\n');
-  const groupHasProse = rows.some((row) => !row.toolCall && messageDisplayText(row).trim());
+  const groupHasProse = rows.some((row) => !row.toolCall && (
+    messageDisplayText(row).trim()
+    || Boolean(parseHomeSkillDisplay(messageModelText(row)).skillLabel)
+  ));
   const isUser = msg.role === 'user';
-  const userLong = isUser && (shownContent.includes('\n') || shownContent.length > 40);
+  const attachedSkill = isUser && rows.some((row) => parseHomeSkillDisplay(messageModelText(row)).skillLabel);
+  const userLong = isUser && (attachedSkill || shownContent.includes('\n') || shownContent.length > 40);
   const stamp = rows.at(-1) ?? msg;
 
   return (
@@ -1360,10 +1512,7 @@ const MessageItem = memo(function MessageItem({
             {rows.map((row) => (
               <div key={row.id}>
                 {row.thinking && (
-                  <details className="mb-2">
-                    <summary className="text-xs cursor-pointer select-none text-pc-text-muted">{t('agentchat.thinking')}</summary>
-                    <pre className="text-xs mt-1 whitespace-pre-wrap break-words leading-relaxed overflow-auto max-h-60 p-2 rounded-[var(--radius-sm)] text-pc-text-muted bg-pc-code">{row.thinking}</pre>
-                  </details>
+                  <ThinkingTranscript text={row.thinking} />
                 )}
                 <MessageBody
                   msg={row}
@@ -1376,10 +1525,11 @@ const MessageItem = memo(function MessageItem({
             {streaming && (streaming.thinking || streaming.content) && (
               <div>
                 {streaming.thinking && (
-                  <details className="mb-2" open={!streaming.content}>
-                    <summary className="text-xs cursor-pointer select-none text-pc-text-muted">{t('agentchat.thinking')}{!streaming.content && '...'}</summary>
-                    <pre className="text-xs mt-1 whitespace-pre-wrap break-words leading-relaxed overflow-auto max-h-60 p-2 rounded-[var(--radius-sm)] text-pc-text-muted bg-pc-code">{streaming.thinking}</pre>
-                  </details>
+                  <ThinkingTranscript
+                    text={streaming.thinking}
+                    live
+                    open={!streaming.content}
+                  />
                 )}
                 {streaming.content && (
                   <p className={`${compact ? 'text-xs' : 'text-sm'} whitespace-pre-wrap break-words leading-relaxed`}>{streaming.content}</p>
@@ -1393,22 +1543,48 @@ const MessageItem = memo(function MessageItem({
                 <span className="bounce-dot w-1.5 h-1.5 rounded-full bg-pc-accent" />
               </div>
             )}
-            {shouldShowOutlineEditButton({
-              isAssistant: !isUser,
-              streaming: Boolean(streaming),
-              hasProse: groupHasProse,
-              content: shownContent,
-              previousUserText: previousUserText ?? '',
-            }) ? (
+            {(() => {
+              const showOutline = shouldShowOutlineEditButton({
+                isAssistant: !isUser,
+                streaming: Boolean(streaming),
+                hasProse: groupHasProse,
+                content: shownContent,
+                previousUserText: previousUserText ?? '',
+              });
+              const showSave = shouldShowSaveSkillButton({
+                isAssistant: !isUser,
+                streaming: Boolean(streaming),
+                hasProse: groupHasProse,
+                content: shownContent,
+                isError: rows.some((row) => row.notice)
+                  || shownContent.startsWith(t('agent.error_prefix')),
+              });
+              if (!showOutline && !showSave) return null;
+              return (
+            <div className="mt-3 flex flex-wrap gap-2">
+            {showOutline ? (
               <button
                 type="button"
                 onClick={() => onEditOutline(shownContent)}
-                className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-[8px] border border-pc-border px-2.5 text-xs font-medium text-pc-text-secondary hover:bg-[var(--pc-hover)] hover:text-pc-text"
+                className="inline-flex h-8 items-center gap-1.5 rounded-[8px] border border-pc-border px-2.5 text-xs font-medium text-pc-text-secondary hover:bg-[var(--pc-hover)] hover:text-pc-text"
               >
                 <Pencil className="size-3.5" />
                 {t('workbench.edit_outline')}
               </button>
             ) : null}
+            {showSave ? (
+              <button
+                type="button"
+                onClick={() => onSaveSkill(shownContent, lastUserText ?? previousUserText ?? '')}
+                className="inline-flex h-8 items-center gap-1.5 rounded-[8px] border border-pc-border px-2.5 text-xs font-medium text-pc-text-secondary hover:bg-[var(--pc-hover)] hover:text-pc-text"
+              >
+                <Sparkles className="size-3.5" />
+                {t('workbench.save_skill')}
+              </button>
+            ) : null}
+            </div>
+              );
+            })()}
           </div>
         </div>
         <div

@@ -8,6 +8,7 @@ import {
   readWorkspaceSnapshot,
   sanitizeSessionTitle,
   sessionDisplayTitle,
+  stripSessionTitleTimestamp,
   workspaceStorageKey,
   dropSessionFromList,
 } from './workbenchSession.ts';
@@ -36,6 +37,28 @@ test('sanitizeSessionTitle strips runtime date prefixes from session labels', ()
   );
 });
 
+test('stripSessionTitleTimestamp keeps the user body after a runtime date prefix', () => {
+  assert.equal(
+    stripSessionTitleTimestamp(
+      '[CURRENT DATE & TIME: 2026-09-09 20:06:50 +08:00]\n\n请使用技能「监测周报」完成下面的任务。\n补充要求：湖北的23周',
+    ),
+    '请使用技能「监测周报」完成下面的任务。\n补充要求：湖北的23周',
+  );
+});
+
+test('stripSessionTitleTimestamp peels stacked prefixes and leaves mid-text dates', () => {
+  assert.equal(
+    stripSessionTitleTimestamp(
+      '[CURRENT DATE & TIME: 2026-09-09 20:06:50 +08:00]\n[2026-09-09 20:06:50 +08:00]\n湖北的23周',
+    ),
+    '湖北的23周',
+  );
+  assert.equal(
+    stripSessionTitleTimestamp('解释 [CURRENT DATE & TIME: 2026-09-09 20:06:50 +08:00] 这个例子'),
+    '解释 [CURRENT DATE & TIME: 2026-09-09 20:06:50 +08:00] 这个例子',
+  );
+});
+
 test('sanitizeSessionTitle drops controls and caps length', () => {
   assert.equal(sanitizeSessionTitle('ok\u0000name'), 'okname');
   const long = '汉'.repeat(MAX_SESSION_TITLE_LENGTH + 8);
@@ -43,7 +66,7 @@ test('sanitizeSessionTitle drops controls and caps length', () => {
   assert.equal(out?.length, MAX_SESSION_TITLE_LENGTH);
 });
 
-test('sessionDisplayTitle prefers title then default then task id', () => {
+test('sessionDisplayTitle prefers title then skill label then untitled', () => {
   assert.equal(
     sessionDisplayTitle({ title: '周报', taskId: 'abc12345' }, '新会话'),
     '周报',
@@ -54,7 +77,21 @@ test('sessionDisplayTitle prefers title then default then task id', () => {
   );
   assert.equal(
     sessionDisplayTitle({ title: '  ', taskId: 'abc12345' }, '新会话'),
-    'abc12345',
+    '新会话',
+  );
+  assert.equal(
+    sessionDisplayTitle(
+      { title: '  ', taskId: 'd6af0a72', homeSkill: { label: '监测周报' } },
+      '新会话',
+    ),
+    '监测周报',
+  );
+  assert.equal(
+    sessionDisplayTitle(
+      { title: '[CURRENT DATE & TIME: 2026-09-09 20:06:50 +08:00]', taskId: 'd6af0a72' },
+      '新会话',
+    ),
+    '新会话',
   );
   assert.equal(
     sessionDisplayTitle(

@@ -689,7 +689,7 @@ pub struct Config {
     pub escalation: EscalationConfig,
 
     /// Workbench homepage starter catalog (`[workbench]`). Operators edit
-    /// `workbench.home.caps` from the dashboard Config explorer (ops-only).
+    /// `workbench.home.caps` from the dedicated homepage editor or Config.
     /// The homepage reads the resolved list via `GET /api/workbench/home`.
     #[serde(default)]
     #[nested]

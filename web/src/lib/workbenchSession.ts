@@ -148,13 +148,14 @@ export function sanitizeSessionTitle(raw: unknown): string | null {
 }
 
 export function sessionDisplayTitle(
-  session: { title?: string; taskId: string },
+  session: { title?: string; taskId: string; homeSkill?: { label?: string } },
   untitledFallback: string,
 ): string {
   const title = sanitizeSessionTitle(session.title);
   if (title) return title;
-  if (session.taskId === '__default__') return untitledFallback;
-  return session.taskId;
+  const skill = session.homeSkill?.label?.trim();
+  if (skill) return skill;
+  return untitledFallback;
 }
 
 /** Drop a sidebar row and pick the next active id (empty string → home). */

@@ -9,6 +9,7 @@ import {
   PenSquare,
   Pencil,
   Settings,
+  Sparkles,
   X,
 } from 'lucide-react';
 import { t } from '@/lib/i18n';
@@ -40,6 +41,8 @@ export interface WorkbenchSidebarProps {
   userRole?: string;
   userRegion?: string;
   onSwitchUser?: () => void;
+  onOpenMySkills?: () => void;
+  skillsOpen?: boolean;
 }
 
 const WORKBENCH_VERSION = '0.6.2';
@@ -95,6 +98,8 @@ export function WorkbenchSidebar({
   userRole,
   userRegion,
   onSwitchUser,
+  onOpenMySkills,
+  skillsOpen = false,
 }: WorkbenchSidebarProps) {
   const [projectsOpen, setProjectsOpen] = useState(true);
   const [tasksOpen, setTasksOpen] = useState(true);
@@ -278,6 +283,22 @@ export function WorkbenchSidebar({
             </>
           )}
         </button>
+        {onOpenMySkills && (
+          <button
+            type="button"
+            onClick={onOpenMySkills}
+            title={t('workbench.my_skills')}
+            className={[
+              'flex items-center',
+              CARD,
+              skillsOpen ? 'bg-[var(--pc-hover)] text-pc-text' : '',
+              collapsed ? 'w-9 px-0 justify-center mx-auto' : '',
+            ].join(' ')}
+          >
+            <Sparkles className="size-4 shrink-0" />
+            {!collapsed && <span className="truncate">{t('workbench.my_skills')}</span>}
+          </button>
+        )}
       </div>
 
       {!collapsed && (

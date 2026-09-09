@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   ChevronDown,
+  ChevronRight,
   Folder,
   ArrowUp,
   Mic,
@@ -12,6 +13,7 @@ import { t, getLocale } from '@/lib/i18n';
 import { getStatus, getWorkbenchHome } from '@/lib/api';
 import { DEFAULT_FOLDER_ID, type WorkbenchFolder } from '@/pages/ChatWorkspace';
 import { AutonomySelect } from '@/components/AutonomySelect';
+import { HomeSkillChip } from '@/components/HomeSkillChip';
 import {
   DEFAULT_WORKBENCH_AUTONOMY,
   loadWorkbenchAutonomy,
@@ -30,6 +32,7 @@ import {
   homeCapIcon,
   type WorkbenchHomeCatalog,
 } from '@/lib/workbenchHomeCatalog';
+import { canSubmitHomeMessage, composeHomeMessage, homeSessionTitle, type HomeSkillRef } from '@/lib/homeSend';
 
 type HomeAttach = {
   id: string;
@@ -46,7 +49,7 @@ export function WorkbenchHome({
   agentAlias,
   userRole,
 }: {
-  onSend: (text: string, autonomy: WorkbenchAutonomy, files: File[]) => void;
+  onSend: (text: string, autonomy: WorkbenchAutonomy, files: File[], titleHint?: string, skill?: HomeSkillRef) => void;
   folders: WorkbenchFolder[];
   activeFolderId: string;
   onSelectFolder: (folderId: string) => void;
@@ -56,6 +59,7 @@ export function WorkbenchHome({
   const [input, setInput] = useState('');
   const [catalog, setCatalog] = useState<WorkbenchHomeCatalog>(() => fallbackHomeCatalog());
   const [tab, setTab] = useState<string>(() => fallbackHomeCatalog().tabs[0]?.id ?? 'query');
+  const [skillId, setSkillId] = useState<string>('');
   const [model, setModel] = useState<string>('');
   const maxAutonomy = maxAutonomyForRole(userRole);
   const [autonomy, setAutonomy] = useState<WorkbenchAutonomy>(() =>
@@ -72,7 +76,6 @@ export function WorkbenchHome({
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const composingRef = useRef(false);
-  const canSend = input.trim().length > 0 || attachments.length > 0;
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -115,16 +118,53 @@ export function WorkbenchHome({
     return () => { cancelled = true; };
   }, []);
 
+  useEffect(() => {
+    if (!skillId) return;
+    const skills =
+      (catalog.tabs.find((item) => item.id === tab) ?? catalog.tabs[0])?.caps ?? [];
+    if (skills.some((cap) => cap.id === skillId)) return;
+    setSkillId('');
+  }, [catalog, tab, skillId]);
+
+  const currentTab = catalog.tabs.find((item) => item.id === tab) ?? catalog.tabs[0];
+  const skills = currentTab?.caps ?? [];
+  const selectedSkill = skills.find((cap) => cap.id === skillId);
+  const SelectedSkillIcon = selectedSkill ? homeCapIcon(selectedSkill.icon) : null;
+  const canSend = canSubmitHomeMessage({
+    userText: input,
+    hasAttachments: attachments.length > 0,
+    skill: selectedSkill,
+  });
+
   function submit() {
     const trimmed = input.trim();
-    if (!trimmed && attachments.length === 0) return;
-    onSend(trimmed, autonomy, attachments.map((a) => a.file));
+    const message = composeHomeMessage({
+      userText: trimmed,
+      skill: selectedSkill,
+      locale: getLocale(),
+    });
+    if (!message && attachments.length === 0) return;
+    onSend(
+      message,
+      autonomy,
+      attachments.map((a) => a.file),
+      homeSessionTitle({ userText: trimmed, skillLabel: selectedSkill?.label }),
+      selectedSkill
+        ? {
+            id: selectedSkill.id,
+            label: selectedSkill.label,
+            kind: selectedSkill.kind,
+            icon: selectedSkill.icon,
+          }
+        : undefined,
+    );
     for (const a of attachments) {
       if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
     }
     setAttachments([]);
     setAttachHint(null);
     setInput('');
+    setSkillId('');
     inputRef.current?.focus();
   }
 
@@ -184,47 +224,64 @@ export function WorkbenchHome({
           <p className="mb-5 text-[15px] text-pc-text-muted">
             {t('workbench.home_subtitle')}
           </p>
-          <div className="flex items-center justify-center">
-            <div
-              className="inline-flex items-center rounded-full p-1"
-              style={{ background: 'color-mix(in srgb, var(--pc-text-primary) 8%, transparent)' }}
-            >
-              {catalog.tabs.map((item) => {
-                const active = item.id === tab;
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => setTab(item.id)}
-                    className={[
-                      'rounded-full px-[22px] py-2 text-sm font-medium transition-colors',
-                      active ? 'bg-pc-text text-pc-base' : 'text-pc-text hover:bg-[var(--pc-hover)]',
-                    ].join(' ')}
-                  >
-                    {item.label}
-                  </button>
-                );
-              })}
-            </div>
+          <div
+            className="inline-flex items-center rounded-full p-1"
+            style={{ background: 'color-mix(in srgb, var(--pc-text-primary) 8%, transparent)' }}
+          >
+            {catalog.tabs.map((item) => {
+              const active = item.id === tab;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => {
+                    setTab(item.id);
+                    setSkillId('');
+                  }}
+                  className={[
+                    'rounded-full px-[22px] py-2 text-sm font-medium transition-colors',
+                    active ? 'bg-pc-text text-pc-base' : 'text-pc-text hover:bg-[var(--pc-hover)]',
+                  ].join(' ')}
+                >
+                  {item.label}
+                </button>
+              );
+            })}
           </div>
         </div>
 
-        <div className="mb-4 flex h-11 items-center gap-2 overflow-x-auto">
-          {(catalog.tabs.find((item) => item.id === tab) ?? catalog.tabs[0])?.caps.map((cap) => {
-            const Icon = homeCapIcon(cap.icon);
-            return (
+        {(selectedSkill ? selectedSkill.prompts.length > 0 : skills.length > 0) ? (
+        <div className="mb-4 flex h-8 items-center gap-2 overflow-x-auto">
+          {selectedSkill
+            ? selectedSkill.prompts.map((prompt) => (
               <button
-                key={cap.id}
+                key={prompt.id}
                 type="button"
-                onClick={() => applyPrompt(cap.prompt)}
-                className="inline-flex shrink-0 items-center gap-2 rounded-full border border-pc-border bg-pc-surface px-[18px] py-[9px] text-sm text-pc-text-secondary transition-colors hover:bg-[var(--pc-hover)] hover:text-pc-text"
+                title={prompt.text}
+                onClick={() => applyPrompt(prompt.text)}
+                className="inline-flex h-8 max-w-[240px] shrink-0 items-center gap-1 rounded-full px-3 text-sm text-pc-text transition-colors hover:bg-[var(--pc-hover)]"
+                style={{ background: 'color-mix(in srgb, var(--pc-text-primary) 8%, transparent)' }}
               >
-                <Icon className="size-4 shrink-0" />
-                {cap.label}
+                <span className="min-w-0 truncate">{prompt.text}</span>
+                <ChevronRight className="size-3.5 shrink-0 text-pc-text-muted" aria-hidden />
               </button>
-            );
-          })}
+            ))
+            : skills.map((cap) => {
+              const Icon = homeCapIcon(cap.icon);
+              return (
+                <button
+                  key={cap.id}
+                  type="button"
+                  onClick={() => setSkillId(cap.id)}
+                  className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-pc-border bg-pc-surface px-3 text-sm text-pc-text-secondary transition-colors hover:bg-[var(--pc-hover)] hover:text-pc-text"
+                >
+                  <Icon className="size-3.5 shrink-0" />
+                  {cap.label}
+                </button>
+              );
+            })}
         </div>
+        ) : null}
 
         <div
           className="relative z-20 mb-3 rounded-2xl border border-pc-border-strong bg-pc-elevated shadow-[var(--pc-shadow-sm)]"
@@ -288,27 +345,36 @@ export function WorkbenchHome({
                 ))}
               </ul>
             )}
-            <textarea
-              ref={inputRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && !composingRef.current) {
+            <div className="flex min-h-[72px] flex-1 items-start gap-2 text-[15px] leading-[1.7]">
+              {selectedSkill ? (
+                <HomeSkillChip
+                  label={selectedSkill.label}
+                  icon={SelectedSkillIcon}
+                  onClear={() => setSkillId('')}
+                />
+              ) : null}
+              <textarea
+                ref={inputRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && !composingRef.current) {
+                    e.preventDefault();
+                    submit();
+                  }
+                }}
+                onPaste={(e) => {
+                  const files = [...e.clipboardData.files];
+                  if (files.length === 0) return;
                   e.preventDefault();
-                  submit();
-                }
-              }}
-              onPaste={(e) => {
-                const files = [...e.clipboardData.files];
-                if (files.length === 0) return;
-                e.preventDefault();
-                addFiles(files);
-              }}
-              onCompositionStart={() => { composingRef.current = true; }}
-              onCompositionEnd={() => { composingRef.current = false; }}
-              placeholder={t('workbench.home_placeholder')}
-              className="min-h-[72px] w-full flex-1 resize-none bg-transparent text-[15px] leading-[1.7] text-pc-text placeholder:text-pc-text-faint outline-none focus:outline-none focus-visible:outline-none"
-            />
+                  addFiles(files);
+                }}
+                onCompositionStart={() => { composingRef.current = true; }}
+                onCompositionEnd={() => { composingRef.current = false; }}
+                placeholder={t('workbench.home_placeholder')}
+                className="min-h-[72px] min-w-0 flex-1 resize-none bg-transparent text-[15px] leading-[1.7] text-pc-text placeholder:text-pc-text-faint outline-none focus:outline-none focus-visible:outline-none"
+              />
+            </div>
             <div className="flex items-center justify-between gap-2 pt-1">
               <div className="flex min-w-0 items-center gap-1">
                 <button

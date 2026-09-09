@@ -8,6 +8,7 @@ import {
   DollarSign,
   Radio,
   LayoutDashboard,
+  Home,
   Users,
   MessageSquare,
   Wifi,
@@ -53,6 +54,7 @@ import {
 } from "@/lib/api";
 import { resolveModelToProviderType } from "@/lib/configuredModels";
 import DoctorFixModal from "@/components/DoctorFixModal";
+import { HomeCatalogEditor } from "@/components/HomeCatalogEditor";
 
 type CostWindow = "today" | "7d" | "30d" | "month" | "all";
 
@@ -168,6 +170,7 @@ import { StatCard, PageHeader, ConfirmDialog } from "@/components/ui";
 
 type TabId =
   | "overview"
+  | "home"
   | "sessions"
   | "channels"
   | "memories"
@@ -413,6 +416,7 @@ const STATUS_CARDS = [
 
 const TABS: { id: TabId; labelKey: string; icon: typeof LayoutDashboard }[] = [
   { id: "overview", labelKey: "dashboard.tab_overview", icon: LayoutDashboard },
+  { id: "home", labelKey: "dashboard.tab_home", icon: Home },
   { id: "sessions", labelKey: "dashboard.tab_sessions", icon: Users },
   { id: "channels", labelKey: "dashboard.tab_channels", icon: Wifi },
   { id: "memories", labelKey: "dashboard.tab_memories", icon: Brain },
@@ -1721,6 +1725,7 @@ function ChannelsTab() {
 
 const TAB_IDS: TabId[] = [
   "overview",
+  "home",
   "sessions",
   "channels",
   "memories",
@@ -1819,10 +1824,10 @@ export default function Dashboard() {
 
   return (
     <div className="p-6 space-y-6 animate-fade-in">
-      <AgentsSection />
+      {activeTab !== "home" && <AgentsSection />}
 
       {/* Global system stats — tab navigation. Scrolls horizontally when the
-          six tabs don't fit (mobile) instead of overflowing the frame; each
+          tabs don't fit (mobile) instead of overflowing the frame; each
           button keeps its size (flex-shrink-0) so labels never get clipped. */}
       <div
         className="flex items-center gap-1 p-1 rounded-2xl overflow-x-auto"
@@ -1875,6 +1880,11 @@ export default function Dashboard() {
           showAllChannels={showAllChannels}
           setShowAllChannels={setShowAllChannels}
         />
+      )}
+      {activeTab === "home" && (
+        <div className="-mx-6 -mb-6 flex min-h-[calc(100vh-16rem)] flex-col overflow-hidden rounded-t-2xl border-t border-pc-border">
+          <HomeCatalogEditor />
+        </div>
       )}
       {activeTab === "sessions" && <SessionsTab />}
       {activeTab === "channels" && <ChannelsTab />}

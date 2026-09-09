@@ -17,7 +17,8 @@ import type {
 import type { components } from "./api-generated";
 import { clearToken, getToken, setToken } from "./auth";
 import { apiOrigin, basePath, gatewayUrl } from "./basePath";
-import type { WorkbenchHomeCatalog } from "./workbenchHomeCatalog";
+import type { HomeCatalogEdit, HomeTabEdit, WorkbenchHomeCatalog } from "./workbenchHomeCatalog";
+import { normalizeHomeCatalog, normalizeHomeCatalogEdit } from "./homeCatalogEdit";
 
 // ---------------------------------------------------------------------------
 // Base fetch wrapper
@@ -387,10 +388,23 @@ export function getStatus(agent?: string): Promise<StatusResponse> {
   return apiFetch<StatusResponse>(`/api/status${qs}`);
 }
 
-/** Resolved homepage tabs/chips. Ops edit `workbench.home.caps`; this is the read view. */
+/** Resolved homepage tabs/chips. Ops edit the nested catalog at `/api/workbench/home/catalog`. */
 export function getWorkbenchHome(locale?: string): Promise<WorkbenchHomeCatalog> {
   const qs = locale ? `?locale=${encodeURIComponent(locale)}` : "";
-  return apiFetch(`/api/workbench/home${qs}`);
+  return apiFetch<WorkbenchHomeCatalog>(`/api/workbench/home${qs}`).then(normalizeHomeCatalog);
+}
+
+export function getWorkbenchHomeCatalog(): Promise<HomeCatalogEdit> {
+  return apiFetch<HomeCatalogEdit>("/api/workbench/home/catalog").then(normalizeHomeCatalogEdit);
+}
+
+export function putWorkbenchHomeCatalog(tabs: HomeTabEdit[]): Promise<HomeCatalogEdit> {
+  invalidateInFlightGet("/api/workbench/home");
+  invalidateInFlightGet("/api/workbench/home/catalog");
+  return apiFetch<HomeCatalogEdit>("/api/workbench/home/catalog", {
+    method: "PUT",
+    body: JSON.stringify({ tabs }),
+  }).then(normalizeHomeCatalogEdit);
 }
 
 export function getHealth(): Promise<HealthSnapshot> {
@@ -1005,6 +1019,91 @@ export function deleteSkill(
     `/api/skills/bundles/${encodeURIComponent(bundle)}/skills/${encodeURIComponent(name)}${q}`,
     { method: "DELETE" },
   );
+}
+
+/** Write a personal SKILL.md under the frozen user's workspace. */
+export function savePersonalSkill(body: {
+  agent: string;
+  name: string;
+  title?: string;
+  description?: string;
+  body?: string;
+}): Promise<{ name: string }> {
+  return apiFetch<{ name: string }>("/api/user/skills", {
+    method: "POST",
+    body: JSON.stringify({
+      agent: body.agent,
+      name: body.name,
+      frontmatter: {
+        name: body.title?.trim() || body.name,
+        description: body.description ?? "",
+      },
+      body: body.body ?? "",
+    }),
+  });
+}
+
+export interface PersonalSkillSummary {
+  name: string;
+  title: string;
+  description: string;
+  enabled?: boolean;
+}
+
+export interface PersonalSkillDetail {
+  name: string;
+  title: string;
+  description: string;
+  body: string;
+  enabled?: boolean;
+}
+
+export function listPersonalSkills(agent: string): Promise<{ skills: PersonalSkillSummary[] }> {
+  const q = new URLSearchParams({ agent });
+  return apiFetch(`/api/user/skills?${q.toString()}`);
+}
+
+export function readPersonalSkill(agent: string, name: string): Promise<PersonalSkillDetail> {
+  const q = new URLSearchParams({ agent });
+  return apiFetch(`/api/user/skills/${encodeURIComponent(name)}?${q.toString()}`);
+}
+
+export function updatePersonalSkill(body: {
+  agent: string;
+  name: string;
+  title?: string;
+  description?: string;
+  body?: string;
+}): Promise<{ name: string }> {
+  return apiFetch(`/api/user/skills/${encodeURIComponent(body.name)}`, {
+    method: "PUT",
+    body: JSON.stringify({
+      agent: body.agent,
+      frontmatter: {
+        name: body.title?.trim() || body.name,
+        description: body.description ?? "",
+      },
+      body: body.body ?? "",
+    }),
+  });
+}
+
+export function deletePersonalSkill(agent: string, name: string): Promise<void> {
+  const q = new URLSearchParams({ agent });
+  return apiFetch(`/api/user/skills/${encodeURIComponent(name)}?${q.toString()}`, {
+    method: "DELETE",
+  });
+}
+
+export function setPersonalSkillEnabled(body: {
+  agent: string;
+  name: string;
+  enabled: boolean;
+}): Promise<{ name: string; enabled: boolean }> {
+  return apiFetch(`/api/user/skills/${encodeURIComponent(body.name)}/enabled`, {
+    method: "PATCH",
+    body: JSON.stringify({ agent: body.agent, enabled: body.enabled }),
+  });
 }
 
 // ── Config schema descriptions ───────────────────────────────────────

@@ -38,6 +38,7 @@ import FieldForm, {
 } from "../components/sections/FieldForm";
 import PersonalityEditor from "../components/sections/PersonalityEditor";
 import SkillsBundleEditor from "../components/sections/SkillsBundleEditor";
+import { HomeCatalogEditor } from "../components/HomeCatalogEditor";
 import BindChannelForm from "../components/sections/BindChannelForm";
 import ReloadDaemonButton from "../components/sections/ReloadDaemonButton";
 import SectionPicker, {
@@ -239,6 +240,17 @@ export default function Config() {
 
   const mainContent = (() => {
     if (!activeSection) return null;
+
+    if (activeSection.key === "workbench.home.caps") {
+      return (
+        <HomeCatalogEditor
+          onSaved={() => {
+            fetchDrift();
+            setNavRefresh((n) => n + 1);
+          }}
+        />
+      );
+    }
 
     if (!activeSection.has_picker) {
       return (
@@ -604,7 +616,13 @@ export default function Config() {
           selectedPath={location.pathname}
           onNavigate={(url) => navigate(url)}
           onSelectSection={(key) => goToSection(key)}
-          onAddToSection={(s) => setAddSection(s)}
+          onAddToSection={(s) => {
+            if (s.key === "workbench.home.caps") {
+              goToSection(s.key);
+              return;
+            }
+            setAddSection(s);
+          }}
           refreshKey={navRefresh + reloadKey}
           // Mobile: single-column. Show the navigator when nothing is
           // selected; once an entity is open the detail pane takes over and
@@ -647,7 +665,7 @@ export default function Config() {
           </div>
         ) : (
           activeSection && (
-          <div className="flex flex-col gap-4 max-w-3xl min-h-full">
+          <div className={`flex flex-col gap-4 min-h-full ${activeSection.key === "workbench.home.caps" ? "flex-1 min-h-0" : "max-w-3xl"}`}>
             {/* Mobile-only: return to the navigator (single-column nav↔detail). */}
             <Button
               variant="ghost"
@@ -658,16 +676,7 @@ export default function Config() {
               <ArrowLeft className="h-4 w-4" />
               {t("config.all_settings")}
             </Button>
-            {/* Layout note: every wrapper between <main> (the scroll
-                container) and FieldForm's save bar uses flex-1 + min-h-0
-                so the form stretches to the viewport bottom. Without
-                that chain, the save bar's `sticky bottom-0` anchors
-                to a content-height column and floats mid-viewport
-                instead of pinning to the bottom of the scroll area. */}
-            {/* Config header: section title + breadcrumb trail (as the
-                description slot) + the page-level actions. ReloadDaemonButton
-                keeps its own confirm modal — only the surrounding chrome is
-                restyled. */}
+            {activeSection.key !== "workbench.home.caps" && (
             <PageHeader
               title={activeSection.label}
               description={
@@ -716,6 +725,7 @@ export default function Config() {
                 </>
               }
             />
+            )}
 
             <div className="flex-1 min-h-0 flex flex-col">{mainContent}</div>
           </div>

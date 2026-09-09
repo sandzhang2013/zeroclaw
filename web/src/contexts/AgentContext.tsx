@@ -794,12 +794,12 @@ export function AgentProvider({
     }
     attachSocketCallbacks(ws);
     wsRef.current = ws as WebSocketClient;
-    const timer = window.setTimeout(() => {
+    const timer = setTimeout(() => {
       ws.connect();
     }, 0);
 
     return () => {
-      window.clearTimeout(timer);
+      clearTimeout(timer);
       ws.disconnect();
       // switchModel and clearAllMessages replace the socket this effect
       // created. Before sessions were switchable the effect only re-ran on an

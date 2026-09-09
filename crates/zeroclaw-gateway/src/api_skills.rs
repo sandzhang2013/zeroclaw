@@ -2,7 +2,7 @@
 
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
@@ -341,98 +341,386 @@ pub struct PersonalSkillBody {
     pub body: String,
 }
 
-/// `POST /api/user/skills` — 高级用户 only; writes the caller's user workspace.
-pub async fn handle_save_personal_skill(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(body): Json<PersonalSkillBody>,
-) -> Response {
-    let attrs = match crate::trusted_proxy::require_user_principal(&state, &headers) {
-        Ok((_, Some(attrs))) => attrs,
-        Ok((_, None)) => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({
-                    "error": "Forbidden — personal skill save requires a BFF user identity"
-                })),
-            )
-                .into_response();
-        }
-        Err(e) => return e.into_response(),
-    };
-    if !attrs.is_advanced() {
-        return (
+#[derive(Deserialize)]
+pub struct PersonalSkillQuery {
+    pub agent: String,
+}
+
+#[derive(Deserialize)]
+pub struct PersonalSkillWriteBody {
+    pub agent: String,
+    #[serde(default)]
+    pub frontmatter: SkillFrontmatter,
+    #[serde(default)]
+    pub body: String,
+}
+
+fn require_personal_user(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<zeroclaw_api::UserAttrs, Response> {
+    match crate::trusted_proxy::require_user_principal(state, headers) {
+        Ok((_, Some(attrs))) => Ok(attrs),
+        Ok((_, None)) => Err((
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({
-                "error": "Forbidden — saving a personal skill requires X-User-Role: 高级用户"
+                "error": "Forbidden — personal skills require a BFF user identity"
             })),
         )
-            .into_response();
+            .into_response()),
+        Err(e) => Err(e.into_response()),
     }
-    let name = match zeroclaw_api::normalize_user_id(body.name.trim()) {
-        Ok(n) => n,
-        Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "invalid skill name"})),
-            )
-                .into_response();
-        }
-    };
-    let agent = body.agent.trim();
+}
+
+fn require_agent(agent: &str) -> Result<&str, Response> {
+    let agent = agent.trim();
     if agent.is_empty() {
-        return (
+        return Err((
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "agent is required"})),
         )
-            .into_response();
+            .into_response());
     }
-    let config = state.config.read().clone();
-    let dir = config
-        .user_workspace_dir(&attrs.user_id, agent)
-        .join("skills")
-        .join(&name);
-    if let Err(e) = std::fs::create_dir_all(&dir) {
-        return (
+    Ok(agent)
+}
+
+fn require_skill_name(raw: &str) -> Result<String, Response> {
+    match zeroclaw_api::normalize_user_id(raw.trim()) {
+        Ok(n) => Ok(n),
+        Err(_) => Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "invalid skill name"})),
+        )
+            .into_response()),
+    }
+}
+
+fn personal_skills_dir(
+    config: &zeroclaw_config::schema::Config,
+    user_id: &str,
+    agent: &str,
+) -> std::path::PathBuf {
+    config.user_workspace_dir(user_id, agent).join("skills")
+}
+
+fn write_personal_skill_file(
+    dir: &std::path::Path,
+    name: &str,
+    mut fm: SkillFrontmatter,
+    body: String,
+) -> Result<String, Response> {
+    if let Err(e) = std::fs::create_dir_all(dir) {
+        return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": format!("Failed to create skill directory: {e}")})),
         )
-            .into_response();
+            .into_response());
     }
-    let mut fm = body.frontmatter;
     if fm.name.trim().is_empty() {
-        fm.name = name.clone();
+        fm.name = name.to_string();
     }
     let description = if fm.description.trim().is_empty() {
         fm.name.clone()
     } else {
         fm.description.replace('\n', " ")
     };
-    let body_md = if body.body.trim().is_empty() {
+    let body_md = if body.trim().is_empty() {
         format!("# {}\n", fm.name)
     } else {
-        body.body
+        body
     };
     let markdown = format!(
         "---\nname: {}\ndescription: {}\n---\n\n{body_md}",
         fm.name, description
     );
-    let path = dir.join("SKILL.md");
-    if let Err(e) = std::fs::write(&path, markdown) {
-        return (
+    if let Err(e) = std::fs::write(dir.join("SKILL.md"), markdown) {
+        return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": format!("Failed to write SKILL.md: {e}")})),
         )
-            .into_response();
+            .into_response());
     }
+    zeroclaw_runtime::skills::cache::invalidate();
+    Ok(fm.name)
+}
+
+/// `POST /api/user/skills` — any frozen BFF user; writes that caller's workspace.
+pub async fn handle_save_personal_skill(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<PersonalSkillBody>,
+) -> Response {
+    let attrs = match require_personal_user(&state, &headers) {
+        Ok(attrs) => attrs,
+        Err(resp) => return resp,
+    };
+    let name = match require_skill_name(&body.name) {
+        Ok(n) => n,
+        Err(resp) => return resp,
+    };
+    let agent = match require_agent(&body.agent) {
+        Ok(a) => a.to_string(),
+        Err(resp) => return resp,
+    };
+    let config = state.config.read().clone();
+    let dir = personal_skills_dir(&config, &attrs.user_id, &agent).join(&name);
+    let written = match write_personal_skill_file(&dir, &name, body.frontmatter, body.body) {
+        Ok(n) => n,
+        Err(resp) => return resp,
+    };
     (
         StatusCode::CREATED,
         Json(serde_json::json!({
-            "name": fm.name,
+            "name": written,
             "directory": dir.display().to_string(),
         })),
     )
         .into_response()
+}
+
+/// `GET /api/user/skills?agent=` — list the caller's personal skills.
+pub async fn handle_list_personal_skills(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<PersonalSkillQuery>,
+) -> Response {
+    let attrs = match require_personal_user(&state, &headers) {
+        Ok(attrs) => attrs,
+        Err(resp) => return resp,
+    };
+    let agent = match require_agent(&query.agent) {
+        Ok(a) => a,
+        Err(resp) => return resp,
+    };
+    let config = state.config.read().clone();
+    let root = personal_skills_dir(&config, &attrs.user_id, agent);
+    let mut skills = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if zeroclaw_api::normalize_user_id(name).is_err() {
+                continue;
+            }
+            let md = path.join("SKILL.md");
+            let Ok(content) = std::fs::read_to_string(&md) else {
+                continue;
+            };
+            let (description, title) =
+                match zeroclaw_runtime::skills::document::SkillDocument::parse(&content) {
+                    Ok(doc) => (
+                        doc.frontmatter.description,
+                        if doc.frontmatter.name.trim().is_empty() {
+                            name.to_string()
+                        } else {
+                            doc.frontmatter.name
+                        },
+                    ),
+                    Err(_) => (String::new(), name.to_string()),
+                };
+            skills.push(serde_json::json!({
+                "name": name,
+                "title": title,
+                "description": description,
+                "enabled": zeroclaw_runtime::skills::skill_directory_enabled(&path),
+            }));
+        }
+    }
+    skills.sort_by(|a, b| {
+        a["name"]
+            .as_str()
+            .unwrap_or_default()
+            .cmp(b["name"].as_str().unwrap_or_default())
+    });
+    Json(serde_json::json!({ "skills": skills })).into_response()
+}
+
+/// `GET /api/user/skills/{name}?agent=`
+pub async fn handle_read_personal_skill(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+    Query(query): Query<PersonalSkillQuery>,
+) -> Response {
+    let attrs = match require_personal_user(&state, &headers) {
+        Ok(attrs) => attrs,
+        Err(resp) => return resp,
+    };
+    let name = match require_skill_name(&name) {
+        Ok(n) => n,
+        Err(resp) => return resp,
+    };
+    let agent = match require_agent(&query.agent) {
+        Ok(a) => a,
+        Err(resp) => return resp,
+    };
+    let config = state.config.read().clone();
+    let dir = personal_skills_dir(&config, &attrs.user_id, agent).join(&name);
+    let path = dir.join("SKILL.md");
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "skill not found"})),
+        )
+            .into_response();
+    };
+    match zeroclaw_runtime::skills::document::SkillDocument::parse(&content) {
+        Ok(doc) => Json(serde_json::json!({
+            "name": name,
+            "title": doc.frontmatter.name,
+            "description": doc.frontmatter.description,
+            "body": doc.body,
+            "enabled": zeroclaw_runtime::skills::skill_directory_enabled(&dir),
+        }))
+        .into_response(),
+        Err(e) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+/// `PUT /api/user/skills/{name}` — overwrite the caller's skill.
+pub async fn handle_write_personal_skill(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+    Json(body): Json<PersonalSkillWriteBody>,
+) -> Response {
+    let attrs = match require_personal_user(&state, &headers) {
+        Ok(attrs) => attrs,
+        Err(resp) => return resp,
+    };
+    let name = match require_skill_name(&name) {
+        Ok(n) => n,
+        Err(resp) => return resp,
+    };
+    let agent = match require_agent(&body.agent) {
+        Ok(a) => a.to_string(),
+        Err(resp) => return resp,
+    };
+    let config = state.config.read().clone();
+    let dir = personal_skills_dir(&config, &attrs.user_id, &agent).join(&name);
+    if !dir.join("SKILL.md").exists() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "skill not found"})),
+        )
+            .into_response();
+    }
+    let written = match write_personal_skill_file(&dir, &name, body.frontmatter, body.body) {
+        Ok(n) => n,
+        Err(resp) => return resp,
+    };
+    Json(serde_json::json!({
+        "name": written,
+        "directory": dir.display().to_string(),
+    }))
+    .into_response()
+}
+
+/// `DELETE /api/user/skills/{name}?agent=`
+pub async fn handle_delete_personal_skill(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+    Query(query): Query<PersonalSkillQuery>,
+) -> Response {
+    let attrs = match require_personal_user(&state, &headers) {
+        Ok(attrs) => attrs,
+        Err(resp) => return resp,
+    };
+    let name = match require_skill_name(&name) {
+        Ok(n) => n,
+        Err(resp) => return resp,
+    };
+    let agent = match require_agent(&query.agent) {
+        Ok(a) => a,
+        Err(resp) => return resp,
+    };
+    let config = state.config.read().clone();
+    let dir = personal_skills_dir(&config, &attrs.user_id, agent).join(&name);
+    if !dir.exists() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "skill not found"})),
+        )
+            .into_response();
+    }
+    if let Err(e) = std::fs::remove_dir_all(&dir) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to delete skill: {e}")})),
+        )
+            .into_response();
+    }
+    zeroclaw_runtime::skills::cache::invalidate();
+    StatusCode::NO_CONTENT.into_response()
+}
+
+#[derive(Deserialize)]
+pub struct PersonalSkillEnabledBody {
+    pub agent: String,
+    pub enabled: bool,
+}
+
+/// `PATCH /api/user/skills/{name}/enabled` — keep the skill, skip it next turn.
+pub async fn handle_set_personal_skill_enabled(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+    Json(body): Json<PersonalSkillEnabledBody>,
+) -> Response {
+    let attrs = match require_personal_user(&state, &headers) {
+        Ok(attrs) => attrs,
+        Err(resp) => return resp,
+    };
+    let name = match require_skill_name(&name) {
+        Ok(n) => n,
+        Err(resp) => return resp,
+    };
+    let agent = match require_agent(&body.agent) {
+        Ok(a) => a,
+        Err(resp) => return resp,
+    };
+    let config = state.config.read().clone();
+    let dir = personal_skills_dir(&config, &attrs.user_id, agent).join(&name);
+    if !dir.join("SKILL.md").exists() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "skill not found"})),
+        )
+            .into_response();
+    }
+    let marker = dir.join(zeroclaw_runtime::skills::SKILL_DISABLED_MARKER);
+    let result = if body.enabled {
+        if marker.exists() {
+            std::fs::remove_file(&marker)
+        } else {
+            Ok(())
+        }
+    } else {
+        std::fs::write(&marker, "")
+    };
+    if let Err(e) = result {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to update skill: {e}")})),
+        )
+            .into_response();
+    }
+    zeroclaw_runtime::skills::cache::invalidate();
+    Json(serde_json::json!({
+        "name": name,
+        "enabled": body.enabled,
+    }))
+    .into_response()
 }
 
 // ── Error mapping ───────────────────────────────────────────────────
@@ -530,7 +818,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn save_personal_skill_requires_advanced_user() {
+    async fn save_personal_skill_writes_caller_workspace() {
         use crate::api::test_state;
         use axum::http::HeaderValue;
         use zeroclaw_config::schema::AliasedAgentConfig;
@@ -571,7 +859,7 @@ mod tests {
             }),
         )
         .await;
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(response.status(), StatusCode::CREATED);
 
         let mut headers = HeaderMap::new();
         headers.insert("x-auth-secret", HeaderValue::from_static("s3cret"));
@@ -582,7 +870,7 @@ mod tests {
         );
         let response = handle_save_personal_skill(
             State(state.clone()),
-            headers,
+            headers.clone(),
             Json(PersonalSkillBody {
                 agent: "web".into(),
                 name: "flu-weekly".into(),
@@ -610,5 +898,87 @@ mod tests {
             .agent_workspace_dir("web")
             .join("skills");
         assert!(!org.join("flu-weekly").join("SKILL.md").exists());
+
+        let listed = handle_list_personal_skills(
+            State(state.clone()),
+            headers.clone(),
+            Query(PersonalSkillQuery {
+                agent: "web".into(),
+            }),
+        )
+        .await;
+        assert_eq!(listed.status(), StatusCode::OK);
+        let listed_body = axum::body::to_bytes(listed.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let listed_json: serde_json::Value = serde_json::from_slice(&listed_body).unwrap();
+        assert_eq!(listed_json["skills"].as_array().unwrap().len(), 1);
+        assert_eq!(listed_json["skills"][0]["name"], "flu-weekly");
+        assert_eq!(listed_json["skills"][0]["enabled"], true);
+
+        let disabled = handle_set_personal_skill_enabled(
+            State(state.clone()),
+            headers.clone(),
+            Path("flu-weekly".into()),
+            Json(PersonalSkillEnabledBody {
+                agent: "web".into(),
+                enabled: false,
+            }),
+        )
+        .await;
+        assert_eq!(disabled.status(), StatusCode::OK);
+        let listed_off = handle_list_personal_skills(
+            State(state.clone()),
+            headers.clone(),
+            Query(PersonalSkillQuery {
+                agent: "web".into(),
+            }),
+        )
+        .await;
+        let listed_off_body = axum::body::to_bytes(listed_off.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let listed_off_json: serde_json::Value = serde_json::from_slice(&listed_off_body).unwrap();
+        assert_eq!(listed_off_json["skills"][0]["enabled"], false);
+
+        let mut bob = HeaderMap::new();
+        bob.insert("x-auth-secret", HeaderValue::from_static("s3cret"));
+        bob.insert("x-user-id", HeaderValue::from_static("bob"));
+        let bob_listed = handle_list_personal_skills(
+            State(state.clone()),
+            bob,
+            Query(PersonalSkillQuery {
+                agent: "web".into(),
+            }),
+        )
+        .await;
+        let bob_body = axum::body::to_bytes(bob_listed.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let bob_json: serde_json::Value = serde_json::from_slice(&bob_body).unwrap();
+        assert!(bob_json["skills"].as_array().unwrap().is_empty());
+
+        let read = handle_read_personal_skill(
+            State(state.clone()),
+            headers.clone(),
+            Path("flu-weekly".into()),
+            Query(PersonalSkillQuery {
+                agent: "web".into(),
+            }),
+        )
+        .await;
+        assert_eq!(read.status(), StatusCode::OK);
+
+        let deleted = handle_delete_personal_skill(
+            State(state.clone()),
+            headers,
+            Path("flu-weekly".into()),
+            Query(PersonalSkillQuery {
+                agent: "web".into(),
+            }),
+        )
+        .await;
+        assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
+        assert!(!expected.exists());
     }
 }

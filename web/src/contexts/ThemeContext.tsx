@@ -1,7 +1,6 @@
 import { createContext, useState, useEffect, useCallback, type ReactNode } from 'react';
 import { colorThemeMap, DEFAULT_DARK_THEME, DEFAULT_LIGHT_THEME, type ColorThemeId } from './colorThemes';
-import { basePath } from '../lib/basePath';
-import { DEFAULT_WEB_PREFIX } from '../lib/webPrefix';
+import { resolveStoredLocale } from '../lib/locale';
 
 // ── Types (was ThemeContextDef.ts) ───────────────────────────────────────────
 
@@ -90,8 +89,7 @@ function loadMonoFont(font: string) {
 export const LOCALE_STORAGE_KEY = 'zeroclaw-locale';
 
 export function loadLocale(): string {
-  return localStorage.getItem(LOCALE_STORAGE_KEY)
-    ?? (basePath === DEFAULT_WEB_PREFIX ? 'zh' : 'en');
+  return resolveStoredLocale(localStorage.getItem(LOCALE_STORAGE_KEY));
 }
 
 export function saveLocale(locale: string) {
@@ -101,6 +99,8 @@ export function saveLocale(locale: string) {
 // ── Theme storage (was themeStorage.ts) ──────────────────────────────────────
 
 const STORAGE_KEY = 'zeroclaw-theme';
+/** Written by applyStoredTheme; read by the blocking script in index.html to avoid a dark FOUC. */
+const BOOT_KEY = 'zeroclaw-theme-boot';
 
 interface StoredTheme {
   theme: ThemeMode;
@@ -229,8 +229,33 @@ function fontVars(uiFont: UiFont, monoFont: MonoFont, uiFontSize: number, monoFo
   };
 }
 
+function persistThemeBoot(scheme: 'light' | 'dark', bg: string) {
+  try {
+    localStorage.setItem(BOOT_KEY, JSON.stringify({ scheme, bg }));
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+function applyStoredTheme(s: StoredTheme) {
+  const resolvedId = resolveColorTheme(s.theme, s.colorTheme);
+  const ct = colorThemeMap[resolvedId];
+  const themeVars = ct?.vars ?? colorThemeMap[DEFAULT_DARK_THEME].vars;
+  applyVars({
+    ...themeVars,
+    ...accents[s.accent],
+    ...fontVars(s.uiFont, s.monoFont, s.uiFontSize, s.monoFontSize),
+  });
+  const scheme = ct?.scheme === 'light' ? 'light' : 'dark';
+  persistThemeBoot(scheme, themeVars['--pc-bg-base'] ?? (scheme === 'light' ? '#f6f7f9' : '#0c0e12'));
+}
+
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [stored] = useState(loadStored);
+  const [stored] = useState(() => {
+    const next = loadStored();
+    applyStoredTheme(next);
+    return next;
+  });
   const [theme, setThemeState] = useState<ThemeMode>(stored.theme);
   const [accent, setAccentState] = useState<AccentColor>(stored.accent);
   const [colorTheme, setColorThemeState] = useState<ColorThemeId>(stored.colorTheme);
@@ -244,14 +269,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const applyAll = useCallback((s: StoredTheme) => {
-    const resolvedId = resolveColorTheme(s.theme, s.colorTheme);
-    const ct = colorThemeMap[resolvedId];
-    const themeVars = ct?.vars ?? colorThemeMap[DEFAULT_DARK_THEME].vars;
-    applyVars({
-      ...themeVars,
-      ...accents[s.accent],
-      ...fontVars(s.uiFont, s.monoFont, s.uiFontSize, s.monoFontSize),
-    });
+    applyStoredTheme(s);
   }, []);
 
   const setTheme = useCallback((t: ThemeMode) => {
@@ -321,7 +339,6 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [theme, accent, colorTheme, applyAll, persist, uiFont, monoFont, uiFontSize]);
 
   useEffect(() => {
-    applyAll({ theme, accent, colorTheme, uiFont, monoFont, uiFontSize, monoFontSize });
     loadUiFont(uiFont);
     loadMonoFont(monoFont);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps

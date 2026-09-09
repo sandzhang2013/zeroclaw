@@ -3706,9 +3706,9 @@ pub(crate) mod tests {
             },
             body: "# flu".into(),
         };
-        let denied =
+        let city_saved =
             handle_save_personal_skill(State(state.clone()), wuhan, Json(flu_skill())).await;
-        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+        assert_eq!(city_saved.status(), StatusCode::CREATED);
 
         let saved =
             handle_save_personal_skill(State(state.clone()), advanced, Json(flu_skill())).await;
@@ -3720,7 +3720,7 @@ pub(crate) mod tests {
                 .exists()
         );
         assert!(
-            !cfg.user_workspace_dir("wh-1", "web")
+            cfg.user_workspace_dir("wh-1", "web")
                 .join("skills/flu-weekly/SKILL.md")
                 .exists()
         );

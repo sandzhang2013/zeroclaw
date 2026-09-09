@@ -16,7 +16,7 @@ import { DraftContext, useDraftStore } from "./hooks/useDraft";
 import { getAdminPairCode, generatePairCode, PairCodeForbiddenError, getQuickstartState } from "./lib/api";
 import { basePath } from "./lib/basePath";
 import { ConfigDraftProvider } from "./lib/draftStore";
-import { setLocale, type Locale } from "./lib/i18n";
+import { resolveStoredLocale, setLocale } from "./lib/i18n";
 import { shouldSkipPairing } from "./lib/skipPairing";
 import { Router } from "./router/router";
 
@@ -27,7 +27,7 @@ interface LocaleContextType {
 }
 
 export const LocaleContext = createContext<LocaleContextType>({
-  locale: "en",
+  locale: "zh",
   setAppLocale: () => {},
 });
 
@@ -376,7 +376,7 @@ function AppContent() {
   const location = useLocation();
   const [locale, setLocaleState] = useState(loadLocale());
   const draftStore = useDraftStore();
-  setLocale(locale as Locale);
+  setLocale(resolveStoredLocale(locale));
   // Vite and BFF workbench use identity, not device pairing. Skip when
   // `npm run dev`, the path is `/workbench` (with or without `/hbcdcagent`),
   // or the BFF injected `__ZEROCLAW_PLATFORM_USER__`. Direct daemon
@@ -388,9 +388,10 @@ function AppContent() {
   });
 
   const setAppLocale = (newLocale: string) => {
-    setLocaleState(newLocale);
-    setLocale(newLocale as Locale);
-    saveLocale(newLocale);
+    const next = resolveStoredLocale(newLocale);
+    setLocaleState(next);
+    setLocale(next);
+    saveLocale(next);
   };
 
   // Listen for 401 events to force logout

@@ -82,7 +82,7 @@ use axum::{
     extract::{ConnectInfo, Query, State},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Json},
-    routing::{delete, get, post, put},
+    routing::{delete, get, patch, post, put},
 };
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
@@ -1625,6 +1625,11 @@ pub async fn run_gateway(
         // ── Web Dashboard API routes ──
         .route("/api/status", get(api::handle_api_status))
         .route("/api/workbench/home", get(api_workbench::handle_workbench_home))
+        .route(
+            "/api/workbench/home/catalog",
+            get(api_workbench::handle_workbench_home_catalog_get)
+                .put(api_workbench::handle_workbench_home_catalog_put),
+        )
         .route("/api/version/check", get(version::handle_version_check))
         .route("/api/version/upgrade", post(version::handle_version_upgrade))
         .route(
@@ -1814,7 +1819,20 @@ pub async fn run_gateway(
                 .put(api_skills::handle_write_skill)
                 .delete(api_skills::handle_delete_skill),
         )
-        .route("/api/user/skills", post(api_skills::handle_save_personal_skill))
+        .route(
+            "/api/user/skills",
+            get(api_skills::handle_list_personal_skills).post(api_skills::handle_save_personal_skill),
+        )
+        .route(
+            "/api/user/skills/{name}",
+            get(api_skills::handle_read_personal_skill)
+                .put(api_skills::handle_write_personal_skill)
+                .delete(api_skills::handle_delete_personal_skill),
+        )
+        .route(
+            "/api/user/skills/{name}/enabled",
+            patch(api_skills::handle_set_personal_skill_enabled),
+        )
         .route("/api/config/init", post(api_config::handle_init))
         .route("/api/config/migrate", post(api_config::handle_migrate))
         .route("/api/openapi.json", get(openapi::handle_openapi_json))

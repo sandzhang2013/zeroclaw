@@ -1,9 +1,43 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="color-scheme" content="light dark" />
+    <script>
+      (function () {
+        // Paint the canvas before CSS/JS so a saved light theme does not flash black.
+        // Boot snapshot is written by ThemeContext.applyStoredTheme (zeroclaw-theme-boot).
+        try {
+          var boot = null;
+          try {
+            boot = JSON.parse(localStorage.getItem("zeroclaw-theme-boot") || "null");
+          } catch (e) {}
+          if (!boot || (boot.scheme !== "light" && boot.scheme !== "dark") || typeof boot.bg !== "string") {
+            var stored = null;
+            try {
+              stored = JSON.parse(localStorage.getItem("zeroclaw-theme") || "null");
+            } catch (e2) {}
+            var mode = stored && stored.theme;
+            var light =
+              mode === "light" ||
+              (mode === "system" &&
+                window.matchMedia &&
+                window.matchMedia("(prefers-color-scheme: light)").matches);
+            boot = {
+              scheme: light ? "light" : "dark",
+              bg: light ? "#f6f7f9" : "#0c0e12",
+            };
+          }
+          var root = document.documentElement;
+          root.style.colorScheme = boot.scheme;
+          root.style.backgroundColor = boot.bg;
+          root.style.setProperty("--pc-bg-base", boot.bg);
+          var meta = document.querySelector('meta[name="color-scheme"]');
+          if (meta) meta.setAttribute("content", boot.scheme);
+        } catch (e3) {}
+      })();
+    </script>
     <link rel="icon" type="image/png" href="/_app/logo.png" />
     <link
       rel="alternate"
@@ -18,7 +52,7 @@
       href="/blog/atom.xml"
     />
     <link rel="sitemap" type="application/xml" href="/sitemap.xml" />
-    <title>ZeroClaw</title>
+    <title>数智疾控</title>
   </head>
   <body>
     <div

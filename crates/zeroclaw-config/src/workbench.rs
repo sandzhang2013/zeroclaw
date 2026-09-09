@@ -1,10 +1,11 @@
 //! Workbench home starter catalog (`[workbench.home]`).
 //!
 //! Canonical source for the workbench homepage tabs and capability chips.
-//! Operators edit the list through the dashboard Config explorer (ops-only
-//! `/api/config`). The homepage reads a resolved view via
-//! `GET /api/workbench/home`. An empty list resolves to the built-in catalog
-//! so a wiped section cannot blank the home screen.
+//! Operators edit the nested tab/chip catalog through the dedicated homepage
+//! editor (ops-only `GET`/`PUT /api/workbench/home/catalog`). The homepage
+//! reads a locale-resolved view via `GET /api/workbench/home`. An empty list
+//! resolves to the built-in catalog so a wiped section cannot blank the home
+//! screen. The generic Config explorer can still open the same section.
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -93,11 +94,35 @@ pub struct WorkbenchHomeCap {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub label_en: String,
     /// Chinese prompt inserted into the composer.
-    #[serde(default)]
+    /// Legacy single-prompt field; empty `prompts` still reads from here.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub prompt_zh: String,
     /// English prompt. Falls back to `prompt_zh` when empty.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub prompt_en: String,
+    /// Example prompts for this skill. Canonical when non-empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prompts: Vec<WorkbenchHomePrompt>,
+}
+
+/// One example prompt under a homepage skill.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
+pub struct WorkbenchHomePrompt {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub text_zh: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub text_en: String,
+}
+
+impl crate::traits::HasPropKind for WorkbenchHomePrompt {
+    const PROP_KIND: crate::traits::PropKind = crate::traits::PropKind::Object;
+}
+
+impl crate::traits::HasPropKind for Vec<WorkbenchHomePrompt> {
+    const PROP_KIND: crate::traits::PropKind = crate::traits::PropKind::ObjectArray;
 }
 
 fn default_kind() -> String {
@@ -277,8 +302,13 @@ fn cap(
         kind: kind.to_string(),
         label_zh: label_zh.to_string(),
         label_en: label_en.to_string(),
-        prompt_zh: prompt_zh.to_string(),
-        prompt_en: prompt_en.to_string(),
+        prompt_zh: String::new(),
+        prompt_en: String::new(),
+        prompts: vec![WorkbenchHomePrompt {
+            id: format!("{id}_p1"),
+            text_zh: prompt_zh.to_string(),
+            text_en: prompt_en.to_string(),
+        }],
     }
 }
 
@@ -308,7 +338,65 @@ pub struct WorkbenchHomeCapView {
     pub icon: String,
     pub kind: String,
     pub label: String,
-    pub prompt: String,
+    pub prompts: Vec<WorkbenchHomePromptView>,
+}
+
+/// One example prompt in the resolved catalog (locale already selected).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
+pub struct WorkbenchHomePromptView {
+    pub id: String,
+    pub text: String,
+}
+
+/// Nested bilingual catalog for the ops homepage editor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
+pub struct HomeCatalogEdit {
+    /// `config` when at least one cap is stored; `builtin` when the list is empty.
+    pub source: String,
+    pub tabs: Vec<HomeTabEdit>,
+}
+
+/// One tab in the editor catalog (both locales).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
+pub struct HomeTabEdit {
+    pub id: String,
+    #[serde(default)]
+    pub label_zh: String,
+    #[serde(default)]
+    pub label_en: String,
+    #[serde(default)]
+    pub caps: Vec<HomeCapEdit>,
+}
+
+/// One chip in the editor catalog (both locales).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
+pub struct HomeCapEdit {
+    pub id: String,
+    #[serde(default)]
+    pub icon: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub label_zh: String,
+    #[serde(default)]
+    pub label_en: String,
+    #[serde(default)]
+    pub prompts: Vec<HomePromptEdit>,
+}
+
+/// One example prompt in the editor catalog (both locales).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
+pub struct HomePromptEdit {
+    pub id: String,
+    #[serde(default)]
+    pub text_zh: String,
+    #[serde(default)]
+    pub text_en: String,
 }
 
 /// Pick stored caps, or the built-in list when none are configured.
@@ -339,8 +427,8 @@ pub fn resolve_home_catalog(caps: &[WorkbenchHomeCap], locale: &str) -> Workbenc
             continue;
         }
         let label = pick_locale(zh, &cap.label_zh, &cap.label_en);
-        let prompt = pick_locale(zh, &cap.prompt_zh, &cap.prompt_en);
-        if label.is_empty() && prompt.is_empty() {
+        let prompts = resolve_cap_prompts(cap, zh);
+        if label.is_empty() && prompts.is_empty() {
             continue;
         }
         let icon = if HOME_CAP_ICONS.contains(&cap.icon.as_str()) {
@@ -358,7 +446,7 @@ pub fn resolve_home_catalog(caps: &[WorkbenchHomeCap], locale: &str) -> Workbenc
             icon,
             kind: kind.to_string(),
             label,
-            prompt,
+            prompts,
         };
         if let Some(tab) = tabs.iter_mut().find(|t| t.id == tab_id) {
             tab.caps.push(view);
@@ -381,6 +469,55 @@ pub fn resolve_home_catalog(caps: &[WorkbenchHomeCap], locale: &str) -> Workbenc
     }
 }
 
+fn resolve_cap_prompts(cap: &WorkbenchHomeCap, zh: bool) -> Vec<WorkbenchHomePromptView> {
+    cap_prompt_edits(cap)
+        .into_iter()
+        .filter_map(|prompt| {
+            let text = pick_locale(zh, &prompt.text_zh, &prompt.text_en);
+            if text.is_empty() {
+                None
+            } else {
+                Some(WorkbenchHomePromptView {
+                    id: prompt.id,
+                    text,
+                })
+            }
+        })
+        .collect()
+}
+
+fn cap_prompt_edits(cap: &WorkbenchHomeCap) -> Vec<HomePromptEdit> {
+    if !cap.prompts.is_empty() {
+        return cap
+            .prompts
+            .iter()
+            .filter_map(|prompt| {
+                let id = prompt.id.trim();
+                if id.is_empty() {
+                    return None;
+                }
+                Some(HomePromptEdit {
+                    id: id.to_string(),
+                    text_zh: prompt.text_zh.clone(),
+                    text_en: prompt.text_en.clone(),
+                })
+            })
+            .collect();
+    }
+    if cap.prompt_zh.trim().is_empty() && cap.prompt_en.trim().is_empty() {
+        return Vec::new();
+    }
+    let id = cap.id.trim();
+    if id.is_empty() {
+        return Vec::new();
+    }
+    vec![HomePromptEdit {
+        id: format!("{id}_p1"),
+        text_zh: cap.prompt_zh.clone(),
+        text_en: cap.prompt_en.clone(),
+    }]
+}
+
 fn locale_is_zh(locale: &str) -> bool {
     locale.trim().eq_ignore_ascii_case("zh") || locale.to_ascii_lowercase().starts_with("zh-")
 }
@@ -399,6 +536,97 @@ fn pick_locale(zh: bool, zh_text: &str, en_text: &str) -> String {
     } else {
         zh_text.to_string()
     }
+}
+
+/// Group stored caps into the nested editor shape. Empty storage uses builtin.
+#[must_use]
+pub fn caps_to_edit_catalog(stored: &[WorkbenchHomeCap]) -> HomeCatalogEdit {
+    let (caps, source) = caps_or_builtin(stored);
+    let mut tabs: Vec<HomeTabEdit> = Vec::new();
+    for cap in caps {
+        let tab_id = cap.tab.trim();
+        if tab_id.is_empty() || cap.id.trim().is_empty() {
+            continue;
+        }
+        let chip = HomeCapEdit {
+            id: cap.id.trim().to_string(),
+            icon: cap.icon.clone(),
+            kind: if cap.kind.trim() == "outline" {
+                "outline".to_string()
+            } else {
+                DEFAULT_KIND.to_string()
+            },
+            label_zh: cap.label_zh.clone(),
+            label_en: cap.label_en.clone(),
+            prompts: cap_prompt_edits(cap),
+        };
+        if let Some(tab) = tabs.iter_mut().find(|t| t.id == tab_id) {
+            tab.caps.push(chip);
+        } else {
+            tabs.push(HomeTabEdit {
+                id: tab_id.to_string(),
+                label_zh: cap.tab_label_zh.clone(),
+                label_en: cap.tab_label_en.clone(),
+                caps: vec![chip],
+            });
+        }
+    }
+    HomeCatalogEdit {
+        source: source.to_string(),
+        tabs,
+    }
+}
+
+/// Flatten the editor catalog into stored caps. Empty tabs save as builtin fallback.
+pub fn edit_catalog_to_caps(tabs: &[HomeTabEdit]) -> Result<Vec<WorkbenchHomeCap>> {
+    let mut caps = Vec::new();
+    let mut seen_tabs = std::collections::BTreeSet::new();
+    for tab in tabs {
+        let tab_id = tab.id.trim();
+        if tab_id.is_empty() {
+            anyhow::bail!("tab id must not be empty");
+        }
+        if !seen_tabs.insert(tab_id.to_string()) {
+            anyhow::bail!("tab id `{tab_id}` is duplicated");
+        }
+        for chip in &tab.caps {
+            let mut seen_prompts = std::collections::BTreeSet::new();
+            let mut prompts = Vec::new();
+            for prompt in &chip.prompts {
+                let prompt_id = prompt.id.trim();
+                if prompt_id.is_empty() {
+                    anyhow::bail!("prompt id must not be empty");
+                }
+                if !seen_prompts.insert(prompt_id.to_string()) {
+                    anyhow::bail!("prompt id `{prompt_id}` is duplicated");
+                }
+                prompts.push(WorkbenchHomePrompt {
+                    id: prompt_id.to_string(),
+                    text_zh: prompt.text_zh.trim().to_string(),
+                    text_en: prompt.text_en.trim().to_string(),
+                });
+            }
+            caps.push(WorkbenchHomeCap {
+                id: chip.id.trim().to_string(),
+                tab: tab_id.to_string(),
+                tab_label_zh: tab.label_zh.trim().to_string(),
+                tab_label_en: tab.label_en.trim().to_string(),
+                icon: chip.icon.trim().to_string(),
+                kind: if chip.kind.trim() == "outline" {
+                    "outline".to_string()
+                } else {
+                    DEFAULT_KIND.to_string()
+                },
+                label_zh: chip.label_zh.trim().to_string(),
+                label_en: chip.label_en.trim().to_string(),
+                prompt_zh: String::new(),
+                prompt_en: String::new(),
+                prompts,
+            });
+        }
+    }
+    validate_home_caps(&caps)?;
+    Ok(caps)
 }
 
 /// Hard checks for dashboard saves. Unknown icons are allowed (resolved later).
@@ -428,8 +656,11 @@ pub fn validate_home_caps(caps: &[WorkbenchHomeCap]) -> Result<()> {
         if !kind.is_empty() && kind != "chat" && kind != "outline" {
             anyhow::bail!("{path}.kind must be `chat` or `outline`, got `{kind}`");
         }
-        if cap.prompt_zh.len() > MAX_PROMPT_CHARS || cap.prompt_en.len() > MAX_PROMPT_CHARS {
-            anyhow::bail!("{path} prompt exceeds {MAX_PROMPT_CHARS} characters");
+        let prompt_entries = cap_prompt_edits(cap);
+        for (pi, prompt) in prompt_entries.iter().enumerate() {
+            if prompt.text_zh.len() > MAX_PROMPT_CHARS || prompt.text_en.len() > MAX_PROMPT_CHARS {
+                anyhow::bail!("{path}.prompts[{pi}] exceeds {MAX_PROMPT_CHARS} characters");
+            }
         }
     }
     Ok(())
@@ -453,6 +684,10 @@ mod tests {
         );
         assert_eq!(catalog.tabs[0].label, "数据查询");
         assert_eq!(catalog.tabs[0].caps[0].label, "疫情概况");
+        assert_eq!(
+            catalog.tabs[0].caps[0].prompts[0].text,
+            "帮我查询并概述近期全省传染病疫情情况。"
+        );
         assert!(catalog.tabs[2].caps.iter().all(|c| c.kind == "outline"));
     }
 
@@ -482,6 +717,39 @@ mod tests {
         assert_eq!(catalog.tabs[0].caps.len(), 1);
         assert_eq!(catalog.tabs[0].caps[0].icon, DEFAULT_ICON);
         assert_eq!(catalog.tabs[0].label, "自定义");
+        assert_eq!(catalog.tabs[0].caps[0].prompts[0].text, "说你好");
+    }
+
+    #[test]
+    fn stored_prompts_array_wins_over_legacy_fields() {
+        let caps = vec![WorkbenchHomeCap {
+            id: "only".into(),
+            tab: "query".into(),
+            label_zh: "仅此".into(),
+            prompt_zh: "旧的".into(),
+            prompts: vec![
+                WorkbenchHomePrompt {
+                    id: "p1".into(),
+                    text_zh: "第一条".into(),
+                    ..Default::default()
+                },
+                WorkbenchHomePrompt {
+                    id: "p2".into(),
+                    text_zh: "第二条".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }];
+        let catalog = resolve_home_catalog(&caps, "zh");
+        assert_eq!(
+            catalog.tabs[0].caps[0]
+                .prompts
+                .iter()
+                .map(|p| p.text.as_str())
+                .collect::<Vec<_>>(),
+            ["第一条", "第二条"]
+        );
     }
 
     #[test]
@@ -492,6 +760,53 @@ mod tests {
             ..Default::default()
         };
         let err = validate_home_caps(&[cap.clone(), cap]).unwrap_err();
+        assert!(err.to_string().contains("duplicated"));
+    }
+
+    #[test]
+    fn edit_catalog_round_trips_builtin() {
+        let original = builtin_home_caps();
+        let edit = caps_to_edit_catalog(&original);
+        assert_eq!(edit.source, "config");
+        assert_eq!(edit.tabs.len(), 3);
+        let flat = edit_catalog_to_caps(&edit.tabs).expect("flatten");
+        assert_eq!(flat.len(), original.len());
+        assert_eq!(flat[0].id, "outbreak");
+        assert_eq!(flat[0].tab, "query");
+        assert_eq!(flat[0].label_zh, "疫情概况");
+        assert_eq!(flat[0].tab_label_zh, "数据查询");
+        assert_eq!(
+            flat[0].prompts[0].text_zh,
+            "帮我查询并概述近期全省传染病疫情情况。"
+        );
+        assert!(flat[0].prompt_zh.is_empty());
+    }
+
+    #[test]
+    fn empty_stored_caps_edit_as_builtin() {
+        let edit = caps_to_edit_catalog(&[]);
+        assert_eq!(edit.source, "builtin");
+        assert_eq!(edit.tabs[0].label_zh, "数据查询");
+    }
+
+    #[test]
+    fn empty_edit_tabs_flatten_to_empty_caps() {
+        let caps = edit_catalog_to_caps(&[]).expect("empty ok");
+        assert!(caps.is_empty());
+    }
+
+    #[test]
+    fn duplicate_tab_ids_fail_flatten() {
+        let tab = HomeTabEdit {
+            id: "query".into(),
+            caps: vec![HomeCapEdit {
+                id: "a".into(),
+                label_zh: "一".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let err = edit_catalog_to_caps(&[tab.clone(), tab]).unwrap_err();
         assert!(err.to_string().contains("duplicated"));
     }
 }

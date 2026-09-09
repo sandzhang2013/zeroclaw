@@ -28,10 +28,17 @@ mod suggestions;
 pub mod testing;
 
 pub use bundle::{BundleError, BundleSummary};
+pub use constants::SKILL_DISABLED_MARKER;
 pub use document::{DocumentParseError, SkillDocument};
 pub use frontmatter::SkillFrontmatter;
 pub use reference::{SkillRef, SkillRefError};
 pub use scaffold::{ScaffoldError, ScaffoldOptions};
+
+/// `false` when the skill directory has a disable sidecar.
+#[must_use]
+pub fn skill_directory_enabled(dir: &Path) -> bool {
+    !dir.join(SKILL_DISABLED_MARKER).exists()
+}
 pub use service::{
     EffectiveSkill, EffectiveSkillSet, RemoveMode, ServiceError, SkillOrigin, SkillSummary,
     SkillsService,
@@ -818,6 +825,9 @@ fn load_skills_from_directory_uncached(
     for entry in entries.flatten() {
         let path = entry.path();
         if !path.is_dir() {
+            continue;
+        }
+        if !skill_directory_enabled(&path) {
             continue;
         }
 
@@ -5293,6 +5303,43 @@ version = "0.1.0"
             .await;
         assert!(!bob_names.iter().any(|n| n == "flu-weekly"));
         assert!(bob_names.iter().any(|n| n == "org-skill"));
+    }
+
+    #[tokio::test]
+    async fn disabled_user_skill_is_not_loaded() {
+        let install_root = TempDir::new().unwrap();
+        let data_dir = TempDir::new().unwrap();
+        let agent_workspace = TempDir::new().unwrap();
+        let agent_alias = "web";
+        let config = make_config_with_agent_workspace(
+            install_root.path(),
+            data_dir.path(),
+            agent_alias,
+            agent_workspace.path().to_path_buf(),
+        );
+        write_test_skill(
+            &config.user_workspace_dir("alice", agent_alias),
+            "flu-weekly",
+        );
+        std::fs::write(
+            config
+                .user_workspace_dir("alice", agent_alias)
+                .join("skills")
+                .join("flu-weekly")
+                .join(super::SKILL_DISABLED_MARKER),
+            "",
+        )
+        .unwrap();
+
+        let names = zeroclaw_api::TOOL_LOOP_USER_ATTRS
+            .scope(Some(zeroclaw_api::UserAttrs::new("alice")), async {
+                load_skills_for_agent_from_config(&config, agent_alias)
+                    .into_iter()
+                    .map(|s| s.name)
+                    .collect::<Vec<_>>()
+            })
+            .await;
+        assert!(!names.iter().any(|n| n == "flu-weekly"));
     }
 
     #[tokio::test]
