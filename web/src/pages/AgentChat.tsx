@@ -7,7 +7,7 @@ import { AgentProvider, useAgent, type ChatMessage } from '@/contexts/AgentConte
 import { labelForProviderRef, resolveProviderRefArg } from '@/contexts/modelPicker.logic';
 import SessionPicker from '@/components/SessionPicker';
 import { useDraft } from '@/hooks/useDraft';
-import { t, getLocale } from '@/lib/i18n';
+import { t } from '@/lib/i18n';
 import {
   COMMANDS,
   helpText,
@@ -48,14 +48,8 @@ import { extractMcpToolText, extractToolImages, stripImageMarkers } from '@/lib/
 import { ChatImagePreview } from '@/components/ChatImagePreview';
 import { sanitizeSessionTitle, stripSessionTitleTimestamp } from '@/lib/workbenchSession';
 import { composeOutlineContinuePrompt, shouldShowOutlineEditButton } from '@/lib/outlineDraft';
-import { composeHomeMessage, parseHomeSkillDisplay, titleFromUserMessage, type HomeSkillRef } from '@/lib/homeSend';
-import {
-  inferHomeSkillFromMessages,
-  resolveActiveHomeSkill,
-  shouldRestoreHomeSkill,
-} from '@/lib/homeSessionSkill';
+import { parseHomeSkillDisplay, titleFromUserMessage, type HomeSkillRef } from '@/lib/homeSend';
 import { HomeSkillChip } from '@/components/HomeSkillChip';
-import { homeCapIcon } from '@/lib/workbenchHomeCatalog';
 import {
   draftPersonalSkill,
   shouldShowSaveSkillButton,
@@ -195,8 +189,6 @@ export function AgentChatInner({
   autonomyScope,
   userRole,
   sessionSkill,
-  onClearSessionSkill,
-  onRestoreSessionSkill,
 }: {
   agentAlias: string;
   onStatus?: (s: AgentChatStatus) => void;
@@ -211,8 +203,6 @@ export function AgentChatInner({
   autonomyScope?: string;
   userRole?: string;
   sessionSkill?: HomeSkillRef;
-  onClearSessionSkill?: () => void;
-  onRestoreSessionSkill?: (skill: HomeSkillRef) => void;
 }) {
   const {
     messages,
@@ -258,27 +248,6 @@ export function AgentChatInner({
     saveDraftRef.current(value);
   }, [writeInput]);
   const isWorkbench = Boolean(onRenameSession || onToggleRightPanel || autonomyScope);
-  const [skillDismissed, setSkillDismissed] = useState(false);
-  useEffect(() => {
-    setSkillDismissed(false);
-  }, [autonomyScope, sessionSkill?.id, sessionSkill?.label]);
-  const inferredSkill = useMemo(
-    () => inferHomeSkillFromMessages(messages),
-    [messages],
-  );
-  const activeSkill = resolveActiveHomeSkill({
-    sessionSkill,
-    inferredSkill,
-    dismissed: skillDismissed,
-  });
-  useEffect(() => {
-    const restore = shouldRestoreHomeSkill({
-      dismissed: skillDismissed,
-      sessionSkill,
-      inferredSkill,
-    });
-    if (restore) onRestoreSessionSkill?.(restore);
-  }, [skillDismissed, sessionSkill, inferredSkill, onRestoreSessionSkill]);
   const [outlineDraft, setOutlineDraft] = useState<string | null>(null);
   const [skillDraft, setSkillDraft] = useState<PersonalSkillDraft | null>(null);
   const [skillSaving, setSkillSaving] = useState(false);
@@ -492,20 +461,12 @@ export function AgentChatInner({
     if (!trimmed && ready.length === 0) return;
 
     const text = trimmed.startsWith('//') ? trimmed.slice(1) : trimmed;
-    const tagged = activeSkill
-      ? composeHomeMessage({
-          userText: text,
-          skill: activeSkill,
-          locale: getLocale(),
-          includePrompt: false,
-        })
-      : text;
     const payload = ready.length
       ? composeUploadMessage(
-          tagged,
+          text,
           ready.map((a) => ({ cwdRel: a.cwdRel, filename: a.filename, mime: a.mime })),
         )
-      : tagged;
+      : text;
     sendMessage(payload, clampWorkbenchAutonomy(autonomy, maxAutonomy));
     setAttachments((prev) => {
       for (const a of prev) {
@@ -1166,17 +1127,6 @@ export function AgentChatInner({
                 ))}
               </ul>
             )}
-            <div className="flex min-w-0 items-start gap-2">
-              {activeSkill ? (
-                <HomeSkillChip
-                  label={activeSkill.label}
-                  icon={homeCapIcon(activeSkill.icon ?? '')}
-                  onClear={() => {
-                    setSkillDismissed(true);
-                    onClearSessionSkill?.();
-                  }}
-                />
-              ) : null}
             <textarea
               ref={inputRef}
               rows={1}
@@ -1199,10 +1149,9 @@ export function AgentChatInner({
                     ? t('agent.running')
                     : t('agent.type_message')}
               disabled={!connected || typing || !hydrated}
-              className="min-w-0 flex-1 bg-transparent text-sm resize-none text-pc-text placeholder:text-pc-text-muted outline-none focus:outline-none focus-visible:outline-none disabled:opacity-40"
+              className="min-w-0 w-full bg-transparent text-sm resize-none text-pc-text placeholder:text-pc-text-muted outline-none focus:outline-none focus-visible:outline-none disabled:opacity-40"
               style={{ minHeight: '2.5rem', maxHeight: '10rem', paddingTop: '2px', paddingBottom: '8px' }}
             />
-            </div>
             <div className="flex w-full min-w-0 items-center justify-between gap-2">
               <div className="flex min-w-0 items-center gap-0.5">
                 <button
@@ -1413,11 +1362,7 @@ function MessageBody({
   const raw = messageModelText(msg);
   const attached = isUser ? parseHomeSkillDisplay(raw) : null;
   const shownContent = isUser ? (attached?.visible ?? '') : messageDisplayText(msg);
-  const userLong = isUser && (
-    Boolean(attached?.skillLabel)
-    || shownContent.includes('\n')
-    || shownContent.length > 40
-  );
+  const userLong = isUser && (shownContent.includes('\n') || shownContent.length > 40);
   if (msg.toolCall) {
     const imageArtifact = msg.toolCall.artifact
       && artifactKind(msg.toolCall.artifact.mime, msg.toolCall.artifact.filename) === 'image'
@@ -1444,14 +1389,12 @@ function MessageBody({
     return <ChatMarkdown content={shownContent} compact={compact} />;
   }
   return (
-    <div className={isUser && attached?.skillLabel ? 'text-left' : undefined}>
+    <p className={`${compact ? 'text-xs' : 'text-sm'} leading-relaxed ${isUser ? (userLong ? 'text-left' : 'text-right') : ''}`}>
       {attached?.skillLabel ? (
-        <HomeSkillChip label={attached.skillLabel} />
+        <HomeSkillChip label={attached.skillLabel} className="mr-1.5 align-middle" />
       ) : null}
-      {shownContent ? (
-        <p className={`${attached?.skillLabel ? 'mt-1.5 ' : ''}${compact ? 'text-xs' : 'text-sm'} whitespace-pre-wrap break-words leading-relaxed ${isUser ? (userLong ? 'text-left' : 'text-right') : ''}`}>{shownContent}</p>
-      ) : null}
-    </div>
+      <span className="whitespace-pre-wrap break-words">{shownContent}</span>
+    </p>
   );
 }
 
@@ -1478,8 +1421,7 @@ const MessageItem = memo(function MessageItem({
     || Boolean(parseHomeSkillDisplay(messageModelText(row)).skillLabel)
   ));
   const isUser = msg.role === 'user';
-  const attachedSkill = isUser && rows.some((row) => parseHomeSkillDisplay(messageModelText(row)).skillLabel);
-  const userLong = isUser && (attachedSkill || shownContent.includes('\n') || shownContent.length > 40);
+  const userLong = isUser && (shownContent.includes('\n') || shownContent.length > 40);
   const stamp = rows.at(-1) ?? msg;
 
   return (

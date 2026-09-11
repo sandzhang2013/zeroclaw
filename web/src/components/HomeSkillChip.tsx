@@ -7,13 +7,15 @@ export function HomeSkillChip({
   label,
   icon: Icon,
   onClear,
+  className,
 }: {
   label: string;
   icon?: LucideIcon | null;
   onClear?: () => void;
+  className?: string;
 }) {
   return (
-    <span className="inline-flex h-[1.7em] max-w-full shrink-0 items-center gap-1 rounded-full border border-pc-border bg-pc-surface py-0 pl-2 pr-1 text-xs text-pc-text">
+    <span className={`inline-flex h-[1.7em] max-w-full shrink-0 items-center gap-1 rounded-full border border-pc-border bg-pc-surface py-0 pl-2 text-xs text-pc-text ${onClear ? 'pr-1' : 'pr-2'} ${className ?? ''}`}>
       {Icon ? <Icon className="size-3.5 shrink-0 text-pc-text-secondary" /> : null}
       <span className="truncate">{label}</span>
       {onClear ? (

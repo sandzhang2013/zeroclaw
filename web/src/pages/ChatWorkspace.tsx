@@ -20,7 +20,6 @@ import { persistSessionId } from '@/lib/sessionId';
 import { generateUUID } from '@/lib/uuid';
 import { t } from '@/lib/i18n';
 import { nextStoredSessionTitle, type HomeSkillRef } from '@/lib/homeSend';
-import { clearSessionHomeSkill, restoreSessionHomeSkill } from '@/lib/homeSessionSkill';
 import {
   saveWorkbenchAutonomy,
   clampWorkbenchAutonomy,
@@ -596,12 +595,6 @@ export default function ChatWorkspace({
                     autonomyScope={session.id}
                     userRole={userRole}
                     sessionSkill={session.homeSkill}
-                    onClearSessionSkill={() => {
-                      setSessions((prev) => clearSessionHomeSkill(prev, session.id));
-                    }}
-                    onRestoreSessionSkill={(skill) => {
-                      setSessions((prev) => restoreSessionHomeSkill(prev, session.id, skill));
-                    }}
                     onInitialPromptConsumed={() => {
                       setPendingPrompt((p) => (p?.sessionId === session.id ? null : p));
                     }}
