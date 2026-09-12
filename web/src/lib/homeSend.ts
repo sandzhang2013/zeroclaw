@@ -119,7 +119,7 @@ export function parseHomeSkillDisplay(modelText: string): {
   const skillLabel = header[1]?.trim();
   const rest = text.slice(header[0].length).replace(/^\n+/, '');
   const extra = rest.match(/(?:^|\n)(?:补充要求：|Additional request: )([\s\S]+)$/);
-  if (extra) return { skillLabel, visible: extra[1].trim() };
+  if (extra) return { skillLabel, visible: extra[1]?.trim() ?? '' };
   return { skillLabel, visible: rest.trim() };
 }
 

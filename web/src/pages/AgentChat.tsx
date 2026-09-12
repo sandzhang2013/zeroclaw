@@ -1,4 +1,4 @@
-import { memo, useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { memo, useState, useEffect, useRef, useCallback } from 'react';
 import { Link, Navigate, useParams } from 'react-router-dom';
 import { ArrowUp, Square, User, AlertCircle, Copy, Check, X, Trash2, Minimize2, Maximize2, ChevronDown, Wrench, PanelRightClose, PanelRightOpen, Plus, Mic, Loader2, Pencil, FolderOpen, ImagePlus, Sparkles } from 'lucide-react';
 import ReactMarkdown, { type Components } from 'react-markdown';
