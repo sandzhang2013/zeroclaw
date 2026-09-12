@@ -197,7 +197,9 @@ fn checklist(cfg: &Config, kind: LoginErrorKind) -> Vec<Step> {
     let (tenant_status, tenant_detail) = match kind {
         LoginErrorKind::TenantDetailFailed => (
             StepStatus::Failed,
-            format!("{openapi}/console/tenant/detail，请求 tenantId，按 devisionType 读 provinceCode/cityCode/districtCode"),
+            format!(
+                "{openapi}/console/tenant/detail，请求 tenantId，按 devisionType 读 provinceCode/cityCode/districtCode"
+            ),
         ),
         LoginErrorKind::InvalidUserId => (
             StepStatus::Pending,

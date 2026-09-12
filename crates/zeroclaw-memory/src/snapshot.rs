@@ -125,7 +125,7 @@ pub fn hydrate_from_snapshot(workspace_dir: &Path) -> Result<usize> {
             "INSERT INTO memories (
                 id, key, content, category, created_at, updated_at, agent_id
              ) VALUES (?1, ?2, ?3, 'core', ?4, ?5, ?6)
-             ON CONFLICT(agent_id, key) DO NOTHING",
+             ON CONFLICT(agent_id, ifnull(tenant_id, ''), key) DO NOTHING",
             params![id, key, content, now, now, default_agent_id],
         )?;
         hydrated += changed;
@@ -400,35 +400,25 @@ Rule 3: Protect the user.
             .unwrap();
         assert_eq!(agent_id_not_null, 1);
 
-        let unique_agent_key = {
-            let indexes: Vec<String> = {
-                let mut stmt = conn.prepare("PRAGMA index_list(memories)").unwrap();
-                stmt.query_map([], |row| {
-                    let unique: i64 = row.get(2)?;
-                    let name: String = row.get(1)?;
-                    Ok((unique != 0, name))
-                })
-                .unwrap()
-                .filter_map(|result| result.ok())
-                .filter(|(unique, _)| *unique)
-                .map(|(_, name)| name)
-                .collect()
-            };
-            indexes.into_iter().any(|index_name| {
-                let mut info = conn
-                    .prepare("SELECT name FROM pragma_index_info(?1) ORDER BY seqno")
-                    .unwrap();
-                let columns: Vec<String> = info
-                    .query_map([index_name], |row| row.get(0))
-                    .unwrap()
-                    .collect::<rusqlite::Result<Vec<_>>>()
-                    .unwrap();
-                columns.len() == 2
-                    && columns.iter().any(|column| column == "agent_id")
-                    && columns.iter().any(|column| column == "key")
+        let unique_index_names: Vec<String> = {
+            let mut stmt = conn.prepare("PRAGMA index_list(memories)").unwrap();
+            stmt.query_map([], |row| {
+                let unique: i64 = row.get(2)?;
+                let name: String = row.get(1)?;
+                Ok((unique != 0, name))
             })
+            .unwrap()
+            .filter_map(|result| result.ok())
+            .filter(|(unique, _)| *unique)
+            .map(|(_, name)| name)
+            .collect()
         };
-        assert!(unique_agent_key);
+        assert!(
+            unique_index_names
+                .iter()
+                .any(|name| name == "idx_memories_agent_tenant_key"),
+            "canonical memories unique is (agent_id, tenant, key), got {unique_index_names:?}"
+        );
 
         let (memory_rowid, fts_rowid): (i64, i64) = conn
             .query_row(

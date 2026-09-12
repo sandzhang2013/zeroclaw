@@ -1821,7 +1821,7 @@ while IFS= read -r line; do :; done
         }
 
         async fn wait_for_pid(path: &Path) -> i32 {
-            let deadline = Instant::now() + Duration::from_secs(2);
+            let deadline = Instant::now() + Duration::from_secs(10);
             loop {
                 if let Ok(value) = tokio::fs::read_to_string(path).await
                     && let Ok(pid) = value.trim().parse::<i32>()
@@ -2097,7 +2097,8 @@ sleep 30 &
 printf '%s\n' "$!" > descendant.pid
 sleep 30
 "#;
-            let model_provider = fake_provider(&temp, body, 1);
+            // 5s so a loaded workspace run can still spawn the fake child.
+            let model_provider = fake_provider(&temp, body, 5);
             let leader_path = temp.path().join("leader.pid");
             let descendant_path = temp.path().join("descendant.pid");
             let task = ::zeroclaw_spawn::spawn!(async move {

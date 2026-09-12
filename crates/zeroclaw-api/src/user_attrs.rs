@@ -505,15 +505,12 @@ mod tests {
         crate::TOOL_LOOP_USER_ATTRS
             .scope(
                 Some(UserAttrs::new("ops").with_role(ROLE_OPS)),
-                crate::TOOL_LOOP_TURN_USER_TEXT.scope(
-                    Some("武汉的流感怎么样".into()),
-                    async {
-                        let mut args = serde_json::json!({ "city": "宜昌市" });
-                        let keys = vec!["city".to_string()];
-                        UserAttrs::bind_mcp_tool_args(&mut args, &keys).unwrap();
-                        assert_eq!(args["city"], "武汉市");
-                    },
-                ),
+                crate::TOOL_LOOP_TURN_USER_TEXT.scope(Some("武汉的流感怎么样".into()), async {
+                    let mut args = serde_json::json!({ "city": "宜昌市" });
+                    let keys = vec!["city".to_string()];
+                    UserAttrs::bind_mcp_tool_args(&mut args, &keys).unwrap();
+                    assert_eq!(args["city"], "武汉市");
+                }),
             )
             .await;
     }
@@ -541,7 +538,10 @@ mod tests {
     fn cities_named_in_turn_ignores_province_words() {
         assert!(cities_named_in_turn("全省法定传染病概况").is_empty());
         assert!(cities_named_in_turn("湖北省流感").is_empty());
-        assert_eq!(cities_named_in_turn("看看武汉市"), vec!["武汉市".to_string()]);
+        assert_eq!(
+            cities_named_in_turn("看看武汉市"),
+            vec!["武汉市".to_string()]
+        );
     }
 
     #[test]

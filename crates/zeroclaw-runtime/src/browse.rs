@@ -750,8 +750,12 @@ mod tests {
     #[test]
     fn delete_agent_workspace_path_missing_is_idempotent() {
         let (_dir, cfg) = workspace_fixture();
-        delete_agent_workspace_path(&cfg, "alpha", "sessions/11111111-1111-1111-1111-111111111111")
-            .unwrap();
+        delete_agent_workspace_path(
+            &cfg,
+            "alpha",
+            "sessions/11111111-1111-1111-1111-111111111111",
+        )
+        .unwrap();
         delete_agent_workspace_path(&cfg, "alpha", "notes/gone.md").unwrap();
     }
 

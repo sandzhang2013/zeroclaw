@@ -93,7 +93,10 @@ mod tests {
             "CSP3 'self' already allows same-origin WebSocket; do not add scheme-wide ws:/wss:"
         );
         assert!(
-            !csp.split("connect-src").nth(1).unwrap_or("").contains("ws:"),
+            !csp.split("connect-src")
+                .nth(1)
+                .unwrap_or("")
+                .contains("ws:"),
             "connect-src must not allow arbitrary ws: hosts"
         );
         assert!(csp.contains("frame-ancestors 'none'"));
