@@ -1977,20 +1977,11 @@ pub async fn run_gateway(
             Duration::from_secs(gateway_request_timeout_secs(&config.gateway)),
         ));
 
-    // Chat / dashboard uploads need a larger body than the gateway-wide 64 KiB cap.
-    let workspace_upload_router: Router = Router::new()
-        .route(
-            "/api/agents/{alias}/workspace/upload",
-            post(api_browse::handle_agent_workspace_upload),
-        )
-        .with_state(state.clone())
-        .layer(RequestBodyLimitLayer::new(
-            zeroclaw_runtime::browse::AGENT_WORKSPACE_UPLOAD_CAP as usize,
-        ))
-        .layer(TimeoutLayer::with_status_code(
-            StatusCode::REQUEST_TIMEOUT,
-            Duration::from_secs(120),
-        ));
+    // Chat / dashboard uploads need a larger body than the gateway-wide 64 KiB
+    // cap *and* axum's 2 MiB Bytes extractor default.
+    let workspace_upload_router: Router = api_browse::workspace_upload_router(state.clone()).layer(
+        TimeoutLayer::with_status_code(StatusCode::REQUEST_TIMEOUT, Duration::from_secs(120)),
+    );
     let inner = inner.merge(workspace_upload_router);
     // The dashboard image upload lives on its own sub-router so it can opt out
     // of the 64 KB gateway-wide RequestBodyLimitLayer, which is sized for JSON

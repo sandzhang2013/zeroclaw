@@ -1,14 +1,16 @@
 //! HTTP adapter over `zeroclaw_runtime::browse::list_directory`.
 
 use axum::{
-    Json,
+    Json, Router,
     body::Bytes,
-    extract::{Path as AxumPath, Query, State},
+    extract::{DefaultBodyLimit, Path as AxumPath, Query, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
+    routing::post,
 };
 use base64::Engine;
 use serde::{Deserialize, Serialize};
+use tower_http::limit::RequestBodyLimitLayer;
 use zeroclaw_runtime::browse::{
     AGENT_WORKSPACE_UPLOAD_CAP, BrowseEntry, BrowseError, delete_agent_workspace_path_for_user,
     list_agent_workspace_for_user, list_directory, make_agent_workspace_directory_for_user,
@@ -204,16 +206,71 @@ pub async fn handle_agent_workspace_read(
     }
 }
 
-fn safe_download_name(filename: &str) -> String {
-    let cleaned: String = filename
+fn download_basename(filename: &str) -> String {
+    std::path::Path::new(filename)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| "file".into())
+}
+
+/// ASCII `filename=` fallback. Header values cannot carry raw UTF-8, so CJK is
+/// dropped here; [`rfc5987_filename`] carries the original name.
+fn ascii_filename_fallback(basename: &str) -> String {
+    let cleaned: String = basename
         .chars()
         .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
         .collect();
-    if cleaned.is_empty() {
-        "file".into()
-    } else {
-        cleaned
+    let stem_has_latin = cleaned
+        .rsplit_once('.')
+        .map(|(stem, _)| stem.chars().any(|c| c.is_ascii_alphanumeric()))
+        .unwrap_or_else(|| cleaned.chars().any(|c| c.is_ascii_alphanumeric()));
+    if stem_has_latin {
+        return cleaned;
     }
+    let ext = basename.rsplit_once('.').and_then(|(_, ext)| {
+        let ext = ext.trim();
+        (ext.chars().all(|c| c.is_ascii_alphanumeric()) && !ext.is_empty()).then_some(ext)
+    });
+    match ext {
+        Some(ext) => format!("file.{ext}"),
+        None => "file".into(),
+    }
+}
+
+/// RFC 5987 `attr-char` left as-is; everything else percent-encoded.
+fn rfc5987_filename(basename: &str) -> String {
+    let mut out = String::with_capacity(basename.len() * 3);
+    for b in basename.as_bytes() {
+        match b {
+            b'A'..=b'Z'
+            | b'a'..=b'z'
+            | b'0'..=b'9'
+            | b'!'
+            | b'#'
+            | b'$'
+            | b'&'
+            | b'+'
+            | b'-'
+            | b'.'
+            | b'^'
+            | b'_'
+            | b'`'
+            | b'|'
+            | b'~' => out.push(char::from(*b)),
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+fn content_disposition(kind: &str, filename: &str) -> String {
+    let basename = download_basename(filename);
+    format!(
+        "{kind}; filename=\"{}\"; filename*=UTF-8''{}",
+        ascii_filename_fallback(&basename),
+        rfc5987_filename(&basename)
+    )
 }
 
 /// Untrusted workspace HTML: unique origin (no `allow-same-origin`), scripts
@@ -260,7 +317,7 @@ fn raw_file_response(result: zeroclaw_runtime::browse::FileReadResult, download:
     } else {
         "inline"
     };
-    let disposition = format!("{kind}; filename=\"{}\"", safe_download_name(&filename));
+    let disposition = content_disposition(kind, &filename);
     let content_type = HeaderValue::from_str(&mime)
         .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream"));
     let mut builder = Response::builder()
@@ -372,6 +429,23 @@ pub async fn handle_agent_workspace_mkdir(
         Ok(()) => Json(serde_json::json!({ "created": body.path })).into_response(),
         Err(err) => browse_error_response(err),
     }
+}
+
+/// Sibling router for chat/workbench file uploads.
+///
+/// Axum's `Bytes` extractor defaults to 2 MiB. Without raising
+/// [`DefaultBodyLimit`], a 3.8 MiB CSV is rejected even though
+/// [`AGENT_WORKSPACE_UPLOAD_CAP`] is 20 MiB. `RequestBodyLimitLayer` alone is
+/// not enough — it is a different limit than the extractor default.
+pub fn workspace_upload_router(state: AppState) -> Router {
+    let cap = AGENT_WORKSPACE_UPLOAD_CAP as usize;
+    Router::new()
+        .route(
+            "/api/agents/{alias}/workspace/upload",
+            post(handle_agent_workspace_upload).layer(DefaultBodyLimit::max(cap)),
+        )
+        .with_state(state)
+        .layer(RequestBodyLimitLayer::new(cap))
 }
 
 /// `POST /api/agents/{alias}/workspace/upload?path=<rel>` — raw body bytes.
@@ -666,6 +740,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn workspace_upload_accepts_csv_above_axum_default_2mib() {
+        use tower::ServiceExt;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = trusted_proxy_config(&tmp);
+        let session = "51956add-a083-4beb-a3ad-a88347f077de";
+        let rel = format!("sessions/{session}/uploads/big.csv");
+        let app = workspace_upload_router(test_state(config.clone()));
+        // 2 MiB + 1 is past axum's Bytes default and below AGENT_WORKSPACE_UPLOAD_CAP.
+        let payload = vec![b'a'; 2 * 1024 * 1024 + 1];
+        let expected_len = payload.len() as u64;
+        let mut request =
+            axum::http::Request::post(format!("/api/agents/deepseek/workspace/upload?path={rel}"))
+                .body(axum::body::Body::from(payload))
+                .unwrap();
+        *request.headers_mut() = bff_headers("ops", "运维");
+
+        let response = app.oneshot(request).await.expect("router response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = response_json(response).await;
+        assert_eq!(json["path"], rel);
+        assert_eq!(json["size"], expected_len);
+
+        let on_disk = config
+            .user_session_workspace_dir("ops", "deepseek", session)
+            .join("uploads/big.csv");
+        assert_eq!(std::fs::metadata(on_disk).unwrap().len(), expected_len);
+    }
+
+    #[tokio::test]
     async fn workspace_raw_png_is_inline_image() {
         let tmp = tempfile::TempDir::new().unwrap();
         let config = trusted_proxy_config(&tmp);
@@ -838,15 +942,62 @@ mod tests {
     }
 
     #[test]
-    fn safe_download_name_strips_path_and_cjk() {
-        assert!(!safe_download_name("../../a.png").contains('/'));
-        assert!(safe_download_name("../../a.png").ends_with("a.png"));
+    fn content_disposition_keeps_cjk_via_rfc5987() {
+        assert_eq!(download_basename("../../a.png"), "a.png");
+        assert_eq!(ascii_filename_fallback("a.png"), "a.png");
+        assert_eq!(ascii_filename_fallback("报告.html"), "file.html");
         assert_eq!(
-            safe_download_name("报告.html"),
-            ".html",
-            "non-ascii names drop to the leftover extension"
+            ascii_filename_fallback("腹泻病原监测_交叉比对报告.html"),
+            "file.html"
         );
-        assert_eq!(safe_download_name("报告"), "file");
-        assert_eq!(safe_download_name(""), "file");
+        assert_eq!(ascii_filename_fallback("报告"), "file");
+        assert_eq!(ascii_filename_fallback(""), "file");
+
+        let d = content_disposition("attachment", "腹泻病原监测_交叉比对报告.html");
+        assert!(
+            d.starts_with("attachment; filename=\"file.html\"; filename*=UTF-8''"),
+            "{d}"
+        );
+        assert!(d.contains("%E8%85%B9"), "腹 must be percent-encoded: {d}");
+        assert!(d.ends_with(".html"), "{d}");
+        assert!(!d.contains('/'));
+        assert!(!d.contains('\n'));
+
+        let ascii = content_disposition("attachment", "login.html");
+        assert_eq!(
+            ascii,
+            "attachment; filename=\"login.html\"; filename*=UTF-8''login.html"
+        );
+    }
+
+    #[tokio::test]
+    async fn workspace_raw_cjk_download_uses_rfc5987_filename() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = trusted_proxy_config(&tmp);
+        let session = "51956add-a083-4beb-a3ad-a88347f077de";
+        let user_dir = config.user_session_workspace_dir("ops", "deepseek", session);
+        std::fs::create_dir_all(&user_dir).unwrap();
+        let name = "腹泻病原监测_交叉比对报告.html";
+        std::fs::write(user_dir.join(name), b"<html>ok</html>").unwrap();
+        let response = handle_agent_workspace_raw(
+            State(test_state(config)),
+            bff_headers("ops", "运维"),
+            AxumPath("deepseek".into()),
+            Query(BrowseQuery {
+                path: Some(format!("sessions/{session}/{name}")),
+                download: Some(true),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let disposition = response
+            .headers()
+            .get(header::CONTENT_DISPOSITION)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert_eq!(disposition, content_disposition("attachment", name));
+        assert!(disposition.contains("filename*=UTF-8''"), "{disposition}");
+        assert!(!disposition.contains("_.html"), "{disposition}");
     }
 }

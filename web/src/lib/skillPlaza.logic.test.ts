@@ -17,6 +17,24 @@ test('plaza catalog has unique ids and recommended skills', () => {
   assert.ok(PLAZA_SKILLS.every((skill) => skill.category === 'recommended'));
 });
 
+test('plaza catalog includes syndrome-surveillance skills', () => {
+  const ids = [
+    'syndrome-respiratory',
+    'syndrome-enteric',
+    'syndrome-vector',
+    'syndrome-covid',
+    'syndrome-pneumonia',
+    'syndrome-five-id',
+    'syndrome-ili-alert',
+  ];
+  for (const id of ids) {
+    assert.ok(PLAZA_SKILLS.some((skill) => skill.id === id), id);
+  }
+  const zh = resolvePlazaSkills('zh');
+  assert.ok(filterPlazaSkills(zh, '症候群').some((row) => row.id === 'syndrome-respiratory'));
+  assert.ok(filterPlazaSkills(zh, 'ILI').some((row) => row.id === 'syndrome-ili-alert'));
+});
+
 test('resolvePlazaSkill follows locale', () => {
   const skill = PLAZA_SKILLS[0];
   assert.ok(skill);

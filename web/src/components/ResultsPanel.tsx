@@ -20,7 +20,7 @@ import {
 } from '@/lib/api';
 import { ArtifactCard, ArtifactDownloadControl, HtmlSrcDocPreview, downloadUtf8File } from '@/components/ArtifactCard';
 import { htmlPreviewSrcDoc, splitChatHtmlBlocks } from '@/lib/chatHtmlPreview';
-import { artifactKind, isVisualArtifact, type ToolArtifactInfo } from '@/lib/artifactKind';
+import { artifactKind, isVisualArtifact, sortArtifactEntries, type ToolArtifactInfo } from '@/lib/artifactKind';
 import type { CanvasFramePreview } from '@/lib/canvasFrame';
 import { canvasPreviewFromToolCall } from '@/lib/canvasFrame';
 import { ChatImagePreview } from '@/components/ChatImagePreview';
@@ -374,7 +374,7 @@ function ArtifactsList({ lastArtifact }: { lastArtifact: ToolArtifactInfo | null
     setLoading(true);
     try {
       const res = await listAgentWorkspace(agentAlias, listPath);
-      setEntries((res.entries ?? []).filter((e) => !isDbNoise(e.name)));
+      setEntries(sortArtifactEntries((res.entries ?? []).filter((e) => !isDbNoise(e.name))));
     } catch (err) {
       if (err instanceof ApiError && (err.status === 404 || err.status === 400)) {
         setEntries([]);
@@ -461,7 +461,13 @@ function ArtifactsList({ lastArtifact }: { lastArtifact: ToolArtifactInfo | null
 
   useEffect(() => {
     if (loading || previewName) return;
-    const first = entries.find((e) => e.kind === 'file' && artifactKind('', e.name) !== 'other');
+    const first = entries.find((e) => e.kind === 'file' && isVisualArtifact({
+      path: e.name,
+      filename: e.name,
+      title: e.name,
+      mime: '',
+      size: e.size ?? 0,
+    }));
     if (first) void openFile(first.name, first.size);
   }, [loading, entries, previewName, openFile]);
 

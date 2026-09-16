@@ -1157,7 +1157,7 @@ export function AgentChatInner({
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
-                  disabled={!connected || typing || !hydrated}
+                  disabled={!connected || !hydrated}
                   className="flex-shrink-0 inline-flex size-8 items-center justify-center rounded-md text-pc-text-muted hover:bg-[var(--pc-hover)] hover:text-pc-text disabled:opacity-40"
                   aria-label={t('workbench.attach_file')}
                   title={t('workbench.attach_file')}
@@ -1167,7 +1167,7 @@ export function AgentChatInner({
                 <button
                   type="button"
                   onClick={() => imageInputRef.current?.click()}
-                  disabled={!connected || typing || !hydrated || uploading}
+                  disabled={!connected || !hydrated || uploading}
                   className="flex-shrink-0 inline-flex size-8 items-center justify-center rounded-md text-pc-text-muted hover:bg-[var(--pc-hover)] hover:text-pc-text disabled:opacity-40"
                   aria-label={t('agent.attach_image')}
                   title={t('agent.attach_image')}

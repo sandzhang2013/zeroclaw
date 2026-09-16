@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { artifactKind, isVisualArtifact, parseToolArtifact } from './artifactKind.ts';
+import {
+  artifactKind,
+  isVisualArtifact,
+  parseToolArtifact,
+  sortArtifactEntries,
+  workspaceBrowsePath,
+} from './artifactKind.ts';
 
 test('artifactKind maps html image pdf office', () => {
   assert.equal(artifactKind('text/html', 'login.html'), 'html');
@@ -58,4 +64,36 @@ test('parseToolArtifact fills filename from path and drops windows paths', () =>
   assert.equal(parseToolArtifact({ path: '', filename: 'a.png' }), undefined);
   assert.equal(parseToolArtifact({ path: '  ', filename: 'a.png' }), undefined);
   assert.equal(isVisualArtifact({ path: 'a.htm', filename: 'a.htm', title: 'a', mime: '', size: 1 }), true);
+});
+
+test('workspaceBrowsePath keeps session paths and lifts host session tails', () => {
+  assert.equal(workspaceBrowsePath('sessions/s1/login.html'), 'sessions/s1/login.html');
+  assert.equal(workspaceBrowsePath('login.html'), 'login.html');
+  assert.equal(
+    workspaceBrowsePath('/Users/sand/.zeroclaw/users/ops/agents/deepseek/workspace/sessions/s1/login.html'),
+    'sessions/s1/login.html',
+  );
+  assert.equal(workspaceBrowsePath('/etc/passwd'), undefined);
+  assert.equal(workspaceBrowsePath('sessions/../secret'), undefined);
+});
+
+test('parseToolArtifact accepts a host path that still ends under sessions/', () => {
+  const ok = parseToolArtifact({
+    path: '/Users/x/.zeroclaw/users/ops/agents/deepseek/workspace/sessions/s1/r.html',
+    filename: 'r.html',
+    mime: 'text/html',
+    size: 4,
+  });
+  assert.equal(ok?.path, 'sessions/s1/r.html');
+});
+
+test('sortArtifactEntries puts html before scripts and folders', () => {
+  const names = sortArtifactEntries([
+    { kind: 'dir', name: 'scripts' },
+    { kind: 'file', name: 'analyze.py' },
+    { kind: 'file', name: '两热比对报告.html' },
+    { kind: 'file', name: 'data.xlsx' },
+    { kind: 'dir', name: 'uploads' },
+  ]).map((e) => e.name);
+  assert.deepEqual(names, ['两热比对报告.html', 'data.xlsx', 'analyze.py', 'scripts', 'uploads']);
 });
