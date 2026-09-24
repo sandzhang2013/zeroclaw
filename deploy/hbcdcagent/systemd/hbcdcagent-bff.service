@@ -22,6 +22,11 @@ Environment=USER_CENTER_CLIENT_ID=
 Environment=USER_CENTER_REALM=
 Environment=USER_CENTER_TERMINAL=Web
 Environment=HBCDCAGENT_BFF_OPS_USER_IDS=
+Environment=HBCDCAGENT_SSO_CLIENT_ID=
+Environment=HBCDCAGENT_SSO_KEY_B64=
+Environment=HBCDCAGENT_SSO_KEY_VERSION=1
+Environment=HBCDCAGENT_SSO_RATE_PER_MIN=
+Environment=HBCDCAGENT_BFF_FRAME_ANCESTORS=
 ExecStart=/usr/local/bin/hbcdcagent-bff
 Restart=on-failure
 
