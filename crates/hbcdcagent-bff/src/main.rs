@@ -11,6 +11,7 @@ mod error_page;
 mod identity;
 mod proxy;
 mod session;
+mod ticket;
 mod user_center;
 
 use crate::config::Config;
@@ -22,15 +23,16 @@ use crate::identity::{
 use crate::proxy::{AppState, fallback};
 use crate::session::{
     SessionStore, append_set_cookie, clear_cookie_header, clear_state_cookie_header, cookie_header,
-    sid_from_cookie_header, sso_state_matches,
+    sid_from_cookie_header, sso_state_matches, wants_embed_session,
 };
 use crate::user_center::{LoginFetchError, UserCenter};
 use anyhow::Context;
+use axum::Json;
 use axum::Router;
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Redirect, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use serde::Deserialize;
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -47,6 +49,14 @@ struct MockLoginQuery {
     user: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct TicketVerifyBody {
+    #[serde(default, rename = "clientId")]
+    client_id: String,
+    #[serde(default, rename = "verifyData")]
+    verify_data: String,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
@@ -57,7 +67,17 @@ async fn main() -> anyhow::Result<()> {
         .init();
     let cfg = Config::from_env()?;
     let listen = cfg.listen;
-    tracing::info!(%listen, upstream = %cfg.upstream, "hbcdcagent-bff starting");
+    if let Some(sso) = &cfg.ticket_sso {
+        tracing::info!(
+            %listen,
+            upstream = %cfg.upstream,
+            client_id = %sso.client_id,
+            key_version = sso.key_version,
+            "hbcdcagent-bff starting; alert ticket sso enabled"
+        );
+    } else {
+        tracing::info!(%listen, upstream = %cfg.upstream, "hbcdcagent-bff starting; alert ticket sso disabled");
+    }
     let listener = TcpListener::bind(listen)
         .await
         .with_context(|| format!("bind {listen}"))?;
@@ -74,6 +94,8 @@ pub(crate) fn router(cfg: Config) -> anyhow::Result<Router> {
         sessions: sessions.clone(),
         user_center: Arc::new(UserCenter::new(cfg.clone())?),
         http: crate::proxy::http_client(),
+        nonces: Arc::new(ticket::NonceStore::default()),
+        ticket_rate: Arc::new(ticket::RateWindow::default()),
         cfg,
     });
     Ok(Router::new()
@@ -81,6 +103,8 @@ pub(crate) fn router(cfg: Config) -> anyhow::Result<Router> {
         .route(Config::CALLBACK_PATH, get(callback))
         .route(Config::MOCK_PATH, get(mock_login))
         .route(Config::LOGOUT_PATH, get(logout).post(logout))
+        .route(Config::TICKET_VERIFY_PATH, post(verify_alert_ticket))
+        .route("/sso/auth/verify", post(verify_alert_ticket))
         .fallback(fallback)
         .with_state(state))
 }
@@ -91,6 +115,89 @@ async fn shutdown() {
 
 async fn health() -> &'static str {
     "ok"
+}
+
+async fn verify_alert_ticket(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<TicketVerifyBody>,
+) -> Response {
+    let caller = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("direct");
+    if let Some(sso) = state.cfg.ticket_sso.as_ref()
+        && !ticket::rate_ok(&state.ticket_rate, sso, caller)
+    {
+        return ticket_json(
+            StatusCode::TOO_MANY_REQUESTS,
+            ticket::CODE_RATE,
+            ticket::MSG_RATE,
+            None,
+        );
+    }
+    let cookie = headers.get(header::COOKIE).and_then(|v| v.to_str().ok());
+    let has_session = sid_from_cookie_header(cookie)
+        .and_then(|sid| state.sessions.get(&sid))
+        .is_some();
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let outcome = ticket::verify_ticket(
+        state.cfg.ticket_sso.as_ref(),
+        &body.client_id,
+        &body.verify_data,
+        now_ms,
+        &state.cfg.ops_user_ids,
+        &state.nonces,
+        has_session,
+    );
+    if outcome.code == ticket::CODE_DECRYPT || outcome.code == ticket::CODE_REPLAY {
+        tracing::warn!(code = outcome.code, client_id = %body.client_id, "alert ticket rejected");
+    } else if outcome.code != ticket::CODE_OK {
+        tracing::info!(code = outcome.code, client_id = %body.client_id, "alert ticket rejected");
+    }
+    let Some(identity) = outcome.identity else {
+        if outcome.code == ticket::CODE_OK {
+            return ticket_json(
+                StatusCode::OK,
+                ticket::CODE_OK,
+                ticket::MSG_OK,
+                Some(serde_json::json!({ "sessionEstablished": true })),
+            );
+        }
+        let status = if outcome.code == ticket::CODE_RATE {
+            StatusCode::TOO_MANY_REQUESTS
+        } else {
+            StatusCode::BAD_REQUEST
+        };
+        return ticket_json(status, outcome.code, outcome.msg, None);
+    };
+    tracing::info!(user_id = %identity.user_id, "alert ticket session created");
+    let user = ticket::public_user(&identity);
+    let sid = state.sessions.insert(identity, state.cfg.session_ttl);
+    let cookie = cookie_header(&sid, state.cfg.session_ttl, state.cfg.cookie_secure);
+    let mut data = serde_json::json!({
+        "user": user,
+        "sessionEstablished": true
+    });
+    if wants_embed_session(&headers) {
+        data["sessionId"] = serde_json::Value::String(sid);
+    }
+    let mut response = ticket_json(StatusCode::OK, ticket::CODE_OK, ticket::MSG_OK, Some(data));
+    append_set_cookie(&mut response, &cookie);
+    response
+}
+
+fn ticket_json(
+    status: StatusCode,
+    code: i32,
+    msg: &'static str,
+    data: Option<serde_json::Value>,
+) -> Response {
+    let body = serde_json::json!({ "code": code, "msg": msg, "data": data });
+    (status, Json(body)).into_response()
 }
 
 async fn mock_login(

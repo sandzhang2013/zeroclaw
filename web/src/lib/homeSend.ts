@@ -1,3 +1,4 @@
+import { stripProvideData } from './iframeAsk.ts';
 import type { Locale } from './locale.ts';
 import { sanitizeSessionTitle, stripSessionTitleTimestamp } from './workbenchSession.ts';
 
@@ -51,7 +52,7 @@ export function homeSessionTitle(input: {
 
 /** Sidebar / heading title from a stored user turn — never the skill wrapper or a date prefix. */
 export function titleFromUserMessage(raw: string, skillLabel?: string): string {
-  const parsed = parseHomeSkillDisplay(raw);
+  const parsed = parseHomeSkillDisplay(stripProvideData(raw));
   return homeSessionTitle({
     userText: parsed.visible,
     skillLabel: parsed.skillLabel ?? skillLabel,

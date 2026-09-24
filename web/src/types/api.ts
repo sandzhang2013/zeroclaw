@@ -32,6 +32,8 @@ export interface StatusResponse {
   restart_mode?: "supervised" | "self_respawn" | "manual";
   /** Command to show the operator for finishing an upgrade with a restart. */
   restart_hint?: string;
+  /** Configured `[agents.<alias>]` names. Workbench URL aliases resolve against this list. */
+  agents?: string[];
 }
 
 export interface ProcessStats {

@@ -4,6 +4,8 @@ import { ErrorBoundary } from '@/App';
 import ChatWorkspace from '@/pages/ChatWorkspace';
 import { WorkbenchLogin } from '@/components/WorkbenchLogin';
 import { t } from '@/lib/i18n';
+import { getStatus } from '@/lib/api';
+import { resolveWorkbenchAgentAlias } from '@/lib/workbenchAgent';
 import {
   clearMockUser,
   resolveWorkbenchUser,
@@ -14,8 +16,9 @@ import {
 /** Full-viewport three-column workbench, no dashboard rail or header. */
 export default function WorkbenchPage() {
   const { alias } = useParams<{ alias: string }>();
-  const initialAlias = alias ? decodeURIComponent(alias) : 'deepseek';
+  const requested = alias ? decodeURIComponent(alias) : undefined;
   const [user, setUser] = useState<PlatformUser | null>(() => resolveWorkbenchUser());
+  const [agentAlias, setAgentAlias] = useState<string | null>(null);
 
   useEffect(() => {
     if (user?.source === 'mock') saveMockUser(user);
@@ -24,6 +27,26 @@ export default function WorkbenchPage() {
   useEffect(() => {
     document.title = t('workbench.brand');
   }, []);
+
+  useEffect(() => {
+    if (!user) {
+      setAgentAlias(null);
+      return;
+    }
+    let cancelled = false;
+    getStatus()
+      .then((status) => {
+        if (!cancelled) {
+          setAgentAlias(resolveWorkbenchAgentAlias(requested, status.agents ?? []));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setAgentAlias(resolveWorkbenchAgentAlias(requested, []));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user, requested]);
 
   const enter = (next: PlatformUser) => {
     if (next.source === 'mock') saveMockUser(next);
@@ -43,12 +66,23 @@ export default function WorkbenchPage() {
     );
   }
 
+  if (!agentAlias) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center overflow-hidden bg-pc-base text-pc-text-muted">
+        <div
+          className="h-8 w-8 rounded-full animate-spin border-2"
+          style={{ borderColor: 'var(--pc-border)', borderTopColor: 'var(--pc-accent)' }}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-pc-base text-pc-text">
       <ErrorBoundary>
         <ChatWorkspace
-          key={user.userId}
-          initialAlias={initialAlias}
+          key={`${user.userId}:${agentAlias}`}
+          initialAlias={agentAlias}
           userId={user.userId}
           userName={user.displayName}
           userRole={user.role}

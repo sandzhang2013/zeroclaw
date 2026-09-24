@@ -5,8 +5,8 @@ use crate::identity::{
     IDENTITY_HEADERS, Identity, MOCK_COOKIE_NAME, mock_user, normalize_user_id,
 };
 use crate::session::{
-    STATE_TTL, SessionStore, append_set_cookie, cookie_value, sid_from_cookie_header,
-    state_cookie_header,
+    STATE_TTL, SessionStore, append_set_cookie, cookie_value, session_id_from_headers,
+    state_cookie_header, strip_embed_credentials,
 };
 use crate::user_center::UserCenter;
 use anyhow::Result;
@@ -37,17 +37,19 @@ pub struct AppState {
     pub sessions: Arc<SessionStore>,
     pub http: HttpClient,
     pub user_center: Arc<UserCenter>,
+    pub nonces: Arc<crate::ticket::NonceStore>,
+    pub ticket_rate: Arc<crate::ticket::RateWindow>,
 }
 
 pub fn identity_from_request(state: &AppState, headers: &HeaderMap) -> Option<Identity> {
-    let cookie = headers
-        .get(axum::http::header::COOKIE)
-        .and_then(|v| v.to_str().ok());
-    if let Some(sid) = sid_from_cookie_header(cookie)
+    if let Some(sid) = session_id_from_headers(headers)
         && let Some(id) = state.sessions.get(&sid)
     {
         return Some(id);
     }
+    let cookie = headers
+        .get(axum::http::header::COOKIE)
+        .and_then(|v| v.to_str().ok());
     mock_identity(&state.cfg, cookie)
 }
 
@@ -99,6 +101,7 @@ fn is_public_upstream(path: &str) -> bool {
 
 async fn proxy_http(state: Arc<AppState>, mut req: Request) -> Result<Response, Response> {
     let identity = identity_from_request(&state, req.headers());
+    strip_embed_credentials(req.headers_mut());
     strip_identity(req.headers_mut());
     match identity {
         Some(identity) => {
@@ -134,7 +137,7 @@ async fn forward_http(
     match state.http.request(req).await {
         Ok(resp) => {
             let resp = resp.map(Body::new).into_response();
-            Ok(inject_workbench_html(resp, identity).await)
+            Ok(inject_workbench_html(resp, identity, &state.cfg.frame_ancestors).await)
         }
         Err(err) => {
             tracing::warn!(error = %err, "upstream request failed");
@@ -232,7 +235,43 @@ fn inject_script_into_html(html: &str, script: &str) -> String {
     }
 }
 
-async fn inject_workbench_html(resp: Response, identity: Option<&Identity>) -> Response {
+pub(crate) fn apply_frame_policy(headers: &mut HeaderMap, ancestors: &[String]) {
+    if ancestors.is_empty() {
+        return;
+    }
+    headers.remove(header::X_FRAME_OPTIONS);
+    headers.insert(
+        HeaderName::from_static("cross-origin-resource-policy"),
+        HeaderValue::from_static("cross-origin"),
+    );
+    let allow = format!("frame-ancestors 'self' {}", ancestors.join(" "));
+    let Some(existing) = headers
+        .get(header::CONTENT_SECURITY_POLICY)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string)
+    else {
+        if let Ok(value) = HeaderValue::from_str(&allow) {
+            headers.insert(header::CONTENT_SECURITY_POLICY, value);
+        }
+        return;
+    };
+    let next = if existing.contains("frame-ancestors 'none'") {
+        existing.replace("frame-ancestors 'none'", &allow)
+    } else if existing.contains("frame-ancestors") {
+        existing
+    } else {
+        format!("{existing}; {allow}")
+    };
+    if let Ok(value) = HeaderValue::from_str(&next) {
+        headers.insert(header::CONTENT_SECURITY_POLICY, value);
+    }
+}
+
+async fn inject_workbench_html(
+    resp: Response,
+    identity: Option<&Identity>,
+    frame_ancestors: &[String],
+) -> Response {
     if !should_inject_html(resp.headers()) {
         return resp;
     }
@@ -247,9 +286,11 @@ async fn inject_workbench_html(resp: Response, identity: Option<&Identity>) -> R
     };
     let Ok(html) = std::str::from_utf8(&bytes) else {
         parts.headers.remove(header::CONTENT_LENGTH);
+        apply_frame_policy(&mut parts.headers, frame_ancestors);
         return Response::from_parts(parts, Body::from(bytes));
     };
     let injected = inject_script_into_html(html, &script);
+    apply_frame_policy(&mut parts.headers, frame_ancestors);
     parts.headers.remove(header::TRANSFER_ENCODING);
     if let Ok(len) = HeaderValue::from_str(&injected.len().to_string()) {
         parts.headers.insert(header::CONTENT_LENGTH, len);
@@ -263,6 +304,7 @@ async fn proxy_ws(state: Arc<AppState>, mut req: Request) -> Response {
     let Some(identity) = identity_from_request(&state, req.headers()) else {
         return unauthenticated(&state.cfg, req.uri().path());
     };
+    strip_embed_credentials(req.headers_mut());
     let target = match rewrite_uri(&state.cfg.upstream, req.uri()) {
         Ok(u) => u,
         Err(_) => return (StatusCode::BAD_GATEWAY, "bad upstream URI").into_response(),
@@ -580,5 +622,36 @@ mod tests {
         assert!(mock_identity(&cfg, Some("zeroclaw_mock_user=evil")).is_none());
         assert!(mock_identity(&cfg, Some("hbcdcagent_session=abc")).is_none());
         assert!(mock_identity(&cfg, None).is_none());
+    }
+
+    #[test]
+    fn frame_policy_replaces_deny_with_the_allowlist() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+        headers.insert(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static("default-src 'self'; frame-ancestors 'none'"),
+        );
+        headers.insert(
+            HeaderName::from_static("cross-origin-resource-policy"),
+            HeaderValue::from_static("same-origin"),
+        );
+        apply_frame_policy(&mut headers, &[]);
+        assert_eq!(headers.get(header::X_FRAME_OPTIONS).unwrap(), "DENY");
+        apply_frame_policy(&mut headers, &["http://alert.example".to_string()]);
+        assert!(headers.get(header::X_FRAME_OPTIONS).is_none());
+        let csp = headers
+            .get(header::CONTENT_SECURITY_POLICY)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(csp.contains("frame-ancestors 'self' http://alert.example"));
+        assert!(!csp.contains("frame-ancestors 'none'"));
+        assert_eq!(
+            headers
+                .get(HeaderName::from_static("cross-origin-resource-policy"))
+                .unwrap(),
+            "cross-origin"
+        );
     }
 }

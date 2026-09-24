@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::identity::Identity;
-use axum::http::{HeaderValue, header};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, header};
 use axum::response::Response;
 use parking_lot::Mutex;
 use std::collections::HashMap;
@@ -10,6 +10,11 @@ use uuid::Uuid;
 pub const COOKIE_NAME: &str = "hbcdcagent_session";
 pub const STATE_COOKIE_NAME: &str = "hbcdcagent_sso_state";
 pub const STATE_TTL: Duration = Duration::from_secs(600);
+/// In-memory session for a cross-site iframe. Not a cookie.
+pub const EMBED_SESSION_HEADER: &str = "x-hbcdcagent-session";
+/// `1` asks verify to return the session id in JSON for that iframe.
+pub const EMBED_REQUEST_HEADER: &str = "x-hbcdcagent-embed";
+pub const EMBED_WS_PROTOCOL_PREFIX: &str = "hbcs.";
 
 #[derive(Clone, Debug)]
 struct Entry {
@@ -72,6 +77,76 @@ pub fn clear_cookie_header(secure: bool) -> String {
 
 pub fn sid_from_cookie_header(header: Option<&str>) -> Option<String> {
     cookie_value(header, COOKIE_NAME)
+}
+
+pub fn accept_session_id(raw: &str) -> Option<&str> {
+    let sid = raw.trim();
+    if sid.len() == 36 && sid.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-') {
+        Some(sid)
+    } else {
+        None
+    }
+}
+
+pub fn session_id_from_headers(headers: &HeaderMap) -> Option<String> {
+    let cookie = headers.get(header::COOKIE).and_then(|v| v.to_str().ok());
+    if let Some(sid) = sid_from_cookie_header(cookie) {
+        return Some(sid);
+    }
+    if let Some(sid) = headers
+        .get(HeaderName::from_static(EMBED_SESSION_HEADER))
+        .and_then(|v| v.to_str().ok())
+        .and_then(accept_session_id)
+    {
+        return Some(sid.to_string());
+    }
+    headers
+        .get(header::SEC_WEBSOCKET_PROTOCOL)
+        .and_then(|v| v.to_str().ok())
+        .and_then(session_id_from_protocols)
+}
+
+pub fn wants_embed_session(headers: &HeaderMap) -> bool {
+    headers
+        .get(HeaderName::from_static(EMBED_REQUEST_HEADER))
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|value| value == "1")
+}
+
+/// Drop the iframe session from the upstream request after the BFF has read it.
+pub fn strip_embed_credentials(headers: &mut HeaderMap) {
+    headers.remove(HeaderName::from_static(EMBED_SESSION_HEADER));
+    let Some(raw) = headers
+        .get(header::SEC_WEBSOCKET_PROTOCOL)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string)
+    else {
+        return;
+    };
+    if !raw
+        .split(',')
+        .any(|part| part.trim().starts_with(EMBED_WS_PROTOCOL_PREFIX))
+    {
+        return;
+    }
+    let kept: Vec<&str> = raw
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty() && !part.starts_with(EMBED_WS_PROTOCOL_PREFIX))
+        .collect();
+    if kept.is_empty() {
+        headers.remove(header::SEC_WEBSOCKET_PROTOCOL);
+        return;
+    }
+    if let Ok(value) = HeaderValue::from_str(&kept.join(", ")) {
+        headers.insert(header::SEC_WEBSOCKET_PROTOCOL, value);
+    }
+}
+
+fn session_id_from_protocols(raw: &str) -> Option<String> {
+    raw.split(',')
+        .filter_map(|part| part.trim().strip_prefix(EMBED_WS_PROTOCOL_PREFIX))
+        .find_map(|sid| accept_session_id(sid).map(str::to_string))
 }
 
 pub fn state_cookie_header(state: &str, max_age: Duration, secure: bool) -> String {
@@ -224,5 +299,36 @@ mod tests {
         let sid = store.insert(id, Duration::from_millis(1));
         std::thread::sleep(Duration::from_millis(5));
         assert!(store.get(&sid).is_none());
+    }
+
+    #[test]
+    fn embed_header_and_ws_protocol_carry_the_session() {
+        let sid = "e34fe452-a307-4a82-ad9e-5d64d9146714";
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HeaderName::from_static(EMBED_SESSION_HEADER),
+            HeaderValue::from_str(sid).unwrap(),
+        );
+        assert_eq!(session_id_from_headers(&headers).as_deref(), Some(sid));
+        headers.insert(
+            header::SEC_WEBSOCKET_PROTOCOL,
+            HeaderValue::from_str(&format!("zeroclaw.v1, {EMBED_WS_PROTOCOL_PREFIX}{sid}"))
+                .unwrap(),
+        );
+        strip_embed_credentials(&mut headers);
+        assert!(
+            headers
+                .get(HeaderName::from_static(EMBED_SESSION_HEADER))
+                .is_none()
+        );
+        assert_eq!(
+            headers
+                .get(header::SEC_WEBSOCKET_PROTOCOL)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "zeroclaw.v1"
+        );
+        assert!(accept_session_id("not-a-session").is_none());
     }
 }

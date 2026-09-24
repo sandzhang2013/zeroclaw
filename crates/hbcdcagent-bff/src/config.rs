@@ -29,6 +29,10 @@ pub struct Config {
     pub local_mock: bool,
     /// Optional user-center logout URL. When set, `/hbcdcagent/auth/logout` redirects there after clearing cookies.
     pub logout_url: Option<String>,
+    /// 智能预警加密票据。未设置时验票接口拒绝，用户中心登录不受影响。
+    pub ticket_sso: Option<crate::ticket::TicketSso>,
+    /// Origins allowed to iframe the workbench. Empty keeps `frame-ancestors 'none'`.
+    pub frame_ancestors: Vec<String>,
 }
 
 impl Config {
@@ -73,6 +77,10 @@ impl Config {
                 .collect(),
             local_mock: env_flag("HBCDCAGENT_BFF_LOCAL_MOCK", false),
             logout_url: optional("USER_CENTER_LOGOUT_URL"),
+            ticket_sso: crate::ticket::TicketSso::from_env()?,
+            frame_ancestors: parse_frame_ancestors(
+                &env::var("HBCDCAGENT_BFF_FRAME_ANCESTORS").unwrap_or_default(),
+            )?,
         })
     }
 
@@ -82,6 +90,8 @@ impl Config {
     pub const CALLBACK_PATH: &'static str = "/hbcdcagent/auth/callback";
     pub const MOCK_PATH: &'static str = "/hbcdcagent/auth/mock";
     pub const LOGOUT_PATH: &'static str = "/hbcdcagent/auth/logout";
+    /// 智能预警票据验票。文档里的 `/sso/auth/verify` 在路由上另挂一份。
+    pub const TICKET_VERIFY_PATH: &'static str = "/hbcdcagent/sso/auth/verify";
 
     pub fn workbench_path() -> &'static str {
         "/hbcdcagent/workbench"
@@ -114,6 +124,8 @@ impl Config {
             ops_user_ids: vec!["ops-user".into()],
             local_mock: false,
             logout_url: None,
+            ticket_sso: None,
+            frame_ancestors: Vec::new(),
         }
     }
 
@@ -213,6 +225,50 @@ fn env_flag(name: &str, default: bool) -> bool {
     }
 }
 
+fn parse_frame_ancestors(raw: &str) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    for part in raw.split(|c: char| c == ',' || c.is_whitespace()) {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        if part == "*" || part.eq_ignore_ascii_case("self") || part.eq_ignore_ascii_case("'self'") {
+            bail!("HBCDCAGENT_BFF_FRAME_ANCESTORS rejects {part}");
+        }
+        let origin = normalize_frame_origin(part)?;
+        if !out.iter().any(|item| item == &origin) {
+            out.push(origin);
+        }
+    }
+    Ok(out)
+}
+
+fn normalize_frame_origin(raw: &str) -> Result<String> {
+    let uri: Uri = raw
+        .parse()
+        .with_context(|| format!("HBCDCAGENT_BFF_FRAME_ANCESTORS origin {raw}"))?;
+    let scheme = uri.scheme_str().unwrap_or("");
+    if scheme != "http" && scheme != "https" {
+        bail!("frame ancestor {raw} must be http or https");
+    }
+    let authority = uri
+        .authority()
+        .with_context(|| format!("frame ancestor {raw} needs a host"))?;
+    if authority.as_str().contains('@') {
+        bail!("frame ancestor {raw} must not include userinfo");
+    }
+    if uri.path() != "" && uri.path() != "/" {
+        bail!("frame ancestor {raw} must be an origin");
+    }
+    if uri.query().is_some() {
+        bail!("frame ancestor {raw} must be an origin");
+    }
+    Ok(format!(
+        "{scheme}://{}",
+        authority.as_str().to_ascii_lowercase()
+    ))
+}
+
 fn trim_slash(s: &str) -> String {
     s.trim().trim_end_matches('/').to_string()
 }
@@ -256,12 +312,20 @@ mod tests {
             local_mock: false,
             upstream_host: "127.0.0.1:42617".into(),
             logout_url: None,
+            ticket_sso: None,
+            frame_ancestors: Vec::new(),
         };
         let url = cfg.login_redirect().expect("url");
         assert!(url.contains(
             "redirectUrl=http%3A%2F%2F88.8.130.150%3A50001%2Fhbcdcagent%2Fauth%2Fcallback"
         ));
         assert!(url.contains("clientId=cid"));
+        assert!(parse_frame_ancestors("").unwrap().is_empty());
+        assert_eq!(
+            parse_frame_ancestors("http://Alert.Example:8080, http://alert.example:8080").unwrap(),
+            vec!["http://alert.example:8080".to_string()]
+        );
+        assert!(parse_frame_ancestors("*").is_err());
         let with_state = cfg
             .login_redirect_with_state(Some("abc-state"))
             .expect("url");

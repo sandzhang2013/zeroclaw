@@ -168,6 +168,21 @@ fn authenticate_ws_chat(
     }
 }
 
+/// Workbench URLs may carry a product nickname (`deepseek`) that is not an
+/// `[agents.*]` entry. Keep a single configured agent as the source of truth.
+fn resolve_configured_agent_alias(
+    config: &zeroclaw_config::schema::Config,
+    requested: &str,
+) -> Option<String> {
+    if config.agent(requested).is_some() {
+        return Some(requested.to_string());
+    }
+    if config.agent("default").is_some() {
+        return Some("default".to_string());
+    }
+    config.resolved_runtime_agent_alias().map(str::to_string)
+}
+
 /// GET /ws/chat — WebSocket upgrade for agent chat
 pub async fn handle_ws_chat(
     State(state): State<AppState>,
@@ -191,27 +206,28 @@ pub async fn handle_ws_chat(
         ws
     };
 
-    // Reject the upgrade up-front when the client didn't pick an agent.
-    // No default — every WS session is bound to an explicit agent.
-    let Some(agent_alias) = params.agent_alias.filter(|s| !s.trim().is_empty()) else {
+    let Some(requested_alias) = params.agent_alias.filter(|s| !s.trim().is_empty()) else {
         return (
             axum::http::StatusCode::BAD_REQUEST,
             "Missing required `agent` query parameter — pass `?agent=<alias>` matching a configured [agents.<alias>] entry.",
         )
             .into_response();
     };
-    {
+    let agent_alias = {
         let cfg = state.config.read();
-        if cfg.agent(&agent_alias).is_none() {
-            return (
-                axum::http::StatusCode::BAD_REQUEST,
-                format!(
-                    "Unknown agent `{agent_alias}` — no [agents.{agent_alias}] entry configured."
-                ),
-            )
-                .into_response();
+        match resolve_configured_agent_alias(&cfg, &requested_alias) {
+            Some(alias) => alias,
+            None => {
+                return (
+                    axum::http::StatusCode::BAD_REQUEST,
+                    format!(
+                        "Unknown agent `{requested_alias}` — no [agents.{requested_alias}] entry configured."
+                    ),
+                )
+                    .into_response();
+            }
         }
-    }
+    };
 
     let session_id = params.session_id;
     let session_name = params.name;
@@ -3105,6 +3121,28 @@ data: {\"type\":\"message_stop\"}\n\n",
             workspace_dir: None,
             user_id: Some("alice".into()),
         }
+    }
+
+    #[test]
+    fn resolve_configured_agent_alias_falls_back_to_default() {
+        use zeroclaw_config::schema::AliasedAgentConfig;
+
+        let mut config = zeroclaw_config::schema::Config::default();
+        assert_eq!(resolve_configured_agent_alias(&config, "deepseek"), None);
+        config
+            .agents
+            .insert("default".into(), AliasedAgentConfig::default());
+        assert_eq!(
+            resolve_configured_agent_alias(&config, "deepseek").as_deref(),
+            Some("default")
+        );
+        config
+            .agents
+            .insert("deepseek".into(), AliasedAgentConfig::default());
+        assert_eq!(
+            resolve_configured_agent_alias(&config, "deepseek").as_deref(),
+            Some("deepseek")
+        );
     }
 
     #[test]

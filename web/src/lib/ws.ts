@@ -5,6 +5,7 @@ import { isTauri } from './tauri';
 import { generateUUID } from './uuid';
 import { SESSION_ID_KEY_PREFIX, getOrCreateSessionId } from './sessionId';
 import { releaseWebSocket } from './ws.release';
+import { embedWsProtocol } from './iframeSession';
 import { sameOriginWebSocketUrl } from './wsUrl';
 
 export { getOrCreateSessionId, releaseWebSocket };
@@ -181,6 +182,8 @@ export class WebSocketClient {
 
     const protocols: string[] = ['zeroclaw.v1'];
     if (token) protocols.push(`bearer.${token}`);
+    const embedProtocol = embedWsProtocol();
+    if (embedProtocol) protocols.push(embedProtocol);
     this.ws = new WebSocket(url, protocols);
 
     this.ws.onopen = () => {

@@ -351,6 +351,7 @@ pub async fn handle_api_status(
         "allow_self_upgrade": config.gateway.allow_self_upgrade,
         "restart_mode": restart.mode.as_str(),
         "restart_hint": restart.hint,
+        "agents": config.agents.keys().cloned().collect::<Vec<String>>(),
     });
 
     Json(body).into_response()

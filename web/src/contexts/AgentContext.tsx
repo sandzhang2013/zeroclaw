@@ -10,6 +10,7 @@ import { persistSessionId } from '@/lib/sessionId';
 import { getActiveSessionId, newSessionId, setActiveSessionId } from '@/lib/chatSessions';
 import { generateUUID } from '@/lib/uuid';
 import { t } from '@/lib/i18n';
+import { WS_RECONNECT_GIVE_UP_MS, isNormalWsClose, wsDropBanner } from '@/lib/wsCloseBanner';
 import {
   ApiError,
   HttpError,
@@ -294,6 +295,7 @@ export function AgentProvider({
   // close may clear the banner; a stale close must not wipe an approval a
   // newer socket owns. See the onClose handler in attachSocketCallbacks.
   const approvalSocketVersionRef = useRef<number | null>(null);
+  const reconnectGiveUpRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const localMessageMutationVersionRef = useRef(0);
   // Rebuild callbacks intentionally retain the dependency shape already on
   // master. These mirrors still make their async work use the latest session
@@ -688,6 +690,10 @@ export function AgentProvider({
 
     ws.onOpen = () => {
       if (version !== wsVersionRef.current) return;
+      if (reconnectGiveUpRef.current) {
+        clearTimeout(reconnectGiveUpRef.current);
+        reconnectGiveUpRef.current = null;
+      }
       setConnected(true);
       setError(null);
 
@@ -748,9 +754,15 @@ export function AgentProvider({
         return;
       }
 
-      if (ev.code !== 1000 && ev.code !== 1001) {
-        setError(`${t('agent.connection_closed')} (code: ${ev.code}). ${t('agent.check_configuration')}.`);
+      if (isNormalWsClose(ev.code)) return;
+      setError(wsDropBanner(ev.code, 'reconnect', t));
+      if (reconnectGiveUpRef.current) {
+        clearTimeout(reconnectGiveUpRef.current);
       }
+      reconnectGiveUpRef.current = setTimeout(() => {
+        if (version !== wsVersionRef.current) return;
+        setError(wsDropBanner(ev.code, 'failed', t));
+      }, WS_RECONNECT_GIVE_UP_MS);
     };
 
     ws.onError = () => {
@@ -800,6 +812,10 @@ export function AgentProvider({
 
     return () => {
       clearTimeout(timer);
+      if (reconnectGiveUpRef.current) {
+        clearTimeout(reconnectGiveUpRef.current);
+        reconnectGiveUpRef.current = null;
+      }
       ws.disconnect();
       // switchModel and clearAllMessages replace the socket this effect
       // created. Before sessions were switchable the effect only re-ran on an

@@ -59,30 +59,45 @@
       id="unsupported-browser"
       style="display:none;margin:2rem auto;max-width:720px;padding:1rem 1.25rem;border:1px solid #7f1d1d;border-radius:0.75rem;background:#1f1414;color:#fecaca;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;line-height:1.5;"
     >
-      Your browser is not supported for the ZeroClaw web dashboard. Please use
-      Chrome 111+, Edge 111+, Firefox 113+, or Safari 16.2+.
+      当前浏览器可能无法完整体验工作台。请使用 Chrome 111+、Edge 111+、Firefox 113+ 或 Safari 16.2+。
     </div>
     <div id="root"></div>
     <script>
       (function () {
-        var supportsColorMix =
-          typeof CSS !== "undefined" &&
-          typeof CSS.supports === "function" &&
-          CSS.supports("color", "color-mix(in srgb, red 50%, blue)");
-        var supportsStructuredClone = typeof structuredClone === "function";
-        var root = document.getElementById("root");
-        var banner = document.getElementById("unsupported-browser");
-
-        if (!supportsColorMix || !supportsStructuredClone) {
-          document.documentElement.setAttribute("data-unsupported-browser", "1");
-          if (root) {
-            root.style.display = "none";
+        // Keep probes in sync with web/src/lib/browserSupport.ts.
+        function supportsColorMix() {
+          if (typeof CSS === "undefined" || typeof CSS.supports !== "function") {
+            return false;
           }
-          if (banner) {
-            banner.style.display = "block";
+          try {
+            return (
+              CSS.supports("color: color-mix(in srgb, #f00 50%, #00f)") ||
+              CSS.supports("color", "color-mix(in srgb, #f00 50%, #00f)") ||
+              CSS.supports("color: color-mix(in srgb, red 50%, blue)") ||
+              CSS.supports("color", "color-mix(in srgb, red 50%, blue)")
+            );
+          } catch (e) {
+            return false;
           }
         }
+        if (typeof structuredClone !== "function") {
+          try {
+            window.structuredClone = function (value) {
+              return JSON.parse(JSON.stringify(value));
+            };
+          } catch (e2) {}
+        }
+        var banner = document.getElementById("unsupported-browser");
+        if (!supportsColorMix() && banner) {
+          banner.style.display = "block";
+        }
       })();
+    </script>
+    <script>
+      // Load the parent/child bridge only when this page is framed or opened as a popup.
+      if (window.parent !== window || window.opener) {
+        document.write('<script src="/_app/iframe-bridge.js"><' + '/script>');
+      }
     </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>

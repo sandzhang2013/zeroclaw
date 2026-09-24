@@ -72,6 +72,26 @@ Required environment (secrets stay out of git and out of
 - `USER_CENTER_BASE_URL`, `USER_CENTER_APP_ID`, `USER_CENTER_APP_KEY`,
   `USER_CENTER_APP_SECRET`
 
+Alert-system encrypted tickets (AES-256-GCM, separate from user-center SM4)
+are optional. Set both `HBCDCAGENT_SSO_CLIENT_ID` and `HBCDCAGENT_SSO_KEY_B64`
+(32-byte key, standard Base64). `HBCDCAGENT_SSO_KEY_VERSION` defaults to `1`.
+The BFF reads them at startup and serves `POST /hbcdcagent/sso/auth/verify`
+(also `POST /sso/auth/verify`). A valid ticket creates the same
+`hbcdcagent_session` cookie. Leave both variables unset to keep the endpoint
+closed. Do not put the key in `config.toml` or git.
+
+When 智能预警 embeds the workbench, the page loads `docs/集成/iframe-bridge.js`
+(copied to `/_app/iframe-bridge.js` at build time) only inside an iframe or
+popup. The parent sends `ai:ask`; the workbench collapses the session
+sidebar, sends `content` immediately, and keeps `provideData` out of the
+visible transcript. It answers with `{ accepted, sessionId, mode: "new" }`
+and later emits `ai:done`. Set `HBCDCAGENT_BFF_FRAME_ANCESTORS` to the
+parent origins (`https://alert.example`, comma-separated). An empty value
+keeps `frame-ancestors 'none'`. Do not use `*`. Cross-site iframes on
+plain HTTP cannot store the `SameSite=Lax` cookie; the verify response
+then includes `sessionId` only when the page sends `X-Hbcdcagent-Embed: 1`,
+and the workbench keeps that id in memory.
+
 Optional demo mode: set `HBCDCAGENT_BFF_LOCAL_MOCK=true` to skip SSO and
 derive the identity from a `zeroclaw_mock_user` cookie instead. Allowed
 ids: `chenmin`, `liuyang`, `zhoujing`, `ops` (`MOCK_USERS` in

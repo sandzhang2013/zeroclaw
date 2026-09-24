@@ -49,6 +49,7 @@ import { ChatImagePreview } from '@/components/ChatImagePreview';
 import { sanitizeSessionTitle, stripSessionTitleTimestamp } from '@/lib/workbenchSession';
 import { composeOutlineContinuePrompt, shouldShowOutlineEditButton } from '@/lib/outlineDraft';
 import { parseHomeSkillDisplay, titleFromUserMessage, type HomeSkillRef } from '@/lib/homeSend';
+import { stripProvideData } from '@/lib/iframeAsk';
 import { HomeSkillChip } from '@/components/HomeSkillChip';
 import {
   draftPersonalSkill,
@@ -1339,9 +1340,14 @@ function messageModelText(msg: ChatMessage | undefined): string {
   return msg.role === 'user' ? displayUploadMessage(cleanContent) : cleanContent;
 }
 
+function visibleModelText(msg: ChatMessage | undefined): string {
+  const raw = messageModelText(msg);
+  return msg?.role === 'user' ? stripProvideData(raw) : raw;
+}
+
 function messageDisplayText(msg: ChatMessage | undefined): string {
   if (!msg) return '';
-  const raw = messageModelText(msg);
+  const raw = visibleModelText(msg);
   if (msg.role === 'user') return parseHomeSkillDisplay(raw).visible;
   if (msg.role !== 'agent') return raw;
   return splitChatHtmlBlocks(stripImageMarkers(raw)).markdown;
@@ -1359,7 +1365,7 @@ function MessageBody({
   hideImageCaption: boolean;
 }) {
   const isUser = msg.role === 'user';
-  const raw = messageModelText(msg);
+  const raw = visibleModelText(msg);
   const attached = isUser ? parseHomeSkillDisplay(raw) : null;
   const shownContent = isUser ? (attached?.visible ?? '') : messageDisplayText(msg);
   const userLong = isUser && (shownContent.includes('\n') || shownContent.length > 40);
@@ -1418,7 +1424,7 @@ const MessageItem = memo(function MessageItem({
   const shownContent = rows.map(messageDisplayText).filter((text) => text.trim()).join('\n\n');
   const groupHasProse = rows.some((row) => !row.toolCall && (
     messageDisplayText(row).trim()
-    || Boolean(parseHomeSkillDisplay(messageModelText(row)).skillLabel)
+    || Boolean(parseHomeSkillDisplay(visibleModelText(row)).skillLabel)
   ));
   const isUser = msg.role === 'user';
   const userLong = isUser && (shownContent.includes('\n') || shownContent.length > 40);

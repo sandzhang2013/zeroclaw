@@ -17,6 +17,12 @@ import { basePath } from '@/lib/basePath';
 import { DEFAULT_FOLDER_ID, type WorkbenchFolder, type WorkbenchSession } from '@/pages/ChatWorkspace';
 import { canOpenDashboard, roleI18nKey } from '@/lib/platformUser';
 import { sanitizeSessionTitle, sessionDisplayTitle } from '@/lib/workbenchSession';
+import {
+  isFolderExpanded,
+  readFolderNav,
+  writeFolderNav,
+  type FolderNavState,
+} from '@/lib/workbenchFolderNav';
 
 export interface SessionIndicator {
   streaming: boolean;
@@ -43,6 +49,7 @@ export interface WorkbenchSidebarProps {
   onSwitchUser?: () => void;
   onOpenMySkills?: () => void;
   skillsOpen?: boolean;
+  userId?: string;
 }
 
 const WORKBENCH_VERSION = '0.6.2';
@@ -100,10 +107,12 @@ export function WorkbenchSidebar({
   onSwitchUser,
   onOpenMySkills,
   skillsOpen = false,
+  userId,
 }: WorkbenchSidebarProps) {
-  const [projectsOpen, setProjectsOpen] = useState(true);
-  const [tasksOpen, setTasksOpen] = useState(true);
-  const [folderOpen, setFolderOpen] = useState<Record<string, boolean>>({});
+  const [nav, setNav] = useState<FolderNavState>(() => readFolderNav(userId));
+  const projectsOpen = nav.projectsOpen;
+  const tasksOpen = nav.tasksOpen;
+  const folderOpen = nav.folderOpen;
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [folderDraft, setFolderDraft] = useState('');
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -115,6 +124,7 @@ export function WorkbenchSidebar({
   const sessionRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const mac = isMacPlatform();
   const [now, setNow] = useState(() => Date.now());
+  const skipFolderNavWrite = useRef(true);
 
   useEffect(() => {
     if (creatingFolder) folderInputRef.current?.focus();
@@ -131,6 +141,19 @@ export function WorkbenchSidebar({
     const id = window.setInterval(() => setNow(Date.now()), 30_000);
     return () => window.clearInterval(id);
   }, []);
+
+  useEffect(() => {
+    skipFolderNavWrite.current = true;
+    setNav(readFolderNav(userId));
+  }, [userId]);
+
+  useEffect(() => {
+    if (skipFolderNavWrite.current) {
+      skipFolderNavWrite.current = false;
+      return;
+    }
+    writeFolderNav(userId, nav);
+  }, [userId, nav]);
 
   const displayName = userName?.trim() || t('workbench.user_fallback');
   const roleLabel = userRole ? t(roleI18nKey(userRole)) : '';
@@ -307,7 +330,7 @@ export function WorkbenchSidebar({
             <div className="group/projects-header relative flex items-center justify-between p-2 shrink-0">
               <button
                 type="button"
-                onClick={() => setProjectsOpen((v) => !v)}
+                onClick={() => setNav((n) => ({ ...n, projectsOpen: !n.projectsOpen }))}
                 className="flex flex-1 items-center gap-2 text-xs font-medium text-pc-text-muted hover:text-pc-text"
               >
                 {t('workbench.folders')}
@@ -318,7 +341,7 @@ export function WorkbenchSidebar({
                 onClick={() => {
                   folderCommittedRef.current = false;
                   setCreatingFolder(true);
-                  setProjectsOpen(true);
+                  setNav((n) => ({ ...n, projectsOpen: true }));
                 }}
                 aria-label={t('workbench.new_folder')}
                 title={t('workbench.new_folder')}
@@ -345,13 +368,16 @@ export function WorkbenchSidebar({
                 )}
                 {projectFolders.map((folder) => {
                   const kids = sessions.filter((s) => s.folderId === folder.id).slice().sort(byNewest);
-                  const open = folderOpen[folder.id] !== false;
+                  const open = isFolderExpanded(folderOpen, folder.id);
                   return (
                     <div key={folder.id}>
                       <button
                         type="button"
                         onClick={() => {
-                          setFolderOpen((prev) => ({ ...prev, [folder.id]: !open }));
+                          setNav((n) => ({
+                            ...n,
+                            folderOpen: { ...n.folderOpen, [folder.id]: !open },
+                          }));
                           onSelectFolder(folder.id);
                         }}
                         className={['flex items-center', CARD].join(' ')}
@@ -374,7 +400,7 @@ export function WorkbenchSidebar({
               <button
                 type="button"
                 onClick={() => {
-                  setTasksOpen((v) => !v);
+                  setNav((n) => ({ ...n, tasksOpen: !n.tasksOpen }));
                   onSelectFolder(DEFAULT_FOLDER_ID);
                 }}
                 className="flex flex-1 items-center gap-2 text-xs font-medium text-pc-text-muted hover:text-pc-text"

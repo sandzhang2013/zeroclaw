@@ -1007,3 +1007,20 @@ test('session switch disconnects both the effect-owned and replacement sockets',
     message.content === 'stale replacement'), false);
   await unmount(mounted.renderer);
 });
+
+test('abnormal socket close shows reconnect copy instead of a config error', async () => {
+  const { t } = await import('../lib/i18n.ts');
+  const runtime = new FakeSessionRuntime();
+  runtime.queueMessages('A', () => Promise.resolve(messagesResponse('A', true)));
+  const mounted = await mountChat(runtime);
+  await openSocket(runtime, 0);
+  assert.equal(mounted.context().error, null);
+
+  await act(async () => { runtime.sockets[0]!.emitClose(1006); });
+  assert.equal(mounted.context().error, t('agent.connection_error'));
+  assert.equal(mounted.context().error?.includes('configuration'), false);
+
+  await openSocket(runtime, 0);
+  assert.equal(mounted.context().error, null);
+  await unmount(mounted.renderer);
+});

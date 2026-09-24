@@ -17,6 +17,7 @@ import type {
 import type { components } from "./api-generated";
 import { clearToken, getToken, setToken } from "./auth";
 import { apiOrigin, basePath, gatewayUrl } from "./basePath";
+import { applyEmbedSession } from "./iframeSession";
 import type { HomeCatalogEdit, HomeTabEdit, WorkbenchHomeCatalog } from "./workbenchHomeCatalog";
 import { normalizeHomeCatalog, normalizeHomeCatalogEdit } from "./homeCatalogEdit";
 
@@ -136,6 +137,7 @@ export async function apiFetch<T = unknown>(
     if (token) {
       headers.set("Authorization", `Bearer ${token}`);
     }
+    applyEmbedSession(headers);
     if (
       options.body &&
       typeof options.body === "string" &&
@@ -778,6 +780,7 @@ export async function putPersonalityFile(
   const token = getToken();
   const headers = new Headers({ "Content-Type": "application/json" });
   if (token) headers.set("Authorization", `Bearer ${token}`);
+  applyEmbedSession(headers);
   const response = await fetch(`${apiOrigin}${basePath}${url}`, {
     method: "PUT",
     headers,
@@ -1519,6 +1522,7 @@ export async function uploadAgentWorkspaceFile(
   const token = getToken();
   const headers = new Headers();
   if (token) headers.set("Authorization", `Bearer ${token}`);
+  applyEmbedSession(headers);
   headers.set("Content-Type", body.type || "application/octet-stream");
   const url = `${apiOrigin}${basePath}/api/agents/${encodeURIComponent(alias)}/workspace/upload?path=${encodeURIComponent(path)}`;
   const response = await fetch(url, { method: "POST", headers, body });

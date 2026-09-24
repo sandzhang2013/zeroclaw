@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-page-node-id="ETj0iItcYXj3n0oG892AXE">
+<head data-page-node-id="7AkkOA3TsGXSuPEmJn7e0N">
+<meta charset="UTF-8" data-page-node-id="7Hy36Df68OMRpzaQlxWeU0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0" data-page-node-id="mZX7NgftfAxKWwftEnFURC">
+<title>智能预警 × 智算疾控 跨域免登集成方案</title>
+<style>
+  :root{
+    --primary:#2563eb; --primary-dark:#1e40af; --primary-light:#eff6ff;
+    --accent:#0d9488; --accent-light:#f0fdfa;
+    --danger:#dc2626; --warn:#d97706; --ok:#16a34a;
+    --text:#1f2937; --text-light:#6b7280; --border:#e5e7eb; --bg:#f8fafc;
+    --code-bg:#0f172a; --code-text:#e2e8f0;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{font-family:"PingFang SC","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;color:var(--text);background:var(--bg);line-height:1.75;font-size:15px;}
+  .container{max-width:1100px;margin:0 auto;padding:0 24px 80px;}
+  /* ===== 封面头部 ===== */
+  .header{background:linear-gradient(135deg,#1e3a8a 0%,#2563eb 55%,#0d9488 100%);color:#fff;padding:52px 0 44px;margin-bottom:32px;}
+  .header-inner{max-width:1100px;margin:0 auto;padding:0 24px;}
+  .header .tag{display:inline-block;background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.35);border-radius:20px;padding:2px 14px;font-size:13px;letter-spacing:2px;margin-bottom:14px;}
+  .header h1{font-size:30px;font-weight:700;letter-spacing:1px;margin-bottom:10px;}
+  .header .sub{font-size:15px;opacity:.92;}
+  .header .meta{display:flex;flex-wrap:wrap;gap:10px 28px;margin-top:24px;font-size:13px;}
+  .header .meta span{background:rgba(255,255,255,.12);padding:4px 12px;border-radius:6px;}
+  /* ===== 目录 ===== */
+  .toc{background:#fff;border:1px solid var(--border);border-radius:12px;padding:22px 26px;margin-bottom:36px;box-shadow:0 1px 3px rgba(0,0,0,.05);}
+  .toc h2{font-size:16px;margin-bottom:12px;color:var(--primary-dark);display:flex;align-items:center;gap:8px;}
+  .toc ol{list-style:none;display:grid;grid-template-columns:repeat(2,1fr);gap:6px 32px;}
+  .toc a{color:var(--text);text-decoration:none;font-size:14px;display:block;padding:3px 0;border-bottom:1px dashed transparent;}
+  .toc a:hover{color:var(--primary);border-bottom-color:var(--primary);}
+  .toc .num{color:var(--primary);font-weight:700;margin-right:8px;font-family:Consolas,monospace;}
+  /* ===== 章节卡片 ===== */
+  section{background:#fff;border:1px solid var(--border);border-radius:12px;padding:30px 34px;margin-bottom:28px;box-shadow:0 1px 3px rgba(0,0,0,.05);scroll-margin-top:20px;}
+  section h2{font-size:21px;color:var(--primary-dark);padding-bottom:12px;margin-bottom:18px;border-bottom:2px solid var(--primary-light);display:flex;align-items:center;gap:10px;}
+  section h2 .idx{background:var(--primary);color:#fff;border-radius:8px;min-width:34px;height:34px;display:inline-flex;align-items:center;justify-content:center;font-size:16px;font-family:Consolas,monospace;}
+  section h3{font-size:17px;color:#0f172a;margin:26px 0 12px;padding-left:10px;border-left:4px solid var(--accent);}
+  section h4{font-size:15px;color:var(--text);margin:18px 0 8px;}
+  p{margin-bottom:12px;}
+  ul,ol{margin:0 0 14px 22px;}
+  li{margin-bottom:6px;}
+  strong{color:#0f172a;}
+  code.inline{background:#eef2ff;color:#4338ca;border-radius:4px;padding:1px 6px;font-size:13px;font-family:"SF Mono",Consolas,Menlo,monospace;}
+  /* ===== 表格 ===== */
+  table{width:100%;border-collapse:collapse;margin:14px 0 20px;font-size:14px;}
+  th{background:var(--primary);color:#fff;padding:10px 12px;text-align:left;font-weight:600;white-space:nowrap;}
+  td{padding:9px 12px;border-bottom:1px solid var(--border);vertical-align:top;}
+  tr:nth-child(even) td{background:#f9fafb;}
+  table.plain th{background:#f1f5f9;color:#0f172a;border-bottom:2px solid #cbd5e1;}
+  /* ===== 提示框 ===== */
+  .callout{border-radius:8px;padding:14px 18px;margin:14px 0;border-left:5px solid;font-size:14px;}
+  .callout.info{background:var(--primary-light);border-color:var(--primary);}
+  .callout.warn{background:#fffbeb;border-color:var(--warn);}
+  .callout.danger{background:#fef2f2;border-color:var(--danger);}
+  .callout.ok{background:#f0fdf4;border-color:var(--ok);}
+  .callout .t{font-weight:700;margin-bottom:4px;display:block;}
+  /* ===== 代码块 ===== */
+  pre{background:var(--code-bg);color:var(--code-text);border-radius:10px;padding:18px 20px;overflow-x:auto;font-size:13px;line-height:1.6;font-family:"SF Mono",Consolas,Menlo,monospace;margin:12px 0 18px;}
+  pre .c{color:#94a3b8;} pre .k{color:#93c5fd;} pre .s{color:#86efac;} pre .n{color:#fcd34d;} pre .a{color:#f0abfc;}
+  /* ===== 角色徽标 ===== */
+  .sysA{display:inline-block;background:#dbeafe;color:#1e40af;border-radius:5px;padding:1px 8px;font-size:12.5px;font-weight:700;}
+  .sysB{display:inline-block;background:#ccfbf1;color:#0f766e;border-radius:5px;padding:1px 8px;font-size:12.5px;font-weight:700;}
+  /* ===== 时序图容器 ===== */
+  .seq-wrap{background:#fff;border:1px solid var(--border);border-radius:10px;padding:16px 8px;margin:16px 0;overflow-x:auto;}
+  svg text{font-family:"PingFang SC","Microsoft YaHei",sans-serif;}
+  .footer-note{text-align:center;color:var(--text-light);font-size:13px;margin-top:30px;}
+  .badge{display:inline-block;border-radius:12px;padding:2px 12px;font-size:12px;font-weight:700;}
+  .badge-high{background:#f0fdf4;color:var(--ok);border:1px solid #86efac;}
+  .badge-mid{background:#fffbeb;color:var(--warn);border:1px solid #fcd34d;}
+  .badge-low{background:#fef2f2;color:var(--danger);border:1px solid #fca5a5;}
+  @media (max-width:760px){ .toc ol{grid-template-columns:1fr;} section{padding:20px;} }
+</style>
+</head>
+<body data-page-node-id="ftW3guGCUhhszLUQ84tArK">
+
+<div class="header" data-page-node-id="FZwumttTSVJIlxUjSArkN7">
+  <div class="header-inner" data-page-node-id="4l3kIwKPNAT76ftATeIDae">
+    <span class="tag" data-page-node-id="33p7kvGJKHbxbhIMaiMpHf">系统集成方案 · V1.0</span>
+    <h1 data-page-node-id="f4nRoEDUWwkFtqhEuHMGmS">智能预警（A） × 智算疾控（B）跨域免登集成方案</h1>
+    <div class="sub" data-page-node-id="p88V3yYMkh9ysQPPDS7AmW">基于 URL 参数（clientId + verifyData）的加密票据式跨域身份传递与免登设计</div>
+    <div class="meta" data-page-node-id="ulZ8Vvq0U2UndF5u7wjrY6">
+      <span data-page-node-id="zV11xFolC5gysaUiejBZaf">📅 版本：V1.0（评审稿）</span>
+      <span data-page-node-id="K6VQuAG7eqDQqnboFtlefD">🗓️ 日期：2026-08-31</span>
+      <span data-page-node-id="97Ih8U7cYYIxcqwwM9s2kl">🔐 安全基线：HTTPS + AES-256-GCM + 防重放</span>
+      <span data-page-node-id="iY26uEhGHIcWxmsEnyvaqa">👥 读者：A 方开发 / B 方开发 / 双方架构 & 安全</span>
+    </div>
+  </div>
+</div>
+
+<div class="container" data-page-node-id="EAAw9ZgWDej6Hl1D2lBL53">
+
+<!-- ============ 目录 ============ -->
+<div class="toc" data-page-node-id="wuURZ6BbpblXbegcLOTXbS">
+  <h2 data-page-node-id="obflZ954yibwhZlXpJWoAN">📑 文档目录</h2>
+  <ol data-page-node-id="fsUlTLkiSEK0Q9nh3yM1sW">
+    <li data-page-node-id="MOfHpapF6CyrCWxES0GQsw"><a href="#s1" data-page-node-id="Iw0RJFsoONBx1moGxE3jfj"><span class="num" data-page-node-id="ETkJvZARRLHG4FcMSh7FV8">01</span>背景与集成目标</a></li>
+    <li data-page-node-id="HFwxxDZvTzMMyBxTBYQyoh"><a href="#s2" data-page-node-id="BbOx2RyGD4G0ongjewFu0Q"><span class="num" data-page-node-id="DWsZGNWhW5tMMW57vmNmx0">02</span>角色职责与术语定义</a></li>
+    <li data-page-node-id="hiytyk52tTHuUvmAFrafqm"><a href="#s3" data-page-node-id="GqxMK2YID8gwMTzkM2BWqc"><span class="num" data-page-node-id="Xw6pqyFCbcnSbP2QpDSOha">03</span>总体架构与完整时序</a></li>
+    <li data-page-node-id="CEnMg6Pc6ADjdkVJ2Q0shE"><a href="#s4" data-page-node-id="vvxfbTkvIZ4xMCvkPvEvoy"><span class="num" data-page-node-id="J7sRe1fytGwnRS81rsCpnM">04</span>密钥与客户端（clientId）管理规范</a></li>
+    <li data-page-node-id="1GRGaHgPMeYxbeQOxO233T"><a href="#s5" data-page-node-id="noEYPf3MODMzdwAMqS27bI"><span class="num" data-page-node-id="G7wyHl6KazombKg8fGLi4q">05</span>数据加密规范（verifyData）</a></li>
+    <li data-page-node-id="9kcns1T9SREAxx3JXDCTmw"><a href="#s6" data-page-node-id="WHGDx7GbkhElzh2spiR10y"><span class="num" data-page-node-id="gIlXkiBGUFigKCH8OokAxU">06</span>接口详细设计（A 加密 / B 验证）</a></li>
+    <li data-page-node-id="UYowZlbXNR1E0RTcgyFCzy"><a href="#s7" data-page-node-id="RpoTXvJJeQK5sI8G81gyvT"><span class="num" data-page-node-id="qLOG2zWnLhP7BdylzanSge">07</span>B 系统前端拦截与会话初始化</a></li>
+    <li data-page-node-id="qCuGxXO7Oo6OwQEPmfQtaP"><a href="#s8" data-page-node-id="YhJQcmHGeS4YqDChdInTLv"><span class="num" data-page-node-id="Gh2uZZnl6Duda4CxIZcdi9">08</span>时效控制与防重放设计</a></li>
+    <li data-page-node-id="KLSb5IP0CLJLLwAx2KuQOO"><a href="#s9" data-page-node-id="eSXoA1KDqz76NAb6UlKAlG"><span class="num" data-page-node-id="3iGwMdvNKSgOplqPgZyqdy">09</span>安全强度评估（威胁矩阵）</a></li>
+    <li data-page-node-id="tUcCxSdXZA2z1l68Qi1u2X"><a href="#s10" data-page-node-id="AaW0bwtNA17r65KMtICx8Z"><span class="num" data-page-node-id="nK5R2LjLfDGhitnzfUtE6r">10</span>注意事项与双方开发约定</a></li>
+    <li data-page-node-id="EK9JiAF65GaYD40W1LyxM1"><a href="#s11" data-page-node-id="3yJ3kvHV4BQUL3hf58Lua1"><span class="num" data-page-node-id="RZBrQ6bsaZYq0Gr1T2Jlnz">11</span>联调测试用例清单</a></li>
+    <li data-page-node-id="cdwrLelFYjvtbwOMCG4Laj"><a href="#s12" data-page-node-id="MQmc4HBhQ85mEoPe0H1LPs"><span class="num" data-page-node-id="N8HNlQfwpggUnd3afO3hQF">12</span>上线检查清单</a></li>
+    <li data-page-node-id="IB9FuG4LYAANQBhvGSfxux"><a href="#s13" data-page-node-id="TGiHCVD3fxtceXKiPVjIbf"><span class="num" data-page-node-id="Wqohi0eXv7Ia61DUN8sbrk">A</span>附录：Java 参考实现（AES-256-GCM）</a></li>
+  </ol>
+</div>
+
+<!-- ============ 01 背景与目标 ============ -->
+<section id="s1" data-page-node-id="HhylBCVuZG2ypeRmJCbqk3">
+  <h2 data-page-node-id="yWqgNOxXgRYGmKRKrWxbdg"><span class="idx" data-page-node-id="Hy6KrwEOd5FPnEXiLgCMsc">01</span>背景与集成目标</h2>
+  <h3 data-page-node-id="Y6TuUa0d8Y6LPwNAPKPJfX">1.1 系统现状</h3>
+  <table data-page-node-id="IsPSOZhRReBkOMVJUkOwFN">
+    <tr data-page-node-id="2Nzg7nasmBXXJSM6i5Sxzq"><th data-page-node-id="5nVoL8PS7ZbXXiSPEBSPOC">系统</th><th data-page-node-id="GZKOL9DkG3NdegbY5748aI">名称</th><th data-page-node-id="ygW3WCMqPkBJY773jssLJA">架构</th><th data-page-node-id="Q9CDClcHe7ce64P5GsxBDJ">域名</th><th data-page-node-id="V1UhACXX1K1RD6dOjLIfmV">角色定位</th></tr>
+    <tr data-page-node-id="AUEdiRitE9pgq9pL3QfRZt"><td data-page-node-id="1ld9SKTdDtZfcMgPWBJN4C"><span class="sysA" data-page-node-id="NY17Vd401yidxUvZIPYmJV">系统 A</span></td><td data-page-node-id="tAmZnlbHPvsT2xiEI51jfX">智能预警</td><td data-page-node-id="L5MFfuONE91g53eiqEW6yy">B/S</td><td data-page-node-id="Wrb9kN0hF3fDSMd3eEjFZ5">独立域名（与 B 非同域）</td><td data-page-node-id="LLJRPqZcGsaVPDmAswlMXA">用户登录入口 / 集成发起方</td></tr>
+    <tr data-page-node-id="ukWd1uHIoty5nApD2ACVzJ"><td data-page-node-id="Wwb1jwd1HGiQkCRk1r78x6"><span class="sysB" data-page-node-id="On6iHo9sf5GQxzzv1NZEub">系统 B</span></td><td data-page-node-id="btdCLLTetPZ9TGaAe1UfH0">智算疾控</td><td data-page-node-id="aCkZ8U0YXSStADuIx52Rbw">B/S</td><td data-page-node-id="YfFZ66SYtIhyNLRIJRNAHK">独立域名（与 A 非同域）</td><td data-page-node-id="jpbq2zodHqPH6oOC1oLMyE">被嵌入 / 被跳转方（能力提供方）</td></tr>
+  </table>
+  <h3 data-page-node-id="8rzp8NYoqZpQv89vFyX7nr">1.2 集成目标</h3>
+  <ol data-page-node-id="ce9bryEEiKx7MWUPUHIsaO">
+    <li data-page-node-id="BtW51WvnSOAS5IzUoEy1Fp">用户在 <span class="sysA" data-page-node-id="0mQizmVnSQuFiKWnTWdXEP">A</span> 内登录后，通过<strong data-page-node-id="lgE68KaCbPlFulPD5ZHLzg">页面跳转</strong>或 <strong data-page-node-id="gBHtVGSLqJAgko3XRGCluc">iframe 嵌入</strong>方式访问 <span class="sysB" data-page-node-id="QJXxrXDpEwK7XiGJmM667z">B</span> 的功能页面，<strong data-page-node-id="7gFrioP88Jidws1NmiBoUJ">无需在 B 重复登录（免登）</strong>；</li>
+    <li data-page-node-id="qdTOoNqca7A4gQOdx8BU98">跨域传递 A 侧用户身份与上下文信息（用户 ID、用户名、租户 ID、租户编码、所属区域、备注信息），<strong data-page-node-id="zEmwkV7U4zKTFVCutmCmOU">全程密文传输，禁止明文</strong>；</li>
+    <li data-page-node-id="5DTticXjQ9QLQhKZpR8Djv">采用 URL 参数方式传递：<code class="inline" data-page-node-id="Cs887bPh0C42fMwaUZJUl8">clientId</code>（客户端标识）+ <code class="inline" data-page-node-id="fRlUgc3hbbJ7PXiIaz3c4t">verifyData</code>（加密数据）；</li>
+    <li data-page-node-id="lJwNFh1ZuDKpmk5Cg6ZrVo">加密能力由 <strong data-page-node-id="Tk6uCsmyWTfrr0UnztxI5G">A 后端提供加密接口</strong>实现（密钥由 B 分发，A 侧不参与解密）；</li>
+    <li data-page-node-id="rDFWWN8g0ghRe5xPZD37lr">B 侧<strong data-page-node-id="AgUedwgD2P39M8a56KrIpj">拦截 → 解密 → 校验 → 建立 B 自身会话</strong>，形成完整闭环；</li>
+    <li data-page-node-id="gjVAPahTxkxmiYlm2iSLGt">支持<strong data-page-node-id="WhRddAHGOZ6gJJU1CJF5WV">数据时效控制</strong>（默认 5 分钟）与防重放，提升整体安全强度。</li>
+  </ol>
+  <h3 data-page-node-id="2kIdgK4xFXPnBDuDLxFRF3">1.3 方案总览（一句话）</h3>
+  <div class="callout info" data-page-node-id="2uwmiF7n7Dl3CFYZHgOmQJ">
+    <span class="t" data-page-node-id="1z2gqlGoPJl4Eqr1UfNsVq">💡 集成模式</span>
+    本方案本质是一套<strong data-page-node-id="AarzhmozQ1uj3HdEmAzDCI">轻量级加密票据式免登（Encrypted Ticket SSO）</strong>：A 后端作为"票据签发方"用 B 的密钥加密用户信息生成一次性票据 <code class="inline" data-page-node-id="QzSmVLJAVbRi8K0BDrbYiS">verifyData</code>，B 作为"票据验证方"解密验票后建立自己的会话。A 与 B 之间<strong data-page-node-id="xx5PRQHYJ3Pyv8xfHWWDEv">无运行时接口耦合</strong>（B 不需要回调 A），仅通过密文票据完成身份信任传递。
+  </div>
+</section>
+
+<!-- ============ 02 角色与术语 ============ -->
+<section id="s2" data-page-node-id="ho4FTlyaNzohGPU55VWQqa">
+  <h2 data-page-node-id="TJVAyENIyFNPscVPi8Rk7j"><span class="idx" data-page-node-id="NgzcePG3sw3PclYHCor83F">02</span>角色职责与术语定义</h2>
+  <h3 data-page-node-id="KRkNYfCil8C77I5PBKoqtJ">2.1 双方职责矩阵</h3>
+  <table data-page-node-id="dXH2ETQWyStirO7SljErKK">
+    <tr data-page-node-id="TsgJNRrLljnCXXlTfma7Xh"><th style="width:190px" data-page-node-id="VXZiufJc6RQDTJuB3cfDKq">事项</th><th data-page-node-id="IsK7bABo4YuT76gBCd3Def"><span class="sysA" data-page-node-id="KPAjlRcdCtnk86us3g9V4X">系统 A（智能预警）</span></th><th data-page-node-id="IFPn810Lmf9GJHnR3iRxVl"><span class="sysB" data-page-node-id="8mXxc5jbmK7NJGwvjzL1Qj">系统 B（智算疾控）</span></th></tr>
+    <tr data-page-node-id="lHpqBWBsbdSQR5bHD7PECq"><td data-page-node-id="txvTBKXwAPBB5UVZpA8p3I"><strong data-page-node-id="wXPUhw1AToLwnucOrsfgTA">clientId 注册与密钥分发</strong></td><td data-page-node-id="9wMZI5Jd3dGl5k0kq4xVVy">向 B 申请接入，提供接入方信息，安全保管密钥</td><td data-page-node-id="LlRRrO4H68NGQsvVn4ZSBS">为 A 分配 <code class="inline" data-page-node-id="4HtPt5vXwaIawhpucW1B5H">clientId</code> 与加密密钥，密钥仅通过安全渠道线下交付</td></tr>
+    <tr data-page-node-id="ieWt3NZvFTLv8Y7EbpbXWB"><td data-page-node-id="dthxfUVHhYZTqTsDRSYTxB"><strong data-page-node-id="iQ0B8XtmyrBwv0Zd2hNiiL">加密接口</strong></td><td data-page-node-id="cSjOL3GOFkNOPmvB4TfRlH"><strong data-page-node-id="daiTIOyjJGE86fMcK4YRgf">提供</strong>：内部加密接口（需登录态鉴权），用 B 密钥加密当前用户信息</td><td data-page-node-id="sqXRMyazbQ2yrvmdO5Lstr">不涉及（B 不参与 A 的加密过程）</td></tr>
+    <tr data-page-node-id="AITqncmpdoQ335TwjGKkyz"><td data-page-node-id="tUwc9o64YjJZ1Ke2DK8wdE"><strong data-page-node-id="ybozaT1CltbKyNsDAEAPdH">跳转发起</strong></td><td data-page-node-id="ulL1zKkMRw9AOiFyeheLg5">提供：前端获取票据 → 拼接 URL 跳转 / iframe 加载 B 页面</td><td data-page-node-id="rDAL4Zx7fqRtpfIfGCAZ89">不涉及</td></tr>
+    <tr data-page-node-id="jAChH5c1Z3AUsw5AXOL3TS"><td data-page-node-id="1oEGHdLI8WXHUb9DPBMOE9"><strong data-page-node-id="XemsBC2N7KaZSenQrck4KN">拦截与解密</strong></td><td data-page-node-id="DQqtQnIXiIcZF8BQE63fW0">不涉及</td><td data-page-node-id="15ctaQubF6PwMLGNNVY8yz"><strong data-page-node-id="fVc0DY0btxAwIBXXbsEIBM">提供</strong>：前端拦截 URL 参数，后端解密验证 + 时效/防重放校验</td></tr>
+    <tr data-page-node-id="HMBA2CsNlGbAEaGS3v6CoB"><td data-page-node-id="fpiRXbTU4tBZte0ucm87vd"><strong data-page-node-id="SeKF9fPHTLbq7bctu8M4NN">B 会话管理</strong></td><td data-page-node-id="6aYfG64UsAbJIEUE9iZVCg">不涉及</td><td data-page-node-id="VDa7PwDbgvfPNS8ZaWjXUS">提供：会话创建、续期、登出；iframe 场景的 Cookie 跨域策略</td></tr>
+    <tr data-page-node-id="DAnearyzAxExOGU8ggaQdk"><td data-page-node-id="7zNsMZlts8lGTq1qA4jk4u"><strong data-page-node-id="EEc2uEBzooQBuYsnnOP1fQ">密钥轮换</strong></td><td data-page-node-id="v1ghvIJhYL0zKqjULt1dxT">配合更换密钥，新旧密钥过渡期内兼容</td><td data-page-node-id="BxWkbSezGzm1HoE8nYAkiF">主导：定期生成新密钥并安全交付，维护密钥版本</td></tr>
+  </table>
+  <h3 data-page-node-id="iVrSqVANR46G4rVspAr0KB">2.2 术语表</h3>
+  <table class="plain" data-page-node-id="mlW4PeSZZZPMZOB2KTuP4l">
+    <tr data-page-node-id="4B5xFdbGpsGHciQ3bEum1w"><th style="width:160px" data-page-node-id="CozYE484FsHgvvBIfWhTFt">术语</th><th data-page-node-id="wkucuoqhx69l9YSFdWvJq1">定义</th></tr>
+    <tr data-page-node-id="DQKAQIEyxy0I1i9xyHQwTO"><td data-page-node-id="GfxdXnQuKDSyBbRoQpcRP4"><code class="inline" data-page-node-id="UTQG6DBcso6yyE4H6ffsz1">clientId</code></td><td data-page-node-id="HnXG7F7tkSJbAwdDpLpLj2">B 侧为每个接入方（当前仅 A）分配的客户端唯一标识，用于 B 定位对应的解密密钥</td></tr>
+    <tr data-page-node-id="QNp5KysjirA4aOGWSpiCHE"><td data-page-node-id="RbwjWAJJCRYv22KjNvF6nr"><code class="inline" data-page-node-id="UtEUPknlhr5Ak9RpdG8LcA">verifyData</code></td><td data-page-node-id="nCiCEAQsVuAg8abEubnklM">密文票据：包含 B 可识别的密钥版本、随机 IV、AES-GCM 密文与认证标签，整体 Base64URL 编码后的字符串</td></tr>
+    <tr data-page-node-id="QFjtZeIeVgoy6DKqqhtSOT"><td data-page-node-id="Gbd2zC2HHFLoCj7ctqPmVr"><strong data-page-node-id="CDtsbf88g9Wb0i2B5z0dV4">明文载荷（payload）</strong></td><td data-page-node-id="P7WAQAcrxkSvwJeDj53f6z">verifyData 解密后的 JSON：用户信息 + 时间戳 + expireAt + nonce</td></tr>
+    <tr data-page-node-id="KGfERLxqHRU8UxC2ZMGAZt"><td data-page-node-id="HCd1Bd3teCOcI4lNLK6S1C"><strong data-page-node-id="DW4EvLm8ydbAZ9L5yPMDYM">一次性票据</strong></td><td data-page-node-id="CzjWlEcRqsw0oxwBT0RHU8">verifyData 被成功验证后立即作废（nonce 落库/缓存），同一 verifyData 不可二次使用</td></tr>
+    <tr data-page-node-id="CqNQXINg4xxCFM2Gy5SIIY"><td data-page-node-id="EAEwUHH2XalAugATM8QgAC"><strong data-page-node-id="1F4rcUhK44qknCLRG3SGJr">时效窗口</strong></td><td data-page-node-id="OEKPMZxXFSwyemp7Jkwk1p">票据自签发到被验证的最大允许时间差，默认 <strong data-page-node-id="gITPS9ycTFRU4oZnNBuyPp">5 分钟（300 秒）</strong></td></tr>
+  </table>
+</section>
+
+<!-- ============ 03 总体架构与时序 ============ -->
+<section id="s3" data-page-node-id="WNQGth0B0WRIZ2cdNA9wy7">
+  <h2 data-page-node-id="XGRVdKliqQgAZzXBg30T91"><span class="idx" data-page-node-id="2tAGG5kFqmnyXW3VRbAQIi">03</span>总体架构与完整时序</h2>
+  <h3 data-page-node-id="zQ5GOtuda9CcUVSCddxkXe">3.1 端到端时序图</h3>
+  <div class="seq-wrap" data-page-node-id="0ONBgm3Ffo6YiJg4K2VIaf">
+  <svg viewBox="0 0 1060 860" width="100%" xmlns="http://www.w3.org/2000/svg" data-page-node-id="yUwRuw1lIORe9EdFYl8ih7">
+    <defs data-page-node-id="ilc9rFYwqTRq0Yw0krWrbY">
+      <marker id="arr" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" data-page-node-id="CyVQx6tR9NArGfbANBW2Ed"><path d="M0,0 L9,3 L0,6 Z" fill="#334155" data-page-node-id="VRd8bHmqhKI2OLwKYZE7De"/></marker>
+      <marker id="arrB" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" data-page-node-id="xNpWYXb0N3WHPdpfCP5s2V"><path d="M0,0 L9,3 L0,6 Z" fill="#0d9488" data-page-node-id="tLRyWrakd5XAZBjGs3cb24"/></marker>
+    </defs>
+    <!-- 参与者 -->
+    <g font-size="14" font-weight="700" text-anchor="middle" data-page-node-id="J8jaFDvFTZRY8MlAD2xscl">
+      <rect x="30" y="14" width="130" height="38" rx="8" fill="#1e40af" data-page-node-id="W1zm0W6XWVjsbP5itilMDt"/><text x="95" y="38" fill="#fff" data-page-node-id="2XYeKVB4FC2mf5FFoJOppI">用户浏览器</text>
+      <rect x="225" y="14" width="150" height="38" rx="8" fill="#2563eb" data-page-node-id="cDE1e7DvSADG8HYmCAFMwc"/><text x="300" y="38" fill="#fff" data-page-node-id="WRwLVlOBv7o8cPBRI02MyY">A 前端（智能预警）</text>
+      <rect x="445" y="14" width="150" height="38" rx="8" fill="#2563eb" data-page-node-id="62bqNNhKnfjcxP6B4itDtu"/><text x="520" y="38" fill="#fff" data-page-node-id="rA7ntPW5PnlpoZrRy1jhBn">A 后端</text>
+      <rect x="665" y="14" width="150" height="38" rx="8" fill="#0d9488" data-page-node-id="alAIu82sk6ULm5gcQrT3Lp"/><text x="740" y="38" fill="#fff" data-page-node-id="fF9UxR0HNHPCkYAxybcF9x">B 前端（智算疾控）</text>
+      <rect x="885" y="14" width="150" height="38" rx="8" fill="#0d9488" data-page-node-id="hBX64FY1TEKF4dLqMkXVqE"/><text x="952" y="38" fill="#fff" data-page-node-id="REK09GvfeeBDBKxUt6MOxe">B 后端</text>
+    </g>
+    <!-- 生命线 -->
+    <g stroke="#cbd5e1" stroke-dasharray="5,5" data-page-node-id="y7EYnhSSz5szSaIBQh4eEn">
+      <line x1="95" y1="52" x2="95" y2="830" data-page-node-id="gcEnT3Q5ziwkUFLQqaAzuX"/><line x1="300" y1="52" x2="300" y2="830" data-page-node-id="xS8mpnFxt3Q6pWwDHE8v1O"/>
+      <line x1="520" y1="52" x2="520" y2="830" data-page-node-id="wUktmWogwWqg1sTu8ArUVg"/><line x1="740" y1="52" x2="740" y2="830" data-page-node-id="ROQ5RDLlCYROWZuCnGf5tp"/>
+      <line x1="960" y1="52" x2="960" y2="830" data-page-node-id="OSM84qVwI8cdLzp8dapcwb"/>
+    </g>
+    <!-- 消息 -->
+    <g font-size="13" fill="#1f2937" data-page-node-id="QJjN7FyfcjpqBcLaZ5e0TA">
+      <line x1="95" y1="95" x2="300" y2="95" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)" data-page-node-id="TV6KxS0N5ACKx4KxCr3BFr"/>
+      <text x="196" y="86" text-anchor="middle" data-page-node-id="QYmBhFkJFkp29FuSn0KcNu">① 点击"跳转智算疾控"按钮</text>
+
+      <line x1="300" y1="140" x2="520" y2="140" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)" data-page-node-id="nigCcU5BAwMBmv7526sXJX"/>
+      <text x="410" y="131" text-anchor="middle" data-page-node-id="iTTs2ZnJSZqZNmHzBB2nhX">② POST /api/sso/ticket（携带 A 登录态 Cookie/Token）</text>
+
+      <rect x="440" y="165" width="160" height="52" rx="8" fill="#eff6ff" stroke="#2563eb" data-page-node-id="gXtVG89FRCTJNyJQKZA1pd"/>
+      <text x="520" y="186" text-anchor="middle" font-size="12.5" fill="#1e40af" data-page-node-id="Su8mU7SuRxHfEnvvZ4GRis">③ 组装明文 JSON：</text>
+      <text x="520" y="204" text-anchor="middle" font-size="12.5" fill="#1e40af" data-page-node-id="AJJlABSYiBlMJCHxDCQztv">用户信息+ts+expireAt+nonce</text>
+      <rect x="440" y="227" width="160" height="52" rx="8" fill="#eff6ff" stroke="#2563eb" data-page-node-id="ZrQYJjFE4gV5TwZxYk5vrO"/>
+      <text x="520" y="248" text-anchor="middle" font-size="12.5" fill="#1e40af" data-page-node-id="47FtWURxB1aYS3AV0v29EH">④ AES-256-GCM 加密</text>
+      <text x="520" y="266" text-anchor="middle" font-size="12.5" fill="#1e40af" data-page-node-id="tQ31Url7sXEd5MP0e8Nkgd">（B 分发密钥 + keyVersion）</text>
+
+      <line x1="520" y1="306" x2="300" y2="306" stroke="#334155" stroke-width="1.6" stroke-dasharray="6,4" marker-end="url(#arr)" data-page-node-id="wCI2dfYFZtbFLfoscQIjsI"/>
+      <text x="410" y="297" text-anchor="middle" data-page-node-id="Ti77dQn3hZV9MCMMJaCaz8">⑤ 返回 { clientId, verifyData }</text>
+
+      <path d="M 300 350 Q 520 395 740 350" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)" data-page-node-id="5q9LEFUhsi1F0ZJyLHe1fl"/>
+      <text x="520" y="385" text-anchor="middle" data-page-node-id="47JdQhIT0zSPyvW8blbwhi">⑥ 跳转 / iframe 加载 B 页面：</text>
+      <text x="520" y="403" text-anchor="middle" font-size="12.5" fill="#475569" data-page-node-id="O9IBwaKFBfBa51V45Bq2zE">https://B/xxx?clientId=xxx&amp;verifyData=yyy</text>
+
+      <line x1="740" y1="445" x2="960" y2="445" stroke="#0d9488" stroke-width="1.6" marker-end="url(#arrB)" data-page-node-id="yBmyE1Ay48XbNlFmgsA2C7"/>
+      <text x="850" y="436" text-anchor="middle" data-page-node-id="Zz6EgocyxfQS3NKp7unFuL">⑦ POST /sso/auth/verify { clientId, verifyData }</text>
+
+      <rect x="875" y="468" width="170" height="88" rx="8" fill="#f0fdfa" stroke="#0d9488" data-page-node-id="7a5uznkExGX0QFEETfUIE0"/>
+      <text x="960" y="490" text-anchor="middle" font-size="12.5" fill="#0f766e" data-page-node-id="QoSVQl6cHRE2LfRz0W4A8M">⑧ 按 clientId 取密钥</text>
+      <text x="960" y="508" text-anchor="middle" font-size="12.5" fill="#0f766e" data-page-node-id="ZZd229bBJhc9HkVlNxHWgF">解密 → 校验 GCM Tag</text>
+      <text x="960" y="526" text-anchor="middle" font-size="12.5" fill="#0f766e" data-page-node-id="xMCjFnsxdlL7peYZfgdtQO">校验时效(≤5min)+nonce</text>
+      <text x="960" y="544" text-anchor="middle" font-size="12.5" fill="#0f766e" data-page-node-id="dcrd1QWPBGHysjgrcmAkrs">nonce 标记已用（防重放）</text>
+
+      <line x1="960" y1="590" x2="740" y2="590" stroke="#0d9488" stroke-width="1.6" stroke-dasharray="6,4" marker-end="url(#arrB)" data-page-node-id="K9AC4xSzZEpKCGes93mIjK"/>
+      <text x="850" y="581" text-anchor="middle" data-page-node-id="exoW5csLru0ieIbd10e8ZK">⑨ 返回 B 会话凭证（HttpOnly Cookie / Token）+ 用户信息</text>
+
+      <line x1="740" y1="635" x2="95" y2="635" stroke="#0d9488" stroke-width="1.6" stroke-dasharray="6,4" marker-end="url(#arrB)" data-page-node-id="ScnRRsXcFxCMLhpAGAt2dV"/>
+      <text x="417" y="626" text-anchor="middle" data-page-node-id="EOSGIBUntt65heGBuDo8vT">⑩ URL 清洗（移除 clientId/verifyData）后渲染 B 功能页，B 会话建立完成</text>
+
+      <rect x="330" y="680" width="400" height="120" rx="10" fill="#fffbeb" stroke="#d97706" data-page-node-id="Z0QCAWDY8Y0GRYUVdEpCCL"/>
+      <text x="530" y="706" text-anchor="middle" font-size="13" font-weight="700" fill="#92400e" data-page-node-id="rwCN2nwOnEDLB4hoE0UjYc">异常分支（任一校验失败）</text>
+      <text x="530" y="728" text-anchor="middle" font-size="12.5" fill="#92400e" data-page-node-id="IycwMZqNcB0PFqumUMKB2p">· 票据过期（时间戳超 5 分钟）→ 返回"链接已过期，请从智能预警重新进入"</text>
+      <text x="530" y="748" text-anchor="middle" font-size="12.5" fill="#92400e" data-page-node-id="6JLkGlE7fbrtmLyCg72Qyd">· 票据重放（nonce 已存在）→ 拒绝并记录安全审计日志</text>
+      <text x="530" y="768" text-anchor="middle" font-size="12.5" fill="#92400e" data-page-node-id="hs7xxeTBTKmR3bnF4NOhbi">· 票据篡改 / 密钥不匹配 → GCM Tag 校验失败，拒绝</text>
+      <text x="530" y="788" text-anchor="middle" font-size="12.5" fill="#92400e" data-page-node-id="lTxEx0Nd93HOdB5pIAox5U">· clientId 非法 / keyVersion 已停用 → 拒绝</text>
+    </g>
+  </svg>
+  </div>
+
+  <h3 data-page-node-id="aSolUPFbrryB38NICRjf2S">3.2 关键设计决策说明</h3>
+  <table data-page-node-id="1pBgC9tVowOLX2Puv1THAS">
+    <tr data-page-node-id="6T8bSANPKnZEaX93lE9cC9"><th style="width:220px" data-page-node-id="WLKjh83FAKE7xO3Q2UToMB">决策点</th><th data-page-node-id="NrUr5o65Cc4heDYgAmFpcY">结论与理由</th></tr>
+    <tr data-page-node-id="a8ZaQEcHl4R2YWObdf5TJl"><td data-page-node-id="Kgpz0Zb1OVn8e26O3xiDZW"><strong data-page-node-id="bAn8EnuFsG9XHWp5uJ8zZ5">为何由 A 后端加密而非前端</strong></td><td data-page-node-id="ROE0vvRWEZcZnShaZvbS13">密钥绝不能下发到浏览器（前端 JS 可被完整提取）。加密接口放在 A 后端，密钥仅存在于服务端内存/密钥存储中</td></tr>
+    <tr data-page-node-id="yaIchcwmw1FJmpvBPbHeMb"><td data-page-node-id="7UCD9ezXikrXUwCTMz70Fk"><strong data-page-node-id="FZ1fNRdKWB4ZKVXpHs3Pto">为何采用票据而非直接调 B 登录接口</strong></td><td data-page-node-id="Hu4eTkM497zHpy6Ez4DLZT">URL 票据天然适配"跳转 + iframe 嵌入"两种形态（iframe 无法携带跨域自定义 Header），且 A、B 零运行时耦合，B 不需要感知 A 的登录体系</td></tr>
+    <tr data-page-node-id="QvkssyCUnSMlMxwaLkYBMp"><td data-page-node-id="69Fp1d4De84qzQRgJf2rhg"><strong data-page-node-id="vMCBzmQC2PppK9bnTffiPA">为何选 AES-GCM</strong></td><td data-page-node-id="xaFHAmLwHgOvmbBsntfmcK">AEAD 认证加密：一次加密同时获得<strong data-page-node-id="zuTFqFC87K0kmhpkuMZIoC">机密性 + 完整性 + 防篡改</strong>，密文被改动 1 个 bit 都会解密失败，无需额外 HMAC。如需国密合规可平替为 SM4-GCM（结构不变）</td></tr>
+    <tr data-page-node-id="pJLGq7b6kPaAyNCqGhXx9f"><td data-page-node-id="JUbDi0ZAjV4mEwQACvDwk4"><strong data-page-node-id="Pj38mJDN3duOMDS50KVJlf">为何 verifyData 要一次性</strong></td><td data-page-node-id="IXJ69fHsVEp6vQgrn8oR0m">URL 参数可能进入浏览器历史、代理与访问日志，一次性票据可将泄露后的重放风险窗口压缩到接近零</td></tr>
+  </table>
+</section>
+
+<!-- ============ 04 密钥管理 ============ -->
+<section id="s4" data-page-node-id="hipOc7vffFTeNQpmuRptws">
+  <h2 data-page-node-id="FwoGuUd5kNXHkQDEj1Z9UH"><span class="idx" data-page-node-id="eVmh41dYTnBZMq4Pt6DGKt">04</span>密钥与客户端（clientId）管理规范</h2>
+  <h3 data-page-node-id="PTfmlGyDZQN6YvNIsYguE0">4.1 clientId 登记信息（B 侧维护）</h3>
+  <p data-page-node-id="HK5XuIvpYzEE0HiBu7o2WD">B 侧需建立接入方密钥登记表（建议表结构，字段注释齐全）：</p>
+  <pre data-page-node-id="eFNITCMhtC7YvRcw94FwKX"><span class="c" data-page-node-id="rfp6B2ZbiJAUfy1vml3rQy">-- B 系统：跨域免登客户端密钥登记表（示例 DDL，MySQL）</span>
+CREATE TABLE t_sso_client (
+  id            BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键',
+  client_id     VARCHAR(64)  NOT NULL COMMENT '客户端ID，如 CDSS-A-ALERT-001',
+  client_name   VARCHAR(128) NOT NULL COMMENT '客户端名称，如：智能预警',
+  key_version   INT          NOT NULL DEFAULT 1 COMMENT '密钥版本号，用于轮换',
+  secret_key    VARCHAR(256) NOT NULL COMMENT 'AES-256 密钥(Base64)，生产建议加密存储/KMS托管',
+  status        CHAR(1)      NOT NULL DEFAULT '0' COMMENT '状态（0启用 1停用）',
+  expire_window INT          NOT NULL DEFAULT 300 COMMENT '允许的票据时效窗口(秒)，默认300',
+  remark        VARCHAR(512) DEFAULT NULL COMMENT '备注',
+  create_by     VARCHAR(64)  COMMENT '创建人',
+  create_time   DATETIME     COMMENT '创建时间',
+  update_by     VARCHAR(64)  COMMENT '更新人',
+  update_time   DATETIME     COMMENT '更新时间',
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_client_id (client_id),
+  KEY idx_status (status)
+) COMMENT='跨域免登客户端密钥登记表';</pre>
+
+  <h3 data-page-node-id="8j4CXGdwSI4IHKOfXi8LuP">4.2 密钥分发与轮换约定</h3>
+  <table data-page-node-id="W4PVLjEiwdjrVm6H42cPso">
+    <tr data-page-node-id="dPgg0UuoFNJrjuxpIVbi81"><th style="width:160px" data-page-node-id="wLj61tcZxKdEOk8ivKSDxJ">环节</th><th data-page-node-id="dRL12iH74IuFIxemxyeqbL">规范</th></tr>
+    <tr data-page-node-id="q69BVIBqbN1SFoHBe7wmDD"><td data-page-node-id="XVVzhv4WmrpHG32MDESMAZ"><strong data-page-node-id="e2k5I73vYlGjrWxX8cJPZg">生成</strong></td><td data-page-node-id="uYeAqEFpBxouNOdNM1iuUv">由 B 侧使用安全随机数生成（<code class="inline" data-page-node-id="CTgVFqPGCukEGTzTo0Gowj">SecureRandom</code>，32 字节 = 256 位），生成过程留审计记录</td></tr>
+    <tr data-page-node-id="yxy8njy5RNc2fvJylErxD7"><td data-page-node-id="ucErLKospl6AUYyz6ALEKu"><strong data-page-node-id="yF7sp9DqSJTjiNeoCdf5zj">分发</strong></td><td data-page-node-id="OSLsmqnqRuCO6lBzd1NbLz"><span class="badge badge-mid" data-page-node-id="e0e9GUX3bVjpK4ERH6NGL9">⚠️ 禁止 IM / 邮件明文传输</span> 通过密码管家 / 加密压缩包 + 口令分渠道传递（压缩包走 IM、口令走电话），或当面交付</td></tr>
+    <tr data-page-node-id="kAy4aQqriF4VGuUf8jrMbD"><td data-page-node-id="SaMNpFsGtUIHcVXayC73Ke"><strong data-page-node-id="gRKHLHO4gFaEpaSWz0sm9d">存储</strong></td><td data-page-node-id="PndmP4dExgzWSCqb2pvlHn">双方均不得写入代码仓库、配置文件明文；建议环境变量注入或配置中心加密项（Nacos 加密配置）</td></tr>
+    <tr data-page-node-id="fCum3jDZqkyfsvL8nlikzj"><td data-page-node-id="zKjF8PQgLO0MhAzbo9pfuE"><strong data-page-node-id="8TVSxHYwFgk6XIXGwOUuNH">轮换</strong></td><td data-page-node-id="hLr5vXww0iJIC3AQM3C8zr">建议每 <strong data-page-node-id="zsz0uxNyGkP1DIuhopqLqK">3 个月</strong>轮换一次；轮换采用 keyVersion 递增，新旧版本并行 <strong data-page-node-id="4do7D36moC2f1QPirlOwRQ">48 小时</strong>过渡期后旧版本停用</td></tr>
+    <tr data-page-node-id="rmmn3LOS8MeARtFO1pUFcU"><td data-page-node-id="mHBKfAHkwGOmeD9yf5TQ7X"><strong data-page-node-id="5xmm5wLSRqY2UqSuMUxdel">泄露应急</strong></td><td data-page-node-id="xFTXrRmrNYGA5WcxfxgdPM">B 侧立即将对应 clientId 置为停用状态，通知 A 并启用新密钥；对泄露窗口期内已验证成功的会话评估是否强制下线</td></tr>
+  </table>
+  <div class="callout warn" data-page-node-id="uPVmPdTOV23EKUCsGgF3FV">
+    <span class="t" data-page-node-id="CdLosA5EldkYpdW4oZFdLv">⚠️ 密钥版本嵌入密文首字节</span>
+    verifyData 二进制结构首部含 1 字节 <code class="inline" data-page-node-id="lkjDIEPQyI8FA8rZy3dOBU">keyVersion</code>（见第 5 章），B 解密时按「clientId + keyVersion」定位密钥，实现无缝轮换，无需增加额外 URL 参数。
+  </div>
+</section>
+
+<!-- ============ 05 加密规范 ============ -->
+<section id="s5" data-page-node-id="h1V4BI3POELSAp6jlh4kmN">
+  <h2 data-page-node-id="02PQBN3nIptXrq0sG1cAf3"><span class="idx" data-page-node-id="JZ2zxgYemk3jbWYePkbA35">05</span>数据加密规范（verifyData）</h2>
+  <h3 data-page-node-id="OlezD4aoOCdBiac0zmjbIe">5.1 算法与参数</h3>
+  <table data-page-node-id="DkxmsSje9lYHfFoP9ad5ph">
+    <tr data-page-node-id="VwWmahmonymUmHpy43Hk8B"><th style="width:180px" data-page-node-id="Vx8MSD2Vo1Nuc6W7u3fHhU">项目</th><th data-page-node-id="S2EHX270DKGFhQzQ2wau1s">规范值</th><th data-page-node-id="wUzUAHX6DNBvvx5BO9GzZ1">说明</th></tr>
+    <tr data-page-node-id="Q9qceRnMGCjQOpoIoEqukR"><td data-page-node-id="CTXEMYgMAAQnp1iBbuOwR5">加密算法</td><td data-page-node-id="gRwAKnwflqChflgzDQGkap"><strong data-page-node-id="eRmhBLPUVPCrEYKeAVsZc6">AES-256-GCM</strong></td><td data-page-node-id="Bfen7a6XHNnXnxA76TAGUj">AEAD 认证加密；如项目要求国密，可等价替换为 SM4-GCM（数据结构与流程完全一致）</td></tr>
+    <tr data-page-node-id="BMW7m4FQ3HE5cvYMhowo2p"><td data-page-node-id="nP5UUECCEU668LxbESfSkk">密钥长度</td><td data-page-node-id="hUchNBiYDJvMLpfgjzNomQ">256 bit（32 字节）</td><td data-page-node-id="hyYN1BwrmOE6CiUZYTyHUI">由 B 生成并分发</td></tr>
+    <tr data-page-node-id="O9jgke9UbqYTK6XESUaRe2"><td data-page-node-id="mmbGdQzsc3NLDaEkHWRJv7">IV（Nonce）</td><td data-page-node-id="uQ0panEtvH6hoiIdNE34it">12 字节安全随机</td><td data-page-node-id="vV9lyTar2sofvIwT3JcU0S"><strong data-page-node-id="L8LJMdIE3kMgZFGuEyL600">每次加密必须重新随机生成</strong>，严禁固定 IV / 复用 IV（GCM 复用 IV 是致命漏洞）</td></tr>
+    <tr data-page-node-id="SRlKioxDRTHT3LJZ1OfzMN"><td data-page-node-id="kOeHaci5lQ1DEQNE0rIfNd">认证标签 Tag</td><td data-page-node-id="dlAshrTTQTNYIai403XZQj">128 bit（16 字节）</td><td data-page-node-id="cECgUc0E7D6iIcwJ8jSkHR">由 GCM 自动生成并校验，防篡改</td></tr>
+    <tr data-page-node-id="Muzsz0qA4YcQG8FjWBsQG1"><td data-page-node-id="lUdoDAGJ5QnpVUqvqBjkZz">编码方式</td><td data-page-node-id="jKTVL7e7OeAvsPjFzB2suH">Base64URL（无 padding，<code class="inline" data-page-node-id="CRpySp42rJY6liQxKdbSxm">-</code>/<code class="inline" data-page-node-id="Uu8h6bBCN4g0qPK78ww1oe">_</code> 字符集）</td><td data-page-node-id="nngXxqJM51ecYroUuAqNyS">URL 安全，避免二次转义</td></tr>
+  </table>
+
+  <h3 data-page-node-id="0qB6PhyeAQ2QLMKhDITH54">5.2 明文载荷（payload）字段定义</h3>
+  <table data-page-node-id="aFlrTqHp81Y2pfDj1YWvrB">
+    <tr data-page-node-id="1D9uh5k8fi8Fwy6POuo5Nt"><th data-page-node-id="YzH78xWZ50c0l3Kf8wLFqR">字段</th><th data-page-node-id="yzNSD48lSwL4KIygYFzJnH">类型</th><th data-page-node-id="ITktv49NPz8Vy5mBfZ1mcH">必填</th><th data-page-node-id="FAfKKAX1R5V1uxcTNa2AKB">说明</th></tr>
+    <tr data-page-node-id="EeH6DAem5i4gOmI7Jo6b1U"><td data-page-node-id="HZT5XeklC5gnuQW3g3jFSm"><code class="inline" data-page-node-id="CApUX2QlU8mlj9wW47FaZn">userId</code></td><td data-page-node-id="7Hfiqa1uyOlSWak8X0Nor8">String</td><td data-page-node-id="zJR6G2KX0x8bipiM7JAXlj">✅</td><td data-page-node-id="5PH85fnWoMsnVVyk62CpKH">A 侧用户唯一 ID</td></tr>
+    <tr data-page-node-id="NoYRvDd8R54TY07BjpQnHu"><td data-page-node-id="Fg8CGmSxGAZJQKUrLOtgUG"><code class="inline" data-page-node-id="BaIc8hEwDUNmt81TYbeE3k">userName</code></td><td data-page-node-id="6EFeUOQNCYfqYE1lKEhrU3">String</td><td data-page-node-id="Va9dNpEuaz5rnNuPDB7O6h">✅</td><td data-page-node-id="rxecIstj5xJm3kyS9Pxkqp">用户名/姓名</td></tr>
+    <tr><td><code class="inline">nickName</code></td><td>String</td><td>✅</td><td>用户昵称（B 侧界面展示用）</td></tr>
+    <tr data-page-node-id="aKgo6KC9och0Y8TrOaDViB"><td data-page-node-id="HmOxHr72Klq1RHcOitd2c3"><code class="inline" data-page-node-id="GJBI7TqEJubyTSciVB3Ibo">tenantId</code></td><td data-page-node-id="GO4Itxp0nrMaE6SCpTNDxI">String</td><td data-page-node-id="z8eVlBKfD8FbiLxqexlDNY">✅</td><td data-page-node-id="6BGBgaOivjPnfZr8Qqu5HB">租户 ID</td></tr>
+    <tr data-page-node-id="2rnqnmGCsMUdjH1du8H1cz"><td data-page-node-id="TEulQBuxTAg8R0Rsg2j90j"><code class="inline" data-page-node-id="e6SXVzw8iu2dEmSXHi80ht">tenantCode</code></td><td data-page-node-id="ZCy6VIwno8JBZ66u4YYgSL">String</td><td data-page-node-id="fYyR4ndLLA8nbbA4mqqFS5">✅</td><td data-page-node-id="hHTwhXFPPXWklvop5DwDO0">租户编码</td></tr>
+    <tr><td><code class="inline">tenantName</code></td><td>String</td><td>✅</td><td>租户名称（B 侧界面展示用）</td></tr>
+    <tr data-page-node-id="g7fewkr4dNJtm6D7d8aNEC"><td data-page-node-id="7Ef7wrqyzH9G785BTZAjOQ"><code class="inline" data-page-node-id="zFlmKT0ujbV3NRv2ka1p4o">regionCode</code></td><td data-page-node-id="wN0ZZCrTDth2YluiyfqITR">String</td><td data-page-node-id="7gD6p9kjh5lB1htaO79u6T">✅</td><td data-page-node-id="ivi8kA9AvO9AfRIgUtOY9s">所属区域编码（行政区划代码）</td></tr>
+    <tr data-page-node-id="QLKytpiTjX42slB3rO90BL"><td data-page-node-id="cuOICw5knSU8wXVSbuD7Wz"><code class="inline" data-page-node-id="TKAI5WTGanAGJG1OXqvQnu">regionName</code></td><td data-page-node-id="98CBO4TlS4rN1UXpvDHu2E">String</td><td data-page-node-id="ZUXtxbYfgrSJDqUjgz5k6b">➖</td><td data-page-node-id="na3z7G6ZO6mTWakkS32Hvn">所属区域名称</td></tr>
+    <tr data-page-node-id="7TcJJATEbqaOlbAa2pb59P"><td data-page-node-id="qE2ul2FSaNYPGLuIYrEz1g"><code class="inline" data-page-node-id="GG6TmmVBpEt0STBspWIAL8">timestamp</code></td><td data-page-node-id="qCkUzY9BTWMUjYvOwTKiFj">long</td><td data-page-node-id="AG4LNa7W3XCLWffqwfl0LB">✅</td><td data-page-node-id="yNccjYXMR6IBxHxHI0HK3T">签发时间戳（毫秒，UTC）</td></tr>
+    <tr data-page-node-id="CaL6mFHFELd6fWpjqISoV4"><td data-page-node-id="5LXjx2p4thLHk5CJBVit1t"><code class="inline" data-page-node-id="KgnAeElzRLFTxh7gox1PFa">expireAt</code></td><td data-page-node-id="8j638BZZIDW16DV2DeieHm">long</td><td data-page-node-id="F9UnZZsyirhMReTHdLg5Q0">✅</td><td data-page-node-id="mFQessjGAv9sJH6lahaxGb">过期时间戳（毫秒）= timestamp + 300_000</td></tr>
+    <tr data-page-node-id="kjchM6dVeUQvq5nMcHH7Zn"><td data-page-node-id="pPbJjDnZLHRYI5oDEEjMAG"><code class="inline" data-page-node-id="EZTi1cACi101AfhE6SdIfr">nonce</code></td><td data-page-node-id="acTKwSGq5jMSdMKhArvrbJ">String</td><td data-page-node-id="M9EFggxyRAGCMMJPkvjuIP">✅</td><td data-page-node-id="tqe8z9XJUzDp5AGTFwqpbS">一次性随机串（UUID v4，128 bit 以上随机性），防重放</td></tr>
+    <tr data-page-node-id="FKQP50HlgxJq43HkEunCh6"><td data-page-node-id="v8zanYc11PPtWwQLVQedGP"><code class="inline" data-page-node-id="viRh7VzEoTI2dMjQzIprKb">remark</code></td><td data-page-node-id="gpzMJH2ZAi3lJI8IYWCf6c">String</td><td data-page-node-id="TZEYXJsnwHxuLSCBRrvjXV">➖</td><td data-page-node-id="JQQ3DVb69KbjEx9g3eIvdB">其他备注信息（自定义扩展，注意不要放敏感凭据）</td></tr>
+  </table>
+  <div class="callout info" data-page-node-id="rJr3mpl1FtlB9TBZFMWsOP">
+    <span class="t" data-page-node-id="vz5kYJWRHkpeMU11l1ktN7">📌 明文 JSON 示例</span>
+    <pre data-page-node-id="b3dZGDCdtGjNbL10a5wZLr">{ "userId":"U10001", "userName":"张三", "nickName":"预警小张",
+  "tenantId":"T001", "tenantCode":"HUBEI_CDC", "tenantName":"湖北省疾控中心",
+  "regionCode":"420000", "regionName":"湖北省",
+  "timestamp":1756641000000, "expireAt":1756641300000,
+  "nonce":"9f8b7c6d-1e2f-4a3b-8c7d-5e6f7a8b9c0d", "remark":"from-alert" }</pre>
+  </div>
+
+  <h3 data-page-node-id="fmF7rdRVNOUX2wSlJT8Ams">5.3 verifyData 二进制结构与最终形态</h3>
+  <pre data-page-node-id="YvFUOfe7RxDgJKgbEzw5KF">┌──────────────┬────────────┬─────────────────────┬──────────────┐
+│ keyVersion   │ IV (12B)   │  AES-GCM 密文        │ Tag (16B)    │
+│ 1 字节       │ 随机       │  (明文 payload JSON) │ 认证标签      │
+└──────────────┴────────────┴─────────────────────┴──────────────┘
+                         │
+                         ▼  整体 Base64URL 编码（无 padding）
+verifyData = base64url( keyVersion(1B) ‖ IV(12B) ‖ ciphertext ‖ tag(16B) )</pre>
+  <ul data-page-node-id="QJ6rquYTNCvHTQXpgONOaJ">
+    <li data-page-node-id="A2ih8Mo86o9ptDqhHTx1Eg"><strong data-page-node-id="yrP69H43wdFqnKYNPJ3yky">AAD（附加认证数据）</strong>：建议将 <code class="inline" data-page-node-id="ywnOXCBfkhIffIXXEbii0P">clientId</code> 字符串作为 GCM 的 AAD 参与认证 —— 票据被挪用到其他 clientId 时解密直接失败，进一步收紧绑定关系（可选项，双方约定一致即可）。</li>
+    <li data-page-node-id="yidkbAri3Pr6FFCycqIuhS"><strong data-page-node-id="dWwcpNsxCjgAHJHA1Qlkwc">长度预估</strong>：明文约 300 字节 → 密文二进制约 330 字节 → Base64URL 后约 440 字符，URL 总长可控（浏览器上限 2KB+），<strong data-page-node-id="ZKiCWEvSgkFYy24s7TImuy">无超长风险</strong>。</li>
+  </ul>
+</section>
+
+<!-- ============ 06 接口设计 ============ -->
+<section id="s6" data-page-node-id="zjmyUakyVncvXPiErlmKNz">
+  <h2 data-page-node-id="HPMAm82PCC3yRjpfn3i8V4"><span class="idx" data-page-node-id="ENelGJer2K0aPp9t7EBBB1">06</span>接口详细设计</h2>
+
+  <h3 data-page-node-id="hbyQL2jx2KiH2fHPeVBqQi">6.1 【A 后端】获取免登票据接口（A 内部接口）</h3>
+  <table class="plain" data-page-node-id="7g4BScOFrwYN2cEDpbMmFJ">
+    <tr data-page-node-id="uI02O2yOEJRqJTloylc5mw"><td style="width:140px" data-page-node-id="BhVHM3MpxwHKotOcswJqy2"><strong data-page-node-id="PrfT5vAvmKj5EAODeBp9QY">路径</strong></td><td data-page-node-id="aYmF44yqTNkRGlsDPLagRE"><code class="inline" data-page-node-id="lXT7epTbQSg0gIwjuRYM3e">POST /api/sso/ticket</code></td></tr>
+    <tr data-page-node-id="UZmaw6BVGB6tQHs2vesT9u"><td data-page-node-id="jSs6s9EIYWos4O5DEQDvgm"><strong data-page-node-id="pmNJPO8DDmjEpuFu588Ece">鉴权</strong></td><td data-page-node-id="zsiCJzbJyF1kRAUiBwDVG2"><span class="badge badge-high" data-page-node-id="RG10Dy41sDdTCSmWvHcYCS">必须携带 A 登录态</span>（Cookie 或 Token），未登录返回 401 —— 防止匿名用户批量刷票据</td></tr>
+    <tr data-page-node-id="SPIXzKSjmkj9jbErVww90Y"><td data-page-node-id="hLQxZtE5TkRxFeWMB6CEFA"><strong data-page-node-id="QXceGpLBRDlfuORBbLhMtZ">限流</strong></td><td data-page-node-id="fyTpnn6G0z3CVBxx6o6CZ3">按用户限流（如 10 次/分钟），按 IP 限流兜底，防刷</td></tr>
+    <tr data-page-node-id="gIKpSkrTZhg9hcZ8EDhYT2"><td data-page-node-id="rhMHZYS0rRve2cFt4vysHT"><strong data-page-node-id="vU300gJNdxz62Q5TBlIDAM">请求体</strong></td><td data-page-node-id="KFCrkUNDJ4wknZJfNnpyqR">可空；或 <code class="inline" data-page-node-id="c7oU3A6D4gxYHRHNZ24nHh">{ "target":"B", "remark":"..." }</code>（扩展用）</td></tr>
+  </table>
+  <pre data-page-node-id="cIHwc7WIdOWknhY8oABD8U"><span class="c" data-page-node-id="OvSPwNpJFkUq7Ynsqq7gKo">// 响应示例</span>
+{
+  "code": 0,
+  "msg": "ok",
+  "data": {
+    "clientId": "CDSS-B-ZJJK-001",        <span class="c" data-page-node-id="cEEXSSTRDsW2fQuS5CExSL">// B 分配给 A 的客户端 ID</span>
+    "verifyData": "AQAAeU9x...",           <span class="c" data-page-node-id="56U76JDJnsNDTafpovbd0d">// Base64URL 密文票据</span>
+    "expireAt": 1756641300000              <span class="c" data-page-node-id="l9VsUFGapH3MjGnCEEPKcq">// 票据过期时间（供前端提示用）</span>
+  }
+}</pre>
+  <h4 data-page-node-id="IzOqjya3sFakDMDpbOJzT8">处理逻辑（A 后端）</h4>
+  <ol data-page-node-id="wswGiNYGC509fNK33bGQUt">
+    <li data-page-node-id="JBW9EN7WR4yQYh5P8W8dRb">校验 A 登录态，取当前用户信息（userId、userName、nickName、tenantId、tenantCode、tenantName、regionCode 等）；</li>
+    <li data-page-node-id="22BngmJYEJkauoRd3gOWah">生成 nonce（UUID v4）与 timestamp / expireAt（当前时间 +300 秒）；</li>
+    <li data-page-node-id="6tacwwtaOJbfkLtc3uhTCJ">组装 payload JSON → 取 B 密钥（当前 keyVersion）→ AES-256-GCM 加密（IV 随机生成，clientId 作 AAD）；</li>
+    <li data-page-node-id="HCWSzOqZIjIFmbn64Nvlp1">拼装 <code class="inline" data-page-node-id="pr310NqbgZneRi8npFqQR3">keyVersion + IV + 密文 + Tag</code> → Base64URL → 返回。</li>
+  </ol>
+
+  <h3 data-page-node-id="lFkC1VvxGBeBSuNxtjKIXT">6.2 【A 前端】跳转规则</h3>
+  <pre data-page-node-id="BoP9DxTLL5yNsNGVVBS7al"><span class="c" data-page-node-id="9BWZyDVhqLTDatRMceg2Ka">// 跳转场景</span>
+window.location.href = `https://B域名/targetPage?clientId=${clientId}&verifyData=${verifyData}`;
+<span class="c" data-page-node-id="UnCc5SS7A9CAyH7hG9rdeW">// iframe 嵌入场景</span>
+iframe.src = `https://B域名/targetPage?clientId=${clientId}&verifyData=${verifyData}`;</pre>
+  <ul data-page-node-id="jKChd4jibXisfeD650IfEX">
+    <li data-page-node-id="5Z3U1JorWSTpbCnzuRPimV">verifyData 为 Base64URL 编码，<strong data-page-node-id="b4gaaLfTs4ZLgMY58bvewO">无需再 encodeURIComponent</strong>（若实现方使用了标准 Base64，则必须 encodeURIComponent，双方在联调时对齐）；</li>
+    <li data-page-node-id="q0bzoMuZV6n9qLdpzHlNUj">票据<strong data-page-node-id="f0HG6qDeUNtV3L46NIcbvz">即取即用</strong>：前端不要缓存票据复用（一次性消费，第二次会失败）。</li>
+  </ul>
+
+  <h3 data-page-node-id="kVO5HPpCIfWMhaiBK2mIEH">6.3 【B 后端】票据验证与会话初始化接口</h3>
+  <table class="plain" data-page-node-id="gwMAs6BElFb2UbAwFBqQY4">
+    <tr data-page-node-id="WrIl913Jk2Lvd5HbAQjsXv"><td style="width:140px" data-page-node-id="5PVWGgL7mDGquKSKJVmF3B"><strong data-page-node-id="Jgh02fT05jiJFbCzjkFFsF">路径</strong></td><td data-page-node-id="GN7trPJy2Hz3lSqqAIGT7V"><code class="inline" data-page-node-id="1t6NKzFpZowu0OMoAlhUd6">POST /sso/auth/verify</code>（Content-Type: application/json）</td></tr>
+    <tr data-page-node-id="SyUGIoMN5kFEdOJwAwprH1"><td data-page-node-id="BAkvXS8NXBZBU0GmYdRy37"><strong data-page-node-id="qLyG7ukk8gJU1MBaHYTqvq">鉴权</strong></td><td data-page-node-id="c574ZbuybVPl8ulFTH5uVn">免鉴权（匿名入口），但必须做限流 + nonce 防重放 + 失败锁定</td></tr>
+    <tr data-page-node-id="N1qbVl5tWKdaZpkfkzc90o"><td data-page-node-id="hCV2LDl3MmwWGVmil9MYrX"><strong data-page-node-id="CROIe4978FO5C6gau9IuWC">请求体</strong></td><td data-page-node-id="6VfITqHJnadlM6zl3F8I5A"><code class="inline" data-page-node-id="mziGuZIIkYUtOaihEBlDGz">{ "clientId": "xxx", "verifyData": "yyy", "redirect": "/targetPage" }</code></td></tr>
+  </table>
+  <h4 data-page-node-id="tVYY6ghTUDYO5fQXt5GffX">处理逻辑（B 后端，按序校验，任一失败即终止）</h4>
+  <ol data-page-node-id="48mVxBaXcyppSRMOz9DN2h">
+    <li data-page-node-id="b6gCd1xxPTG1whT477jCEe"><strong data-page-node-id="Qk2nHTDeU8CSkOA5OSFpf5">clientId 合法性</strong>：查 <code class="inline" data-page-node-id="iasBznyPK8VuqPm5AceE8H">t_sso_client</code>，不存在或已停用 → 拒绝（错误码见 6.4）；</li>
+    <li data-page-node-id="PDLCf1wxHhPS2TnEveImVm"><strong data-page-node-id="CWAArTTuHSstVG2sG2NJA5">Base64URL 解码</strong> → 解析 keyVersion / IV / 密文 / Tag（长度不合法 → 拒绝）；</li>
+    <li data-page-node-id="Lzd0MVjiFsezkoCscekOa2"><strong data-page-node-id="uKSr0fDBCrSDflpA46EeNH">keyVersion 有效性</strong>：取对应版本密钥（过渡期内新旧并行）；</li>
+    <li data-page-node-id="8MIfhehkLI8dGMUB1HCkAl"><strong data-page-node-id="THSpOsKLHdHoWYA88sECDf">AES-GCM 解密</strong>（clientId 作 AAD）：Tag 校验失败 = 数据被篡改或密钥不匹配 → 拒绝；</li>
+    <li data-page-node-id="IQoWwxVVDpgWPncqRkTtGy"><strong data-page-node-id="2ZI8EecDyNQOojg0pY5HWC">时效校验</strong>：<code class="inline" data-page-node-id="WOSrk1i2v74KxDRsZdDPor">now ≤ expireAt</code> 且 <code class="inline" data-page-node-id="YjfNcuBuh9UI3tWjIUvDJW">timestamp ≤ now</code>（防未来时间票据）；超出时效窗口 → 返回"票据已过期"；</li>
+    <li data-page-node-id="VkmUeoPchlKI8Qi4S5Fufe"><strong data-page-node-id="xOofECtVSYuph9jUPxHwma">防重放校验</strong>：检查 nonce 是否已消费（Redis <code class="inline" data-page-node-id="OcQ0HSXKQAY8sBikiD85cq">SETNX sso:nonce:{nonce}</code>，TTL = 时效窗口 + 5 分钟）；已存在 → 拒绝；不存在 → 占用；</li>
+    <li data-page-node-id="qj8U9V94ZB0GoBaPeQIEuX"><strong data-page-node-id="iPZsjCjT39EX6ifAA63xCN">身份映射</strong>：按 A 传来的 tenantId/userId 映射或自动开通 B 侧账号（首次进入自动建户策略由 B 决定，见 6.5）；</li>
+    <li data-page-node-id="s3q9Jdqnhc8theuggz0roD"><strong data-page-node-id="3s0quH49wox7ttJ2XTQmRD">建立 B 会话</strong>：签发 B 自身会话（见 6.5 Cookie 策略），记录审计日志。</li>
+  </ol>
+  <pre data-page-node-id="k1vYdsYfTjHzN8FFnxjzmB"><span class="c" data-page-node-id="YQc4qdHtlJ4XnelJDtAcwq">// 成功响应</span>
+{
+  "code": 0,
+  "msg": "ok",
+  "data": {
+    "user": { "userId":"U10001", "userName":"张三", "nickName":"预警小张", "tenantId":"T001",
+              "tenantCode":"HUBEI_CDC", "tenantName":"湖北省疾控中心", "regionCode":"420000" },
+    "sessionEstablished": true
+  }
+}
+<span class="c" data-page-node-id="QrKW31F3bEvI29ZRLzetDr">// 失败响应（错误码见 6.4）</span>
+{ "code": 40002, "msg": "票据已过期，请从智能预警系统重新进入" }</pre>
+
+  <h3 data-page-node-id="RsbTXbFB6XUem20b6SC0kF">6.4 统一错误码约定</h3>
+  <table data-page-node-id="87iv4Kd77VGJcxBvNoMdkP">
+    <tr data-page-node-id="BCawh9XriB5nzVeCowoVK4"><th data-page-node-id="R0z6V9pP7VIvNXaRlux00e">错误码</th><th data-page-node-id="fNKNdArO7IPtn0cOXY8lGK">场景</th><th data-page-node-id="teQgNwCb62oq0cN9Cy6GB7">用户提示（前端展示）</th><th data-page-node-id="PKv9Bd8ICqschJ60sYQ8NF">安全处置</th></tr>
+    <tr data-page-node-id="jAx26zCBpq0ZeRFM18cKuR"><td data-page-node-id="oWxDGzapwzPNu6wpD4X99p">40001</td><td data-page-node-id="Fw4DjlOjRAyYtj2xKw84X5">clientId 不存在 / 已停用</td><td data-page-node-id="7UDYMJFomo18xgQ7gHviyP">接入未授权，请联系管理员</td><td data-page-node-id="yLt96iFmrm3ByAVuGokrfC">记录审计日志（IP、UA）</td></tr>
+    <tr data-page-node-id="bzy2vGVmtBMZaVoK3GhrAn"><td data-page-node-id="oAIH0JkYBsKv15HpgLEA0I">40002</td><td data-page-node-id="BQR3g3lckzHxSY1cHRAkOU">票据过期（超过 5 分钟）</td><td data-page-node-id="sVTvj6lXSYC9zphnXmXqL0">链接已过期，请从智能预警系统重新进入</td><td data-page-node-id="qrTDiNaxo1vkF2ZSxndEcE">普通日志</td></tr>
+    <tr data-page-node-id="zxYUDrOpb22IyyCTK8x9Qz"><td data-page-node-id="WWn5e2km7EuQWTKbBhIP55">40003</td><td data-page-node-id="MT0oWdvoFi0VxpexeEQ1gf">解密失败（篡改 / 密钥不匹配）</td><td data-page-node-id="8v22XMxiDyWcVNEcFGdfqw">凭证无效，请从智能预警系统重新进入</td><td data-page-node-id="jpfOQiGfbfZ92T9zLolkuQ"><strong data-page-node-id="gYFv6yfFS5pexh5upAnVbe">安全告警日志</strong>（疑似攻击）</td></tr>
+    <tr data-page-node-id="HlKezcwBrzZc1RsMgJdOHU"><td data-page-node-id="CUg6kCCQ7y0Jup59yEBMNo">40004</td><td data-page-node-id="J7be45GEGPWmOx5KJfFC6F">nonce 重复（重放）</td><td data-page-node-id="7pyPV9DFZNt4rEwtDU9mvo">链接已失效，请重新进入</td><td data-page-node-id="eLWWkbD2K5JRi7qRtPHTup"><strong data-page-node-id="naslYBfXCgDCmSUtHhfqfP">安全告警日志</strong>（疑似重放攻击）</td></tr>
+    <tr data-page-node-id="4yyB5O0FlzGcDMnckWTP5V"><td data-page-node-id="SXnKZs5gL0OsFqXCf624am">40005</td><td data-page-node-id="ccWhGCygDDBrFPElXK4kzC">格式非法（Base64 / 长度不匹配）</td><td data-page-node-id="AcBTRLiKFJG6oyKqIflFMI">参数错误</td><td data-page-node-id="glmWGmEzwsuZ5Lt9aisHPn">限流 + 审计</td></tr>
+    <tr data-page-node-id="BZ4XIRoiD2SzTWYC48fwAd"><td data-page-node-id="eo1qwgj25SuIkrtHH29NXL">40006</td><td data-page-node-id="DDByBLjeTpNbO3TN77lvoR">限流触发</td><td data-page-node-id="a3N9POE5qEpPpG0QL1a7km">操作过于频繁，请稍后再试</td><td data-page-node-id="AEqDS0r51UknyPxM0WRUBn">限流日志</td></tr>
+  </table>
+
+  <h3 data-page-node-id="xq5DeR1CUSpQE4NXJd1BQb">6.5 B 会话策略（重点：iframe 跨域场景）</h3>
+  <table data-page-node-id="z7QG1kyuLLlLRd7FHqFWiU">
+    <tr data-page-node-id="vFgg6U7TdEG0UWpbSjA9Q5"><th style="width:210px" data-page-node-id="bBvDDRciSAt118rjlAHOPP">策略项</th><th data-page-node-id="wA4NKv2EpIpyqwAOUWEuq6">约定</th></tr>
+    <tr data-page-node-id="isUMeSV9YaIrEL1dJiho7h"><td data-page-node-id="qcAUyFs1UbFRpFAE7KGInL">会话载体</td><td data-page-node-id="wHNXBdyFbKkz777fYkJGnt">优先 <strong data-page-node-id="abnvsqq8ooAObspJ1WN5nV">HttpOnly + Secure + SameSite=None 的 Cookie</strong>（iframe 跨域场景下 Cookie 必须为 SameSite=None 才能随 iframe 请求携带）；若 B 前后端分离使用 Token，则 Token 存内存（不落 localStorage）</td></tr>
+    <tr data-page-node-id="7itIv2ZoZmbKOhUlL5YAtN"><td data-page-node-id="oAGTAMhegidqDavsnd8KFE">会话时长</td><td data-page-node-id="Quze9ZFnyVrkJnQYvViWZD">与 B 自身登录会话一致（如 30 分钟滑动过期）；iframe 嵌入下建议会话快到期时静默续期，避免 iframe 内弹登录页</td></tr>
+    <tr data-page-node-id="bseThEPEOtsB1KqWrwMKav"><td data-page-node-id="n976FECxFNpO67xqmfYZ4J">首次进入用户</td><td data-page-node-id="nVv0pTC9DGA4CDQtZzQiWx">方案一（推荐）：B 按 tenantId+userId 自动映射/开通 B 侧影子账号；方案二：校验 B 侧已存在账号，不存在则拒绝并提示先在 B 开通。上线前双方确认采用哪种</td></tr>
+    <tr data-page-node-id="HwEP7k7X2NKOR65ZlZsY7I"><td data-page-node-id="7ShNkxwR4JaJQEsGlDe0DV">登出联动（可选）</td><td data-page-node-id="jyqERaF4PmAnvCYFhmWCba">A 登出时通过 postMessage 通知 iframe 内 B 页面调用登出，或 B 会话独立管理；首期建议<strong data-page-node-id="0IR4qmxw3GL1ePQWwUXpBh">B 会话独立管理</strong>，二期再联动</td></tr>
+  </table>
+</section>
+
+<!-- ============ 07 B 前端拦截 ============ -->
+<section id="s7" data-page-node-id="Lm5hqV8ryW41iyQJcvDR0W">
+  <h2 data-page-node-id="NfoWqFPFSuyE4m2yBjLXFV"><span class="idx" data-page-node-id="Pgz8IPTmGof97tTzLDj7P6">07</span>B 系统前端拦截与会话初始化</h2>
+  <h3 data-page-node-id="4C1Fc41i0HsT4ZYiaV3cnQ">7.1 拦截逻辑（B 前端路由守卫 / 入口前置逻辑）</h3>
+  <pre data-page-node-id="GSf6gw5E0JvE9diQAsF4fQ"><span class="c" data-page-node-id="lk3LPTQx923txHFHC0bcTR">// B 前端全局路由守卫（Vue Router 示例，其他框架同理）</span>
+router.beforeEach(async (to, from, next) =&gt; {
+  const { clientId, verifyData } = to.query;
+  <span class="k" data-page-node-id="mMQgjFuaQSLP3e4deOludx">if</span> (clientId &amp;&amp; verifyData) {
+    <span class="k" data-page-node-id="E0vR7f6vUu3k6TrY7TcbsQ">try</span> {
+      <span class="c" data-page-node-id="8Ivv6fppFjVcjhOOl91bNc">// ① 上送 B 后端验证，后端 Set-Cookie 建立 B 会话</span>
+      <span class="k" data-page-node-id="YRl1UcjzDAfwVVICMODMPb">await</span> axios.post(<span class="s" data-page-node-id="0aHQlFQ9ieRchEVCTnmynQ">'/sso/auth/verify'</span>, { clientId, verifyData }, { withCredentials: <span class="k" data-page-node-id="X05eoxYggjhKp5It8x6fGZ">true</span> });
+      <span class="c" data-page-node-id="EQfzgfSt2k9Nq2AWyeIrDK">// ② 立即清洗 URL：移除 clientId / verifyData（防留在浏览器历史与日志）</span>
+      <span class="k" data-page-node-id="MCa24KYkDOAG0cy5fDo7Af">const</span> cleaned = { ...to.query }; <span class="k" data-page-node-id="oAVW7kz6j7m0KvYBtAeqYL">delete</span> cleaned.clientId; <span class="k" data-page-node-id="iyY1B8oAnlhXgu8fKe6ESn">delete</span> cleaned.verifyData;
+      next({ path: to.path, query: cleaned, replace: <span class="k" data-page-node-id="136NBE6Wdjr2x4OPpKYyHv">true</span> });
+    } <span class="k" data-page-node-id="FAqNKuQjpAYSZDEQQA4Je5">catch</span> (e) {
+      <span class="c" data-page-node-id="QLo4Y6dLS255GpYjb47sSY">// ③ 展示 B 侧统一错误页（错误码 → 文案见 6.4）</span>
+      next({ path: <span class="s" data-page-node-id="X2xtyLftEENdreHz7wzE5v">'/sso-error'</span>, query: { code: e.code } });
+    }
+  } <span class="k" data-page-node-id="dajVhTGRZbvXa6wsIKirIf">else</span> {
+    <span class="k" data-page-node-id="xx3CC6gAHI85QvGFGlQcbu">const</span> hasSession = <span class="k" data-page-node-id="ooMVqPB5JnjIGjVuDxvhTr">await</span> checkBSession(); <span class="c" data-page-node-id="A81DxII2aMXB291meg3HrV">// 探活 B 会话</span>
+    hasSession ? next() : next(<span class="s" data-page-node-id="x0wdSiEqhhhupnTUWQ06QJ">'/sso-error'</span>);  <span class="c" data-page-node-id="eZKhQo3XopujahCRZyzbXo">// 无票据且无会话 → 引导回 A</span>
+  }
+});</pre>
+  <h3 data-page-node-id="xwXvMPIyIwjxsSxCbiIhIy">7.2 关键前端注意事项</h3>
+  <ul data-page-node-id="QaJ0SxazsFRlsuwQWJxM0W">
+    <li data-page-node-id="gjzzHS1TEhRgi8XGPQA8cf"><strong data-page-node-id="TNBzIOYZIiTwANiAL1mqyv">URL 清洗必须在会话建立后立即执行</strong>（replace 而非 push，避免票据进入历史栈）；</li>
+    <li data-page-node-id="xMCs4aDU7sLac1ICK6ykJX">iframe 嵌入场景，B 的资源加载需全部相对路径或同域 CDN，<strong data-page-node-id="WQFqRAbYxLDnBpliiDIcQ9">不能出现第三方阻塞资源</strong>；</li>
+    <li data-page-node-id="U9QbFFQL1TLdakMWfy37o0">B 侧 <code class="inline" data-page-node-id="qc14C944tSBcccUXhe9sii">X-Frame-Options</code> / CSP <code class="inline" data-page-node-id="37j7GYFh7PL8E54JhfMrCP">frame-ancestors</code> 必须放行 A 的域名（且仅放行 A），防止被其他站点恶意嵌套（点击劫持）；</li>
+    <li data-page-node-id="K8SYmPZis7FVCYsvleg4bZ">票据验证失败时，B 错误页提供"返回智能预警"链接（由 B 配置 A 的入口地址）；</li>
+    <li data-page-node-id="ZGAzlGbqq2t6eTGkEa7idU">B 前端应对 <code class="inline" data-page-node-id="2HYNfmAgehKWaWMdxkUDtb">/sso/auth/verify</code> 做按钮级防抖，避免用户刷新触发重复验证（nonce 已消费会报 40004，属预期行为，文案已覆盖）。</li>
+  </ul>
+</section>
+
+<!-- ============ 08 时效与防重放 ============ -->
+<section id="s8" data-page-node-id="HQswaTqcznqatDNWRntOmq">
+  <h2 data-page-node-id="wtT8IRXzwXd05KMJs2Vups"><span class="idx" data-page-node-id="WLPLfIcaxt1s90i415uDBD">08</span>时效控制与防重放设计</h2>
+  <h3 data-page-node-id="MHdlmugBFvgwXxOnmk0sNA">8.1 时效校验规则（双端时钟）</h3>
+  <table data-page-node-id="xEDNceSEvkKVWPm0t2YDz7">
+    <tr data-page-node-id="OEH1vWHmqZDVnpaGXxDF85"><th data-page-node-id="HCvVuq8HYuP5xCndYmZESG">校验项</th><th data-page-node-id="B5BTuSYigJ3qrr74b3laYE">规则</th><th data-page-node-id="WUXROxOletVCaLKvWyoiC9">目的</th></tr>
+    <tr data-page-node-id="HHiOpH9cSsht2nX0bL87I0"><td data-page-node-id="OoYOGLHAWsfCOPFPRkuW7e">正向时效</td><td data-page-node-id="woMuE89XWzsCO8ifSVwHGU"><code class="inline" data-page-node-id="C8yrIhbavGqvCZB6Svq12K">now &gt; expireAt</code> → 拒绝（40002）</td><td data-page-node-id="qnBCcVSzLNfJ9bNS00Qg2k">票据签发后 5 分钟内必须完成验证</td></tr>
+    <tr data-page-node-id="nCFyjAOxYVAe8pk2DCPUSt"><td data-page-node-id="gyFlaLxGLc1Eg05lGVK8pC">反向时效</td><td data-page-node-id="2MdVruiko9kxq7oxXFbMns"><code class="inline" data-page-node-id="4yHLnWrNTy0WulZrpUsnu0">timestamp &gt; now + 60s</code> → 拒绝（40002）</td><td data-page-node-id="wMEv57T0qT36GQHq3XRR6H">防止伪造"未来时间"票据长期有效</td></tr>
+    <tr data-page-node-id="QIEohNxEnLABfWFyH34W1H"><td data-page-node-id="J6zR8PBOUIpzqT3E9lp4FP">时钟偏差容忍</td><td data-page-node-id="HTlsAUFygc15r7fLB9KvQG">双向各容忍 <strong data-page-node-id="eXYBQeeSxLqcGKiE4M9nqh">60 秒</strong>（A、B 服务器均需 NTP 校时）</td><td data-page-node-id="GAQPdfwAkHASXbvbsScFgJ">消除分布式时钟漂移误杀</td></tr>
+  </table>
+  <div class="callout warn" data-page-node-id="JGhpy5pnMhBD4okQlgocu1">
+    <span class="t" data-page-node-id="cdjTKPQAPEr4MFn19nphKJ">⚠️ 上线前置条件</span>
+    A、B 两台服务器<strong data-page-node-id="lkuzZJGwjnTpdFWM3GwkZ0">必须开启 NTP 时间同步</strong>，且运维在上线检查单中确认。时钟偏差超过容忍窗口会导致大量 40002 误报。
+  </div>
+  <h3 data-page-node-id="7twDF8dlIwSg3aMiYN7GCW">8.2 防重放（nonce 一次性消费）</h3>
+  <ul data-page-node-id="mIl14UnSWQWbVpQ41bRQwp">
+    <li data-page-node-id="FZsiFgRX4lhWMAAOBT4FLG">存储介质：<strong data-page-node-id="AxbGJvtGphhMF6QjwCCmwb">Redis</strong>，Key：<code class="inline" data-page-node-id="DITAenHYjLn2qB3sodnB5f">sso:nonce:{nonce}</code>，Value：clientId；写入方式 <code class="inline" data-page-node-id="FKqpUeshfBuuIG5ejYTpiY">SET NX EX</code>（原子占位）；</li>
+    <li data-page-node-id="3QEJrbhfGBbNThOAzyuNZV">TTL = 时效窗口 + 5 分钟（400 秒）—— 过期后自然清理，无需后台任务；</li>
+    <li data-page-node-id="0KEkwxGmBszVPoQQ1EJ9DX">降级方案：无 Redis 环境可落 MySQL 唯一索引表（<code class="inline" data-page-node-id="pQhtqRP9iwk6aAHt2qxbsC">uk_nonce</code>），但高并发下推荐 Redis；</li>
+    <li data-page-node-id="0KBJPMEnkie4pwtaXPJI8G"><strong data-page-node-id="mryO0MA37xXjx4qCxn1tym">验证顺序</strong>：nonce 占位放在解密成功<strong data-page-node-id="CGKBFrqrLw4dKHTwaXsscy">之后</strong>（避免攻击者用伪造 nonce 恶意占用存储）。</li>
+  </ul>
+  <h3 data-page-node-id="EOUrfIwlASUPSwBmxiXGZd">8.3 安全增益总结</h3>
+  <p data-page-node-id="RRSggVEWXlHYb6M7NzLgDg">时效（5 分钟）+ nonce 一次性 + URL 清洗三重叠加后，即使 verifyData 泄露到浏览器历史 / 代理日志，攻击者拿到时票据已失效或已被消费，<strong data-page-node-id="bsztFwypTAA2oQ60kr62DV">实际可利用窗口趋近于零</strong>。</p>
+</section>
+
+<!-- ============ 09 安全评估 ============ -->
+<section id="s9" data-page-node-id="acZMfqT1kTicKz8DCwcrNC">
+  <h2 data-page-node-id="BrXUQrnGR0Aw5Cl9zGHWl8"><span class="idx" data-page-node-id="hSldWDnA8Wx5IrTqflLFDN">09</span>安全强度评估（威胁矩阵）</h2>
+  <h3 data-page-node-id="VIH9aeFuGSDockD9ZLliXH">9.1 威胁与防护对照表（STRIDE 简化版）</h3>
+  <table data-page-node-id="iXJ2ifW5ODsSL4wjBFWBVa">
+    <tr data-page-node-id="4lXXvtRK4S1dEKKFmH43vI"><th style="width:150px" data-page-node-id="juMNLCmFjUAxc5GRaaN9UH">威胁类别</th><th style="width:280px" data-page-node-id="nFLECpwfIFzhA7Hky6Insp">攻击场景</th><th data-page-node-id="quF2OYQi4lSGYByvM7xi9f">防护措施</th><th style="width:90px" data-page-node-id="VNMPIAc0bxCUQQ5oNsZ5bz">残余风险</th></tr>
+    <tr data-page-node-id="RlRmuQXAyEM8hhEibFqErL"><td data-page-node-id="YHyM7G8IVGFVXw1po3wVEZ"><strong data-page-node-id="H9cr8tNBZvDy9F7WzogIe2">信息泄露</strong><br data-page-node-id="nIguuObLvcpEltlsGwaIBm">（窃听）</td><td data-page-node-id="f7aw6dZrb7h8xsH9YEPfs6">链路抓包读取 URL 中的 verifyData</td><td data-page-node-id="ZLr7Xp3Yzl5WpRpj8dP70B">全链路 HTTPS + AES-256-GCM 密文（密文不含任何明文可读信息）</td><td data-page-node-id="P2CD5zlD9PfIhOiYkBKhE3"><span class="badge badge-low" data-page-node-id="ihSUqkezRh8pp2edxpDFIn">低</span></td></tr>
+    <tr data-page-node-id="3vPp30pkpDtAjuRkuoul1R"><td data-page-node-id="xxIPoSACqiC4FWp9rgjjVK"><strong data-page-node-id="NfIIVo6wHUI4lStRNPgoWt">信息泄露</strong><br data-page-node-id="uGGUhtPAnKdcEpfAvAyHhG">（日志/历史）</td><td data-page-node-id="DWEwWEh3hEi0L8ugiPyDUt">浏览器历史、代理日志、Nginx access log 残留完整 URL</td><td data-page-node-id="9R6EwlvWrXzqUwAhaqpfDf">verifyData 一次性消费 + 5 分钟时效 + B 前端 URL 清洗；双方 access log 对 verifyData 参数脱敏（见 10 章）</td><td data-page-node-id="wzYAUFVu8GY28W9L8Inbgk"><span class="badge badge-low" data-page-node-id="z3riOs0Gr8P6w93Lv8urYr">低</span></td></tr>
+    <tr data-page-node-id="zTeYM3qjjABO1iP8qPjaqG"><td data-page-node-id="GcZpK1K63CSHvVskVytqEh"><strong data-page-node-id="4VSYwgmS7QnFlNJGxgmicg">篡改</strong></td><td data-page-node-id="J1kjEQwS0TPP8zFZXOWup5">中间人或恶意页面修改 verifyData 内容（如改 userId 冒充他人）</td><td data-page-node-id="iAA03xFnIKRN4AuNaNoJqE">AES-GCM 认证标签：密文任意 1 bit 改动 → 解密失败（40003）；clientId 绑定 AAD</td><td data-page-node-id="Bc6PIP5hOALVaq3kqJXAAu"><span class="badge badge-low" data-page-node-id="fhAbcBZG82CNuP2BTbyyjF">极低</span></td></tr>
+    <tr data-page-node-id="bvJGUr3PsPf0gDTRHi8EdK"><td data-page-node-id="xqocgAWmjGd6Afj4mpGCbK"><strong data-page-node-id="mPIv5pGqkQsQKmWN1670MN">重放</strong></td><td data-page-node-id="npslBu7tcADmHd3khrjl0E">截获 verifyData 后原样重发，冒充合法用户</td><td data-page-node-id="GRIi3DNrHTQqYBEjASSTuH">nonce 一次性消费（Redis SETNX）+ 5 分钟时效 + 时间戳双向校验</td><td data-page-node-id="A7y2k3MlywYuGpvRBne6Xv"><span class="badge badge-low" data-page-node-id="LFSYhydlIhsuP8a2AZyPOj">低</span></td></tr>
+    <tr data-page-node-id="2zNdJOJwo9vfhuDJZkGq5Y"><td data-page-node-id="FtQQ2kVoXVid6jVIcbOb5m"><strong data-page-node-id="nSJG75ts61tGkKeI5iSAU1">伪造票据</strong></td><td data-page-node-id="vkF59AKbiLgwEWJkTXpaeb">攻击者自造 verifyData（无密钥）</td><td data-page-node-id="3OkW3rDFCClRuQ3k33Sskp">密钥仅存于 A/B 服务端，256-bit 密钥暴力破解在计算上不可行</td><td data-page-node-id="oDcrPJLeeEfcAa1yy9OtQ9"><span class="badge badge-low" data-page-node-id="7WIu6Kj87AVUqWZmTpbOfJ">极低</span></td></tr>
+    <tr data-page-node-id="CFSGv7XdTp9zAjanqkh3B8"><td data-page-node-id="FTqXgJiDtz1PHcZTniIX4n"><strong data-page-node-id="UQZM5BPh7EBEq286I2hXYP">密钥泄露</strong></td><td data-page-node-id="q1aLAEQdAEKEptX8AAQ1lB">密钥入库、入代码、入聊天记录</td><td data-page-node-id="CXpnF8QjDAqe89JXaG4HEm">分发走安全渠道；存储加密 / KMS / 配置中心加密项；3 个月轮换 + keyVersion 过渡机制</td><td data-page-node-id="tDsDuZugPCStnRbrH1AtW5"><span class="badge badge-mid" data-page-node-id="Q3Ch3n63MApfQ8yrp6Wl0e">中</span><br data-page-node-id="WDjEQo4gowMUpRPMiri6kV">依赖管理纪律</td></tr>
+    <tr data-page-node-id="v1y371LTC02kyvY5qyfml0"><td data-page-node-id="UHyWxxmBawl7VoCXxGZVyq"><strong data-page-node-id="sC3GhhASIRqqg0uuftXJn5">拒绝服务</strong></td><td data-page-node-id="FW6OO8joVqOD8Y4FEamw2N">批量刷 A 票据接口 / B 验证接口</td><td data-page-node-id="MTWhfshIR02WfBNYHjODjL">A 票据接口登录态鉴权 + 用户级限流；B 验证接口 IP 限流 + 失败计数锁定</td><td data-page-node-id="X6MDsTfNo62fgv3KQkUOTn"><span class="badge badge-low" data-page-node-id="ylN8sTzV7Dr8FgvbYU4pTh">低</span></td></tr>
+    <tr data-page-node-id="aFKcBufYFjLj0HNMYT2Jpi"><td data-page-node-id="EsMJbGf4xDvEmCWXBrQxie"><strong data-page-node-id="CmPCFB9hIltTjrpLg5O0hP">点击劫持</strong></td><td data-page-node-id="E0FMLSC2ZUy7fyuinap80H">第三方恶意站点 iframe 嵌套 B 页面</td><td data-page-node-id="Tv9jQFp5h5biybFDHzShw8">B 配置 CSP <code class="inline" data-page-node-id="Gix30JelD3YMgs6GIEqi34">frame-ancestors 'self' https://A域名</code>，仅放行 A</td><td data-page-node-id="kkrfY0wHkBxe5L6ByOUM4H"><span class="badge badge-low" data-page-node-id="vYvK2EcwaMEX8TGFjnAoc7">低</span></td></tr>
+    <tr data-page-node-id="nzf2fw2HQZSathL1MNPYpm"><td data-page-node-id="pxJ3rQ1iNWlFCXj5IejsFE"><strong data-page-node-id="4y8p0GF5HlzI9EdSJJ7ldk">会话攻击</strong></td><td data-page-node-id="pMVm5HGHynMNuyFDWHn2Jg">B 会话 Cookie 被窃取 / CSRF</td><td data-page-node-id="pfQqQcdo9mz2AunAkkz14Y">HttpOnly + Secure + SameSite=None（跨域 iframe 必需）；关键操作二次校验；会话与票据解密出的身份强绑定</td><td data-page-node-id="Iagk3e6mmRh7Rn80bPn5Fg"><span class="badge badge-mid" data-page-node-id="g2f6an5ZHdCuqmFI5Pixlk">中</span><br data-page-node-id="ZBmTGtLPWY3nA5L6PEuqC1">跨域 Cookie 固有约束</td></tr>
+  </table>
+
+  <h3 data-page-node-id="wHkrYZ0GGmFZv7Djd0QUVh">9.2 安全强度结论</h3>
+  <div class="callout ok" data-page-node-id="SUNeTMj2HI86ldxTFwZEfZ">
+    <span class="t" data-page-node-id="KLhN5PercGEjJSbr7zJBEA">✅ 评估结论</span>
+    本方案在<strong data-page-node-id="1P3QBcjlQyBuu7x3VTclQW">传输机密性、完整性、防篡改、防重放</strong>四个维度均达到较高强度（AES-256-GCM 为目前工业界推荐的认证加密标准），整体可支撑<strong data-page-node-id="SIFuPiS3jrBxniT2WnbCDb">政务/公卫类敏感系统跨域免登</strong>场景，安全水位对标等保三级对身份鉴别与传输加密的要求方向。<br data-page-node-id="bWjxQ7T6LhF76rTaFp70tB"><br data-page-node-id="HzNIaOVvZFYfGXEwUgwTR1">
+    <strong data-page-node-id="iExOlBuz6gDJ0LThyKrUlG">残余风险集中在两处（均为管理性风险而非技术缺陷）：</strong>① 密钥的存储与轮换纪律；② iframe 跨域 Cookie 依赖 SameSite=None 的固有约束。上述两项已分别在第 4 章与 6.5 章给出操作规范。
+  </div>
+  <h3 data-page-node-id="8sxfEF32WX6aKrX79mXwD2">9.3 可选增强项（按需启用）</h3>
+  <table data-page-node-id="NlnEB1NGDiXDEa1S2Kc2iL">
+    <tr data-page-node-id="8L37sIv4Iv4TBbbHcDPQpU"><th data-page-node-id="fop6TYwfp0IdpU2PYumq4F">增强项</th><th data-page-node-id="Kb3kEIZAmOvvveltA7VGFC">说明</th><th data-page-node-id="81JHZ46GxWbiTC0Ra8CrVv">建议</th></tr>
+    <tr data-page-node-id="oZqwPrUCjvHBJBbuglVCzI"><td data-page-node-id="VHUr9SGpngibiGXt90myBR">国密算法替换</td><td data-page-node-id="6SwertKzUBzPb7aok2gdDG">AES-256-GCM → SM4-GCM（国密合规要求场景）</td><td data-page-node-id="M7SImwH4xT1k7uq4T9y2pu">如有等保密评国密要求则启用，结构与流程不变</td></tr>
+    <tr data-page-node-id="EYo6nSGouxcjCOe6ErP1J3"><td data-page-node-id="A10XnlhPLnqC843PDKJQqs">双向逃生通道</td><td data-page-node-id="Diq5xXl5HGkZFEleJ64OKg">A 加密接口返回后立即失效逻辑（A 侧不落库，天然一次性）</td><td data-page-node-id="FDQ5VHgoD3DFAdfsfDz8Rf">已默认满足，无需开发</td></tr>
+    <tr data-page-node-id="uHeP1sPeoBdxBV4q2wvoA7"><td data-page-node-id="JuQoTjs1FnCHIgr3Lc9no4">登出联动</td><td data-page-node-id="3YnwnDRcI3x1RytHtJ4Jgo">A 登出 → postMessage 通知 iframe 中 B 页面同步登出</td><td data-page-node-id="qgZVVdOv7OgoZ9YLafzdLE">二期实现</td></tr>
+    <tr data-page-node-id="2NDDSM7wa9xPykHh3Q715U"><td data-page-node-id="BIJHi0XlaMCzu7MUx0kuas">IP 绑定校验</td><td data-page-node-id="acVrVwnmEFhrm1AiMdSjoN">票据签发时记录用户 IP，验证时比对</td><td data-page-node-id="Cm2ryArUmSBKd49IiRr63q">仅当 A、B 用户出口 IP 一致时启用，公网环境慎用（NAT 会导致误杀）</td></tr>
+  </table>
+</section>
+
+<!-- ============ 10 注意事项 ============ -->
+<section id="s10" data-page-node-id="3ZIPUCMdhRK8i8sEYNGljY">
+  <h2 data-page-node-id="V8vnqvnfhHIMdViIpt6cwa"><span class="idx" data-page-node-id="NHRwnM6fRVyIryEUDBKGSI">10</span>注意事项与双方开发约定</h2>
+  <h3 data-page-node-id="A84Cka6LgzGXAk7idkc4lP">10.1 开发阶段强制约定</h3>
+  <table data-page-node-id="IEWQcgzBsUE0ZGDb875kqa">
+    <tr data-page-node-id="LO2giGuL6Kv5fMqvyS6goc"><th style="width:90px" data-page-node-id="tzymEf236tn3ABSszQ49LR">方</th><th data-page-node-id="w4dqBlRXpC7Kh1wxwMPBhv">约定内容</th></tr>
+    <tr data-page-node-id="qR1bryjJ7elF7MhtUlcsl5"><td data-page-node-id="iF2NB40GG9q4zobAvn4SOq"><span class="sysA" data-page-node-id="A3zwFHcoMpgYpCcJQz2xAI">A</span></td><td data-page-node-id="aHHCJOEoEGEDb83omezBFZ">
+      <ul style="margin-bottom:0" data-page-node-id="lC8WynzcYK3DTSiFOUBXpw">
+        <li data-page-node-id="DT6dpKywzHLM6tALt0fgMu">加密接口<strong data-page-node-id="4xGW426odeUXD5UfiAQCdU">必须鉴权 + 限流</strong>，严禁匿名可调；</li>
+        <li data-page-node-id="6KPqpd5cHbRGNqguwyHxye">密钥严禁出现在前端代码、Git 仓库、日志中；</li>
+        <li data-page-node-id="kcWL2FC0ieFC0y30tQgf43">IV 每次随机生成，<strong data-page-node-id="6F6Llb26UZeeTUPQRTcDhd">严禁复用</strong>（GCM 复用 IV 直接破坏安全性）；</li>
+        <li data-page-node-id="5slejfRjewVdPLCvZ7svIT">Base64URL 编码（无 padding），与 B 的解码实现对齐（联调首日用例覆盖）；</li>
+        <li data-page-node-id="jvTKx5ibqe4TEBTNB3PH1d">票据接口异常要有降级提示（"跳转服务暂不可用"），不能白屏。</li>
+      </ul>
+    </td></tr>
+    <tr data-page-node-id="hAp5FzhgOYIGkYuNhSKfTw"><td data-page-node-id="Ktc6QkJmLQniIMeADEdcHl"><span class="sysB" data-page-node-id="8Ycy0OPOI7sfaNGKiMd2Yr">B</span></td><td data-page-node-id="MNaT7nhr5akYNAk9MHwB39">
+      <ul style="margin-bottom:0" data-page-node-id="MMWPswThkM4zzfaEyV5eoC">
+        <li data-page-node-id="pinVQ5JkE00YURYzT35PPr">验证接口按 6.3 的<strong data-page-node-id="3cYQSrKKcpSwXXWubjpayu">校验顺序</strong>实现（nonce 占位放在解密成功之后）；</li>
+        <li data-page-node-id="Fc3bmNSqTf7c20lITPXFV3">nonce 消费必须原子操作（Redis SETNX / 数据库唯一索引），并发下不能双成功；</li>
+        <li data-page-node-id="d7k1fOR2eIhdElufcTFKLD">CSP <code class="inline" data-page-node-id="FJZQwDfop7gEc13CRpikXU">frame-ancestors</code> 精确放行 A 域名，不要配 <code class="inline" data-page-node-id="bRFJrAJjOnwErvf9wv0o1k">*</code>；</li>
+        <li data-page-node-id="ABApVHaui5tlLuzcmkTIBX">iframe 场景 Cookie：HttpOnly + Secure + SameSite=None，缺一不可；</li>
+        <li data-page-node-id="QY5QaOUJB51xkgFnp7rpZ4">错误码与文案严格按 6.4 对齐，错误页提供返回 A 的链接。</li>
+      </ul>
+    </td></tr>
+    <tr data-page-node-id="p50iscA4G59WFf6boTewog"><td data-page-node-id="iDxSmzw6ftyRdy9XE8sclH"><span class="sysA" data-page-node-id="r306kaiLZVAHwEt7rWX9V0">A</span> + <span class="sysB" data-page-node-id="WaJFuLydSVEeIFh5Q6YpZq">B</span></td><td data-page-node-id="m2U7ps6OvwEVoidpVArl7G">
+      <ul style="margin-bottom:0" data-page-node-id="hslftQjkojnzijuXCOCD0l">
+        <li data-page-node-id="qIf3Nq4Z1JdqssOAcDozBg">双方服务器 NTP 校时（8.1 前置条件）；</li>
+        <li data-page-node-id="owRcq1RgE9XnHDzlkyuPmB">access log 中对 <code class="inline" data-page-node-id="bgU9Vtj2GyQCgGybymnW77">verifyData</code> 参数脱敏（Nginx：<code class="inline" data-page-node-id="r1ICr6ukTQDn2js5Vr70BE">log_format</code> 使用 <code class="inline" data-page-node-id="ILLJi9K1JwbSwhlOsbPek0">$request_uri</code> 时需替换为过滤变量或全量关闭 query 记录）；</li>
+        <li data-page-node-id="e9PjSkpcE85KpCwDr0jBmN">密钥轮换日期提前一周互相知会，48 小时新旧并行过渡；</li>
+        <li data-page-node-id="JkIjxwBDGVbJLGvUc6wwxI">联调环境与生产环境使用<strong data-page-node-id="I8BhDmbL5yxHvecrskowxD">不同密钥</strong>，严禁测试密钥带上生产。</li>
+      </ul>
+    </td></tr>
+  </table>
+
+  <h3 data-page-node-id="7wZ5WRlCNxF0yRFozeV6SF">10.2 已识别的典型坑（实现前必读）</h3>
+  <ol data-page-node-id="urRlG5O6RjEDjHsRCJeiEa">
+    <li data-page-node-id="TcHWupJuRG8BahK2x68PNR"><strong data-page-node-id="DVnxxM2eR1ZMFoGX2g4mFn">SameSite 陷阱</strong>：Chrome 80+ 默认 SameSite=Lax，iframe 跨域下 B 的 Cookie 不携带 → B 必须显式设置 <code class="inline" data-page-node-id="chELOktCujcAY9bwS5xFGa">SameSite=None; Secure</code>，且 B 必须全站 HTTPS；</li>
+    <li data-page-node-id="07mdQ4hvnFjrJU5zfvn9yj"><strong data-page-node-id="0lOoZUyKSj8TdWS7hbMYWh">Base64 变体混淆</strong>：标准 Base64 的 <code class="inline" data-page-node-id="GUUHuoeqaF6V8qfZYyA0wY">+/=</code> 在 URL 中会被转义或截断，双方必须统一 Base64URL（<code class="inline" data-page-node-id="GPId204z7I1GPM5D5QAzy5">-_</code> 无 padding）；</li>
+    <li data-page-node-id="PxwpcC9Hacfq18XvcuTEUE"><strong data-page-node-id="R7iR5Xf5t1frMreoitzE8W">时钟漂移误杀</strong>：上线前用 <code class="inline" data-page-node-id="DnM46CPQIDRF0rRPRd7X2F">date</code> 命令核对两台服务器时间，偏差 &gt; 30 秒先修 NTP 再联调；</li>
+    <li data-page-node-id="gaxjUsiGQKCH2oDOYngNRe"><strong data-page-node-id="dgeNgUEwZyuy5iswVm3Jme">iframe 中弹窗/新开标签</strong>：B 页面内 <code class="inline" data-page-node-id="34o6lFzuhgAhuFxBU18YI7">target="_blank"</code> 新开的页面不继承票据，需保证 B 会话 Cookie 已建立即可正常访问；</li>
+    <li data-page-node-id="QwBrDDdlXUdtzpTpLEczhd"><strong data-page-node-id="2NgBQLTHF5mYWYVrGp2NiK">网关/Nginx 参数截断</strong>：个别网关对 URL 长度有限制（默认 4K 足够，但若有 WAF 自定义规则需确认不拦截长 query 参数）；</li>
+    <li data-page-node-id="vqmCSmcbF6QlzemHxCFP97"><strong data-page-node-id="YBoCHo6cJzeftOp4PyR1MO">重复验证</strong>：用户在票据验证进行中刷新页面 → nonce 已被消费 → 40004。前端文案已覆盖（"请重新进入"），同时 B 可在会话已建立的情况下直接放行而非报错（先探活会话再报错的顺序，见 7.1 代码）。</li>
+  </ol>
+</section>
+
+<!-- ============ 11 测试用例 ============ -->
+<section id="s11" data-page-node-id="BNcWy8wziWkkB2FmyZdN5G">
+  <h2 data-page-node-id="LUW3jAR27i0KnlzP7wBxAn"><span class="idx" data-page-node-id="EplrsrchY6W20ypKYD6WYY">11</span>联调测试用例清单</h2>
+  <table data-page-node-id="vOpojAASFAeiP1IcSSbWhC">
+    <tr data-page-node-id="dISFiy59AYywhuKfnfycdE"><th style="width:60px" data-page-node-id="TRM0IHJFrXMuLahFZyJfe0">编号</th><th data-page-node-id="LC1MbbZ8yPt0eBA4qKOY2s">用例</th><th data-page-node-id="uQ9ZpocNGara0CIUOz0RX7">预期结果</th></tr>
+    <tr data-page-node-id="vD0MYPlCswfXe89aP5KBv9"><td data-page-node-id="lDd3NrF7JwOOMRDNtZNtQp">T01</td><td data-page-node-id="cmBHLVO2zdMmxNjcYr5aRp">正常流程：A 登录 → 跳转 B → 免登成功</td><td data-page-node-id="cHk9DsAar5l0BExpQXmjzr">B 会话建立，URL 清洗，页面正常</td></tr>
+    <tr data-page-node-id="GSaCUOkha2XvKfGCA8RCUI"><td data-page-node-id="fHorNJv0GBSMfeJZKIvOpn">T02</td><td data-page-node-id="CZjZJkB0gv7s4qTP7oat9w">正常流程：iframe 嵌入 B 功能页</td><td data-page-node-id="X5Aj1CIEThFTNf2hhLnACY">iframe 内 B 会话建立，Cookie 正常携带</td></tr>
+    <tr data-page-node-id="tdxMLGvrHjW97FvOJwIQ4x"><td data-page-node-id="3w1llD9PFU56We8wpSftHl">T03</td><td data-page-node-id="mojUMe0uZQrnIKAyOLk6gy">票据过期：将 verifyData 中 timestamp 改为 6 分钟前（A 测试桩）</td><td data-page-node-id="67vD5TPQ5JT0C1CFJhjtA3">返回 40002，提示重新进入</td></tr>
+    <tr data-page-node-id="r5HkNJKGvcGDiQT3rWbr99"><td data-page-node-id="wYrgzZTwjwa9CjfzyBjWVO">T04</td><td data-page-node-id="WShhraKJhfCNcutHhgGREU">重放攻击：同一 verifyData 提交两次</td><td data-page-node-id="68yASxLzjKS12PDnGSW1tA">第二次返回 40004，安全告警日志落库</td></tr>
+    <tr data-page-node-id="1hWaESV334ZG9m9ef6ShHd"><td data-page-node-id="LHdNUe44kybZvEGWORDrMd">T05</td><td data-page-node-id="g3RRzJUBWEOxKaQdfP7PGU">篡改攻击：verifyData 任意字符替换</td><td data-page-node-id="OEvRjZmxvV5poRlXsARvgr">返回 40003，安全告警日志落库</td></tr>
+    <tr data-page-node-id="fZJG80qaLmAyWWYnqjSSjj"><td data-page-node-id="DEGJ0fSkcZ49WyExHo61Al">T06</td><td data-page-node-id="0KNsmxEQclPqKH5FIeqlbe">非法 clientId：使用未注册值</td><td data-page-node-id="enGDCCiPM49DAYWSdqZxXR">返回 40001</td></tr>
+    <tr data-page-node-id="ZpEiMa3bAIrpKyPGmdN80y"><td data-page-node-id="OADWHdaGJ2VkOH6FskeKXc">T07</td><td data-page-node-id="udobqj0KtZQklHk3fVug57">未来时间票据：timestamp 改为 now+10min</td><td data-page-node-id="NpDryEUA6099DzTcH2krnU">返回 40002（反向时效拦截）</td></tr>
+    <tr data-page-node-id="6DEnkfPSdBz9iAPgQoZy7n"><td data-page-node-id="AlY5i3ASQuCQWfXHcFcFHk">T08</td><td data-page-node-id="YV9L8hAxf5PshtXtq1sCIC">时钟偏差：模拟 B 服务器时间 ±60 秒内漂移</td><td data-page-node-id="QPqBCTd48oU1yL8PDyeDcH">验证正常通过（容忍窗口生效）</td></tr>
+    <tr data-page-node-id="UscGXs59uGOvmxKnF1gWYd"><td data-page-node-id="zPD1yjjTFrr9RkdhW8rPEb">T09</td><td data-page-node-id="DuSSk6aQTp8HyXhcOa8YqC">密钥轮换：签发旧版本票据，B 侧已换新密钥（过渡期内）</td><td data-page-node-id="lwTH717C3fYdW9XgaN3wJC">旧 keyVersion 票据仍可验证；过渡期后返回 40003</td></tr>
+    <tr data-page-node-id="iwGvwPXRWaxuT4YzpQ7EeA"><td data-page-node-id="AbFHcBNcptu3aDUR91jMRZ">T10</td><td data-page-node-id="B7BLY2SSsC0Sak7MkWVXEG">并发重放：同一 verifyData 并发 10 次请求</td><td data-page-node-id="eH8Io0ewdwWrOoEJwas79Q">仅 1 次成功，其余 40004（nonce 原子性）</td></tr>
+    <tr data-page-node-id="nM45AsphqLwtOtGqNpAVJl"><td data-page-node-id="FB2kvODLm8X24NnEpIq0lM">T11</td><td data-page-node-id="snOYrgtG6bCZ51IhwCei4f">A 未登录态调用票据接口</td><td data-page-node-id="m3tyW7qvCdQSdXdC4ZDsLs">401，无法获取票据</td></tr>
+    <tr data-page-node-id="0ORPNbk8fhkymAxtwU2EYF"><td data-page-node-id="dVgE9M4vtiNWkknj3SH4JH">T12</td><td data-page-node-id="qBKI6CoTDPLJGuXPBK2zbV">第三方域名 iframe 嵌套 B 页面</td><td data-page-node-id="llqaUD0wYPcjJllP9DO5rZ">被 CSP frame-ancestors 拦截，拒绝加载</td></tr>
+    <tr data-page-node-id="VpBuh1PghsVEvIPHf0Iy3e"><td data-page-node-id="V3UYah3xQf6pHF8DY7LzpP">T13</td><td data-page-node-id="tCCFn3g3kq1mGIwJE421Hy">限流：单用户 1 分钟内高频调用票据/验证接口</td><td data-page-node-id="cya4pKiAz4Xf6deFA4vNBs">触发 40006 限流</td></tr>
+    <tr data-page-node-id="yLtXWDTCXMRjQWW7sIw7CD"><td data-page-node-id="Vvf80WoOehIQLwcrY1g5x5">T14</td><td data-page-node-id="8KTCcVG89gHDPKeVzLG9UM">B 会话过期后再次进入（无票据）</td><td data-page-node-id="KPOfCA62HeBEEs6rNJ7IFD">引导至错误页，提示从 A 重新进入</td></tr>
+  </table>
+</section>
+
+<!-- ============ 12 上线检查清单 ============ -->
+<section id="s12" data-page-node-id="hS97YmBNuwFPmobfPhacCJ">
+  <h2 data-page-node-id="1uHFXdMw1H0FnDWxEYG2RD"><span class="idx" data-page-node-id="DWxhgSZmBS7MUhktGBxQbF">12</span>上线检查清单</h2>
+  <table class="plain" data-page-node-id="AHzxgmHQgYNKvo7DoPHxPa">
+    <tr data-page-node-id="TDaeAHjO06QqhZdAc5P2z2"><th style="width:70px" data-page-node-id="lWOdVlwA5H66NNFVe26VoN">类别</th><th data-page-node-id="4CG1473GO9JSyFzzHq3hUN">检查项</th><th style="width:70px" data-page-node-id="R2HwGCIfCbHVQR1dM87GcN">A</th><th style="width:70px" data-page-node-id="IJw3Ek9ncqXCsC1RixAFWP">B</th></tr>
+    <tr data-page-node-id="Y6Wqck89B2CqExhgi2vHk6"><td rowspan="3" data-page-node-id="FuWMlgxmDkPRNXwzSiTyko">环境</td><td data-page-node-id="1mqiz8O8CCdKfYJWgDppCH">生产密钥已生成并通过安全渠道完成交换（非测试密钥）</td><td data-page-node-id="JKLgnDCpRSRcTXlQcRBMnv">☐</td><td data-page-node-id="ZGaId0hRgE6YzZxSvKwCsI">☐</td></tr>
+    <tr data-page-node-id="qHjKvv8GsI3kqJW4VFQg6K"><td data-page-node-id="E3aODZeghjd2BxeFYGFndS">双方服务器 NTP 时间同步，偏差 &lt; 30 秒</td><td data-page-node-id="PBLrfQcLauxcxjPH7h9ydv">☐</td><td data-page-node-id="dTtLt4Bh7AqRiGkSo5SH9T">☐</td></tr>
+    <tr data-page-node-id="8mtKHXW9AsKqWHqursTlGX"><td data-page-node-id="mKxx9OZ7iN3ygMRyqBhmuT">全链路 HTTPS 证书有效</td><td data-page-node-id="HrduAeJOAdBQlXsFmspDFo">☐</td><td data-page-node-id="AfkWBQTNOsaDWftAsE7QWk">☐</td></tr>
+    <tr data-page-node-id="HGcYpic0DcFsPMmmnXkUeI"><td rowspan="4" data-page-node-id="rPeueQLzyfU7jsRKfGQVzk">配置</td><td data-page-node-id="Hc7XRgueh99WfYjGTbSjty">B：t_sso_client 已登记 A 的 clientId + 生产密钥 + status=启用</td><td data-page-node-id="vKolUYv1zPXHTh1edUy5Jo">—</td><td data-page-node-id="Vs5q3XnKBiZPSVAckafr7x">☐</td></tr>
+    <tr data-page-node-id="CbPrSpJVPWEJrYP9sLQo73"><td data-page-node-id="qID9yyyX6bp6ltPAigFOYr">B：CSP frame-ancestors 已放行 A 生产域名（且仅 A）</td><td data-page-node-id="ezngcBhkgDUF6YOWGAEItR">—</td><td data-page-node-id="ewgFVWn1vCYB5LwIGZHQYv">☐</td></tr>
+    <tr data-page-node-id="CVT1KLhhs125EAkE5FLoOn"><td data-page-node-id="AHrxbWW1LdPnfDwbf5cK4Q">B：会话 Cookie 含 HttpOnly + Secure + SameSite=None</td><td data-page-node-id="yPK2YO9tMPRrf8P2EXiXZj">—</td><td data-page-node-id="PEIlDrAl1AGWdND9iIqhjx">☐</td></tr>
+    <tr data-page-node-id="OwRztfsnuEpnEBxLkZUA6V"><td data-page-node-id="S7nxwWGXwzEd36lv7HVMsQ">A：B 域名、clientId、密钥已配置到生产配置中心（加密项）</td><td data-page-node-id="gOjzD2eIuj327Rw7xNhuQY">☐</td><td data-page-node-id="MxG2uuf8ojsPKZtRV7AoCs">—</td></tr>
+    <tr data-page-node-id="q5dSYAOuOO4adPqt7grgyQ"><td rowspan="3" data-page-node-id="R4SkF29iBOvHNUSlV9V5sU">安全</td><td data-page-node-id="Vo60D74ieoAF71zGMxHOLx">双方 access log 对 verifyData 参数脱敏已生效</td><td data-page-node-id="qXlGdP4qZhKEdgzaXrSY0p">☐</td><td data-page-node-id="yo9GFd8TbQTcxM6duNSpCv">☐</td></tr>
+    <tr data-page-node-id="E5Pk3G3vUlqa64CgiFwGVu"><td data-page-node-id="D6sYt95H23qhY1DFNjhwky">限流策略（A 票据接口 / B 验证接口）已在生产网关生效</td><td data-page-node-id="dAKT1PilvRtV55yWf9FQR3">☐</td><td data-page-node-id="IdGIJOFIf7oz1tt1bYqFX8">☐</td></tr>
+    <tr data-page-node-id="Yi8KynqabkyuAzzOI68tRK"><td data-page-node-id="KhaslgFCkhMKABS4KGaogE">安全告警日志（40003/40004）接入监控告警通道</td><td data-page-node-id="GrCoCWCvvpsjbhqeGnzr3Y">—</td><td data-page-node-id="GTyZst3OWdyig2wZJF2d3R">☐</td></tr>
+    <tr data-page-node-id="iw4bRYtrIvGkkdgXWS1X2Q"><td rowspan="2" data-page-node-id="2i8MBK9fYIwFUHiqXGkiUf">演练</td><td data-page-node-id="mLva2PXUziosl4mPAuRHO5">T01–T14 全量用例在生产预发环境通过</td><td data-page-node-id="F3IdV4JXSciELAhwqB8OWR">☐</td><td data-page-node-id="HphFphSv7pDUfdBeVO378m">☐</td></tr>
+    <tr data-page-node-id="WWXgdUBpwVNHPDcGHZYpBr"><td data-page-node-id="mM3Cpb7nBSfEaRctKl7Xwk">密钥轮换预演完成一次（含 48h 过渡验证）</td><td data-page-node-id="a5ZPvHRsDCoLn4PBFqEqsC">☐</td><td data-page-node-id="aEJ9X242AEKEPdHlL4C35b">☐</td></tr>
+  </table>
+</section>
+
+<!-- ============ 附录 代码 ============ -->
+<section id="s13" data-page-node-id="xmlvPfB98bbrSJE6zrUEWi">
+  <h2 data-page-node-id="yRHHFbk8mkR1yD2d9prtSL"><span class="idx" data-page-node-id="27l4EYxtTVFcHi1RaJtYch">A</span>附录：Java 参考实现（AES-256-GCM，JDK 8+ 原生）</h2>
+
+  <h3 data-page-node-id="oxjEBAgJwWiPxmGXef8yQh">A.1 加密工具（A、B 双方共用同一套编码约定）</h3>
+  <pre data-page-node-id="waDaWPsK7j62Pan9FHptLJ"><span class="k" data-page-node-id="xPvRG6UKVWNI5wwey28EPN">import</span> javax.crypto.Cipher;
+<span class="k" data-page-node-id="hbmhjmT5QekTrrtw0kAkuv">import</span> javax.crypto.spec.GCMParameterSpec;
+<span class="k" data-page-node-id="Gkgwmthy8GT7o62FZd0r19">import</span> javax.crypto.spec.SecretKeySpec;
+<span class="k" data-page-node-id="KLkxQmzGwphXd9UbDY32Xa">import</span> java.nio.ByteBuffer;
+<span class="k" data-page-node-id="NJAKxbPBTPjeSwwXR8UVZ8">import</span> java.security.SecureRandom;
+<span class="k" data-page-node-id="cL3Dt3XAbmGVmT9iT7Qf1d">import</span> java.util.Base64;
+
+<span class="k" data-page-node-id="UTFZTPD057OWXP7LbIXQI2">public class</span> <span class="a" data-page-node-id="RctlsJacBmDM9pfjhAtCuG">SsoCipherUtil</span> {
+
+    <span class="k" data-page-node-id="uOZncObnlZwObOIZ1DfPd7">private static final</span> <span class="a" data-page-node-id="qSw18qG262Wm6qmK00iMQC">int</span> IV_LEN = <span class="n" data-page-node-id="WrN1SVZObVBdimqVFIfJ1D">12</span>;      <span class="c" data-page-node-id="hVjCdwilmUY9b0JLrjp6C6">// GCM 推荐 IV 长度（字节）</span>
+    <span class="k" data-page-node-id="VksVNjRuv1IXuXsAkBDz6F">private static final</span> <span class="a" data-page-node-id="r8K2JbqTMY4pIEE2lL5foB">int</span> TAG_BITS = <span class="n" data-page-node-id="usmhhT3yXgR4tLhM7dmPe3">128</span>;  <span class="c" data-page-node-id="Ps2AmCjjw9hTSVpfI0HDDB">// 认证标签长度（bit）</span>
+    <span class="k" data-page-node-id="4tgRjWZCOMEXwhFCFiYet4">private static final</span> SecureRandom RANDOM = <span class="k" data-page-node-id="noIJrmsF7ja7B1rmAUgZLu">new</span> SecureRandom();
+
+    <span class="c" data-page-node-id="kfKFAysELgPaiWOVLMK3ot">/** 加密：payload(明文JSON) → verifyData(Base64URL)。aad 建议传 clientId */</span>
+    <span class="k" data-page-node-id="dD6EF3tJQSk41gUB0Di6b2">public static</span> String <span class="a" data-page-node-id="yY4p8uAtpNSCwupXEsc2qB">encrypt</span>(<span class="a" data-page-node-id="r79Cz5M3AI5GJyv3UOOCkt">byte</span>[] keyBytes, <span class="a" data-page-node-id="JOnQDRuqKTCKrXHLzlphOw">int</span> keyVersion, String payload, <span class="a" data-page-node-id="IzAlal1go8FqLU7QfT4sl5">byte</span>[] aad) {
+        <span class="k" data-page-node-id="ZT86py7eOQlMBqd1Hn8J5l">try</span> {
+            <span class="a" data-page-node-id="k6Y4nDlXzT0tDbXWTIhl25">byte</span>[] iv = <span class="k" data-page-node-id="I1DzAXK3uOYpmehedt5gRu">new byte</span>[IV_LEN];
+            RANDOM.nextBytes(iv);                                  <span class="c" data-page-node-id="1cA1i7ycND0wsIe7NgCFaG">// 每次随机 IV，严禁复用</span>
+
+            Cipher cipher = Cipher.getInstance(<span class="s" data-page-node-id="LLWAe1kcW8nkGqjBJMmG4Y">"AES/GCM/NoPadding"</span>);
+            cipher.init(Cipher.ENCRYPT_MODE, <span class="k" data-page-node-id="Ec8yQRrIKk9674lcHgZBR3">new</span> SecretKeySpec(keyBytes, <span class="s" data-page-node-id="ESbRRDrHAcc6kEsKIw8gZD">"AES"</span>),
+                        <span class="k" data-page-node-id="DfGOIxcSD27fCCMvv1HZWV">new</span> GCMParameterSpec(TAG_BITS, iv));
+            <span class="k" data-page-node-id="1ZgfXPsfpkT2cUOW75Ipqe">if</span> (aad != <span class="k" data-page-node-id="rr0vLLC5U8DQ12SaSdAYYz">null</span>) cipher.updateAAD(aad);          <span class="c" data-page-node-id="CfZJQ48uX0VHBChFu4TyZ5">// clientId 作 AAD 绑定</span>
+            <span class="a" data-page-node-id="sWECpvP6xDBhT39e1gN6bF">byte</span>[] cipherText = cipher.doFinal(payload.getBytes(<span class="s" data-page-node-id="H8zwIXOgyZIigCeaG4GYAi">"UTF-8"</span>));
+
+            <span class="c" data-page-node-id="s82sZZGEvIjq6rpJNJfWac">// 结构：keyVersion(1B) + IV(12B) + ciphertext(含tag)</span>
+            ByteBuffer buf = ByteBuffer.allocate(<span class="n" data-page-node-id="kPNDgQUm5OHZt37waXbSr2">1</span> + IV_LEN + cipherText.length);
+            buf.put((<span class="a" data-page-node-id="OToOSnrIP1sqIKIlmy92Cg">byte</span>) keyVersion).put(iv).put(cipherText);
+            <span class="k" data-page-node-id="wGDc4V0ONejeQE7DzY7ZEk">return</span> Base64.getUrlEncoder().withoutPadding().encodeToString(buf.array());
+        } <span class="k" data-page-node-id="dMlH4GGCHsv8IcxFLGx954">catch</span> (Exception e) {
+            <span class="k" data-page-node-id="DTV0nWi2tcqSEjrM7k3aG5">throw new</span> IllegalStateException(<span class="s" data-page-node-id="VUztRaRqCbBziO7oaZ7F9G">"SSO encrypt failed"</span>, e);
+        }
+    }
+
+    <span class="c" data-page-node-id="LAiXGiaOoIznDFjySgzPvD">/** 解密：verifyData → payload(明文JSON)。返回 [0]=keyVersion, [1]=明文 */</span>
+    <span class="k" data-page-node-id="PNbRSXBknVSgp3yFqdASZy">public static</span> Object[] <span class="a" data-page-node-id="9zl5dWlDQxlYCitehYBX0L">decrypt</span>(<span class="a" data-page-node-id="uHJhVC4mspXIrL5gozDavF">byte</span>[] keyBytes, String verifyData, <span class="a" data-page-node-id="b9X1vmsAvdR6KkDejJCyOD">byte</span>[] aad) {
+        <span class="k" data-page-node-id="hPe0j41MWvoq32eD3gOaGB">try</span> {
+            <span class="a" data-page-node-id="ozYE8W3dvNywx0ajOOTHXZ">byte</span>[] all = Base64.getUrlDecoder().decode(verifyData);
+            <span class="k" data-page-node-id="D4U6fAbJ0T3y5ujZvzGUUG">if</span> (all.length &lt; <span class="n" data-page-node-id="xPaNvu5D6gkxi8GCXrsrmQ">1</span> + IV_LEN + <span class="n" data-page-node-id="A2hS2iyu9SM4XmihVbmZH6">16</span>) <span class="k" data-page-node-id="zbSwkCaUngzAaT6JZ7BpZ8">throw new</span> IllegalArgumentException(<span class="s" data-page-node-id="UiAeJHy9xH0w5OKqBqC2ki">"verifyData 长度非法"</span>);
+
+            <span class="a" data-page-node-id="kivDXV5WoMvMowMUkHRuGr">int</span> keyVersion = all[<span class="n" data-page-node-id="pT6evIerdpBzOH0zNGw5Na">0</span>] &amp; <span class="n" data-page-node-id="45x0FZQOiW1bZGjBCZI3WX">0xFF</span>;
+            <span class="a" data-page-node-id="ulzWxYgwFxIUNCf72cNDVy">byte</span>[] iv = <span class="k" data-page-node-id="tiTOdJb8W7fVvABYhC5MNO">new byte</span>[IV_LEN];
+            System.arraycopy(all, <span class="n" data-page-node-id="INFCHDMSjU2lGpV706ESZ8">1</span>, iv, <span class="n" data-page-node-id="WQPUdBGeLdvpgpDzcgawgv">0</span>, IV_LEN);
+
+            Cipher cipher = Cipher.getInstance(<span class="s" data-page-node-id="LAS50g6bDERwe2Ihj6LGfQ">"AES/GCM/NoPadding"</span>);
+            cipher.init(Cipher.DECRYPT_MODE, <span class="k" data-page-node-id="I08nTRACO44aGlAPc8hWMW">new</span> SecretKeySpec(keyBytes, <span class="s" data-page-node-id="8hv2tVQyg2NY1ZXyqbTCBV">"AES"</span>),
+                        <span class="k" data-page-node-id="LLWkkJLWJc7DecSdjkpFo8">new</span> GCMParameterSpec(TAG_BITS, iv));
+            <span class="k" data-page-node-id="xmIxMgzJqRTH9ymlM2bZPE">if</span> (aad != <span class="k" data-page-node-id="5SdE0qpxHiSVfoqz7sMg6g">null</span>) cipher.updateAAD(aad);
+            <span class="a" data-page-node-id="PcHbiE6D1UUNbiHIwIaAj8">byte</span>[] plain = cipher.doFinal(all, <span class="n" data-page-node-id="VWdhfqklJ3sGXeARvkiCql">1</span> + IV_LEN, all.length - <span class="n" data-page-node-id="Jg1ugHtoD4ZHwFHWOF3IO3">1</span> - IV_LEN); <span class="c" data-page-node-id="6VKMLHaxV3MHEe8aKuOQ9I">// Tag校验失败将抛异常</span>
+
+            <span class="k" data-page-node-id="iH6cqTcihoLvM0qLCEZAPa">return new</span> Object[]{ keyVersion, <span class="k" data-page-node-id="HWcAuAD7zn031yK8QkRAuO">new</span> String(plain, <span class="s" data-page-node-id="nZT2BC7PGS42764bCoc1wY">"UTF-8"</span>) };
+        } <span class="k" data-page-node-id="chRqxT9mNxBUNqs4FKhhPi">catch</span> (Exception e) {
+            <span class="k" data-page-node-id="DAD4a30Av1wqFJPpALlSCP">throw new</span> IllegalStateException(<span class="s" data-page-node-id="a9337ehKZGpzff2k3fAeBf">"SSO decrypt failed (疑似篡改或密钥不匹配)"</span>, e);
+        }
+    }
+}</pre>
+
+  <h3 data-page-node-id="aQQ4275UlQeGD9B4OZbRTF">A.2 A 侧票据签发（示意）</h3>
+  <pre data-page-node-id="pxMqHCcFiKkwvuUgM4u6W8"><span class="c" data-page-node-id="Zb9HHl6rLaijGMo4eTDtrK">// A 后端：POST /api/sso/ticket（方法内已通过登录态获取 currentUser）</span>
+<span class="k" data-page-node-id="uy4G83SLfwc9Vr2d4FpkD7">long now</span> = System.currentTimeMillis();
+Map&lt;String, Object&gt; payload = <span class="k" data-page-node-id="7tYYT8HNMDsH3uUNC8e01B">new</span> LinkedHashMap&lt;&gt;();
+payload.put(<span class="s" data-page-node-id="xx3Hdqfu7d6PJrtdBMajAL">"userId"</span>,     currentUser.getUserId());
+payload.put(<span class="s" data-page-node-id="KXQUNzydClMjG52r2Ell1G">"userName"</span>,   currentUser.getUserName());
+payload.put(<span class="s">"nickName"</span>,   currentUser.getNickName());
+payload.put(<span class="s" data-page-node-id="7sFA5iBDT8p0UvdWEAq89T">"tenantId"</span>,   currentUser.getTenantId());
+payload.put(<span class="s" data-page-node-id="pzOhy2dGTANYXyvUDj4gXZ">"tenantCode"</span>, currentUser.getTenantCode());
+payload.put(<span class="s">"tenantName"</span>, currentUser.getTenantName());
+payload.put(<span class="s" data-page-node-id="YT2arYzyMaE6VmyFU7DQNR">"regionCode"</span>, currentUser.getRegionCode());
+payload.put(<span class="s" data-page-node-id="evFSBQVxXKUJmAeqCtzLS3">"regionName"</span>, currentUser.getRegionName());
+payload.put(<span class="s" data-page-node-id="wkpDHaa47JdwtuFDCl2R3W">"timestamp"</span>,  now);
+payload.put(<span class="s" data-page-node-id="0O8511AUGv3262YJLhKULy">"expireAt"</span>,   now + <span class="n" data-page-node-id="XwNyJJvPGovBxbsmIJeYKX">300_000L</span>);                    <span class="c" data-page-node-id="GxP9Mh0TWxhsAcC8rUFVk5">// 5 分钟</span>
+payload.put(<span class="s" data-page-node-id="T1UtaNwiTu1BlUDezOYYaJ">"nonce"</span>,     UUID.randomUUID().toString());
+
+String verifyData = SsoCipherUtil.encrypt(
+        bKeyBytes, bKeyVersion, JSON.toJSONString(payload),
+        clientId.getBytes(<span class="s" data-page-node-id="62hgwIiroTzyitLa06kAMi">"UTF-8"</span>));                        <span class="c" data-page-node-id="2y9XGM7MNyeYKsUa5zUmvD">// AAD = clientId</span>
+<span class="k" data-page-node-id="QsyCsAAPrJjpP5q2Dc1QAc">return</span> Result.ok(<span class="k" data-page-node-id="MFH765osu3e5gzDL0I443h">new</span> TicketVO(clientId, verifyData, now + <span class="n" data-page-node-id="fBScNv2XxpibvbET9WgcPX">300_000L</span>));</pre>
+
+  <h3 data-page-node-id="UN4O3IjzoWTr16rs684i4Z">A.3 B 侧验证核心（示意）</h3>
+  <pre data-page-node-id="fFYJY6AA3I86nqFYA7R8Zl"><span class="c" data-page-node-id="ABk7NNf5AroN9C9GhAshys">// B 后端：POST /sso/auth/verify</span>
+SsoClient client = clientMapper.selectByClientId(req.getClientId());
+<span class="k" data-page-node-id="Uf1HqjUCpl9bwEEhZI1sH1">if</span> (client == <span class="k" data-page-node-id="oD87csHD30zzJWJX5t0skT">null</span> || !<span class="s" data-page-node-id="uoSFuThHvHOWZNkDK8x48G">"0"</span>.equals(client.getStatus())) <span class="k" data-page-node-id="ku9NjkqtPsDCsHaXf8VhW9">return</span> Result.fail(<span class="n" data-page-node-id="WAS4DDjAhf2N0gMtIZGegD">40001</span>);
+
+Object[] result;
+<span class="k" data-page-node-id="qS4AnsxA3m1ozZT7o0Y63p">try</span> {
+    <span class="a" data-page-node-id="Gd74XoHRHeCjO5hGgs4S0i">byte</span>[] key = resolveKey(client, req.getClientId());  <span class="c" data-page-node-id="ZHEvToUsVXMiQw6UBbYbFd">// 按 keyVersion 解析密钥（新旧并行）</span>
+    result = SsoCipherUtil.decrypt(key, req.getVerifyData(), req.getClientId().getBytes(<span class="s" data-page-node-id="MADsZmu3BSfPDMMnaxFMd5">"UTF-8"</span>));
+} <span class="k" data-page-node-id="EvBe0NJZoBGDsm2wstWKzU">catch</span> (Exception e) {
+    securityLog.warn(<span class="s" data-page-node-id="AAC6kxgaayAEV8rOHas0si">"[SSO] 解密失败 clientId={}"</span>, req.getClientId());  <span class="c" data-page-node-id="JGuFFjipeoCzkqhGHRRbXC">// 40003</span>
+    <span class="k" data-page-node-id="pd12PdO6e3q7Z8JStiU147">return</span> Result.fail(<span class="n" data-page-node-id="pJtVty8RDGtNxQTIZIFnUo">40003</span>);
+}
+
+SsoPayload p = JSON.parseObject((String) result[<span class="n" data-page-node-id="SEYYsNaTiUNLo8cy8nEc8t">1</span>], SsoPayload.class);
+<span class="a" data-page-node-id="TLAG7PLnYn4iyiXzH7HLUy">long</span> now = System.currentTimeMillis();
+<span class="a" data-page-node-id="LN343wmB9ppL7q2Eqm0lqY">long</span> skew = <span class="n" data-page-node-id="rVOdfSy0jhC0QFsNoD8xZS">60_000L</span>;                                             <span class="c" data-page-node-id="0SePR5GbQEZoIxK7LvVlbU">// 时钟容忍 60s</span>
+<span class="k" data-page-node-id="VVyEBfaHNKJjhhc3JmzKkg">if</span> (now &gt; p.getExpireAt() + skew || p.getTimestamp() &gt; now + skew)
+    <span class="k" data-page-node-id="Q1hvz5DGv9LQFXUvAwbYMU">return</span> Result.fail(<span class="n" data-page-node-id="sfc5ItdkzJBECkYWQoCJC8">40002</span>);                                    <span class="c" data-page-node-id="M8kRK0wEjCmVqkhVcUyn4U">// 过期 / 未来票据</span>
+
+<span class="c" data-page-node-id="STTDWffKxRJhw6zLvNSGvT">// nonce 一次性消费（原子占位，TTL=400s）。注意：在解密成功之后执行</span>
+Boolean first = redisTemplate.opsForValue()
+        .setIfAbsent(<span class="s" data-page-node-id="8AHL2wc1PcsixvPNEGXr5X">"sso:nonce:"</span> + p.getNonce(), req.getClientId(), <span class="n" data-page-node-id="WGudnBuUzHCd7GtqAVEkGY">400</span>, TimeUnit.SECONDS);
+<span class="k" data-page-node-id="nVCKJYBXwSzggkCw1l2nl5">if</span> (!Boolean.TRUE.equals(first)) {
+    securityLog.warn(<span class="s" data-page-node-id="WCzMaDfmOTRaGfTVipTysY">"[SSO] 重放拦截 nonce={}"</span>, p.getNonce());      <span class="c" data-page-node-id="dGxMcRVTKpCsBBFZWgNSzH">// 40004</span>
+    <span class="k" data-page-node-id="OYUvaAqTWKDQosiJe9VrFE">return</span> Result.fail(<span class="n" data-page-node-id="3NJx7ZMgFDf5LxczYkJuLV">40004</span>);
+}
+
+<span class="c" data-page-node-id="aqqRg722BTHG3I1wi0TX7d">// 身份映射 + 建立 B 会话（HttpOnly Cookie / Token），略——见 6.5 策略表</span>
+<span class="k" data-page-node-id="BnJx5gtGdAldrchbYe002W">return</span> Result.ok(buildSession(p));</pre>
+
+  <div class="callout info" data-page-node-id="Xvn7Aq9AdCk4xnoGKSa7Vl">
+    <span class="t" data-page-node-id="Kg3S9effycTID8AotbugNI">📌 实现说明</span>
+    示例基于 JDK 8+ 原生 JCE（无需第三方依赖）；生产中密钥应从配置中心加密项 / KMS 读取而非硬编码；JSON 序列化框架任选（Jackson / Fastjson2 等），<strong data-page-node-id="njIt5ix5mFOUAsBmzd0bKf">双方仅需约定 JSON 字段名与 UTF-8 编码</strong>。
+  </div>
+</section>
+
+<div class="footer-note" data-page-node-id="iVjzRSUHdCydrsZ8WIxhBA">
+  智能预警（A） × 智算疾控（B）跨域免登集成方案 · V1.0 · 2026-08-31 · 双方评审稿
+</div>
+
+</div>
+</body>
+</html>

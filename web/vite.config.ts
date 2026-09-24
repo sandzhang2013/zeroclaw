@@ -1,7 +1,8 @@
 import { Buffer } from "node:buffer";
+import { copyFileSync } from "node:fs";
 import type { IncomingMessage, ClientRequest } from "node:http";
 import path from "path";
-import { defineConfig, type ProxyOptions } from "vite";
+import { defineConfig, type Plugin, type ProxyOptions } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { parseMockUserCookie } from "./src/lib/platformUser.ts";
@@ -135,11 +136,26 @@ const SPA_REDIRECT_PREFIXES = [
   "/memory",
 ];
 
+/** Serve the integration bridge from /_app without a second edited copy. */
+function copyIframeBridge(): Plugin {
+  const src = path.resolve(__dirname, "../docs/集成/iframe-bridge.js");
+  const dest = path.resolve(__dirname, "public/iframe-bridge.js");
+  const copy = () => {
+    copyFileSync(src, dest);
+  };
+  return {
+    name: "iframe-bridge-copy",
+    buildStart: copy,
+    configureServer: copy,
+  };
+}
+
 export default defineConfig(({ command }) => {
   const prefix = command === "serve" ? servePrefix() : "";
   return {
     base: command === "serve" ? `${prefix || ""}/` : "/_app/",
     plugins: [
+      copyIframeBridge(),
       react(),
       tailwindcss(),
       // Dev-only: the production gateway serves static assets under `/_app/*` by

@@ -144,6 +144,17 @@ pub fn require_ops_auth(state: &AppState, headers: &HeaderMap) -> Result<(), Aut
     require_auth(state, headers)
 }
 
+/// Frozen BFF identity after ops/user auth succeeded. `None` on the pairing path.
+#[must_use]
+pub fn frozen_bff_user(state: &AppState, headers: &HeaderMap) -> Option<UserAttrs> {
+    if !trusted_proxy_enabled(state) || !has_bff_secret(headers) {
+        return None;
+    }
+    require_trusted_proxy(state, headers)
+        .ok()
+        .map(|(_, attrs)| attrs)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,6 +264,22 @@ mod tests {
             ]),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn frozen_bff_user_is_none_without_secret() {
+        let state = bff_state("s3cret");
+        assert!(frozen_bff_user(&state, &HeaderMap::new()).is_none());
+        let attrs = frozen_bff_user(
+            &state,
+            &headers(&[
+                (HEADER_AUTH_SECRET, "s3cret"),
+                (HEADER_USER_ID, "ops"),
+                (HEADER_USER_ROLE, ROLE_OPS),
+            ]),
+        )
+        .expect("bff identity");
+        assert_eq!(attrs.user_id, "ops");
     }
 
     #[test]

@@ -34,6 +34,7 @@ import {
   dropSessionFromList,
 } from '@/lib/workbenchSession';
 import { clearChatHistory } from '@/lib/chatHistoryStorage';
+import { isEmbeddedFrame, planIframeAsk } from '@/lib/iframeAsk';
 
 const SIDEBAR_COLLAPSED_KEY = 'zeroclaw-workbench-sidebar-collapsed';
 const RIGHT_COLLAPSED_KEY = 'zeroclaw-workbench-right-collapsed';
@@ -210,7 +211,9 @@ export default function ChatWorkspace({
   const [activeSessionId, setActiveSessionId] = useState('');
   const [mountedSessionIds, setMountedSessionIds] = useState<Set<string>>(() => new Set());
   const [activeFolderId, setActiveFolderId] = useState<string>(DEFAULT_FOLDER_ID);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readBool(SIDEBAR_COLLAPSED_KEY, false));
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    () => isEmbeddedFrame(window) || readBool(SIDEBAR_COLLAPSED_KEY, false),
+  );
   const [rightCollapsed, setRightCollapsed] = useState(() => readBool(RIGHT_COLLAPSED_KEY, false));
   const [rightPct, setRightPct] = useState(() => readPct(RIGHT_PCT_KEY, 55));
   const splitRef = useRef<HTMLDivElement>(null);
@@ -232,6 +235,12 @@ export default function ChatWorkspace({
   const activeAlias = activeSession?.agentAlias ?? initialAlias;
 
   const statusRef = useRef<Record<string, PaneStatus>>({});
+  const bridgeSeenRef = useRef(new Map<string, string>());
+  const bridgeDoneRef = useRef(new Map<string, string>());
+  const bridgeAliasRef = useRef(initialAlias);
+  const bridgeFolderRef = useRef(DEFAULT_FOLDER_ID);
+  const bridgeFoldersRef = useRef<WorkbenchFolder[]>([]);
+  const bridgeRoleRef = useRef(userRole);
   const [indicators, setIndicators] = useState<Record<string, SessionIndicator>>({});
 
   const visibleSessionIds = useMemo(() => new Set([activeSessionId]), [activeSessionId]);
@@ -271,6 +280,13 @@ export default function ChatWorkspace({
       const prev = statusRef.current[sessionId] ?? {
         lastSeenCount: s.messageCount, liveCount: s.messageCount, streaming: false, unread: false,
       };
+      if (prev.streaming && !s.typing) {
+        const gatewayId = bridgeDoneRef.current.get(sessionId);
+        if (gatewayId) {
+          bridgeDoneRef.current.delete(sessionId);
+          void window.ScIframeBridge?.emit('ai:done', { sessionId: gatewayId });
+        }
+      }
       const visible = visibleSessionIdsRef.current.has(sessionId);
       const grew = s.messageCount > prev.lastSeenCount;
       statusRef.current[sessionId] = {
@@ -478,6 +494,56 @@ export default function ChatWorkspace({
     });
   }, []);
 
+  bridgeAliasRef.current = activeAlias;
+  bridgeFolderRef.current = activeFolderId;
+  bridgeFoldersRef.current = folders;
+  bridgeRoleRef.current = userRole;
+
+  useEffect(() => {
+    const bridge = window.ScIframeBridge;
+    if (!bridge?.embedded && !isEmbeddedFrame(window)) return;
+    if (!bridge?.on) return;
+    const collapse = () => {
+      setSidebarCollapsed(true);
+      setShowSkills(false);
+      try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, '1'); } catch { /* noop */ }
+    };
+    return bridge.on((msg) => {
+      if (msg.type !== 'ai:ask') return undefined;
+      collapse();
+      const plan = planIframeAsk(msg.payload, bridgeSeenRef.current);
+      if (plan.action === 'reject') return { accepted: false, reason: plan.reason };
+      if (plan.action === 'replay') {
+        return { accepted: true, sessionId: plan.sessionId, mode: 'new' };
+      }
+      const alias = bridgeAliasRef.current;
+      const foldersNow = bridgeFoldersRef.current;
+      const folderId = foldersNow.some((f) => f.id === bridgeFolderRef.current)
+        ? bridgeFolderRef.current
+        : DEFAULT_FOLDER_ID;
+      const taskId = createTaskSessionId(alias);
+      const gatewayId = resolveTaskSessionId(alias, taskId);
+      if (!gatewayId) return { accepted: false, reason: '会话创建失败' };
+      const sessionId = makeSessionId(alias, taskId);
+      if (plan.msgId) bridgeSeenRef.current.set(plan.msgId, gatewayId);
+      bridgeDoneRef.current.set(sessionId, gatewayId);
+      const capped = clampWorkbenchAutonomy('supervised', maxAutonomyForRole(bridgeRoleRef.current));
+      saveWorkbenchAutonomy(sessionId, capped);
+      const title = sanitizeSessionTitle(plan.title);
+      setPendingPrompt({ sessionId, text: plan.modelText, autonomy: capped, files: [] });
+      setSessions((prev) => [...prev, {
+        id: sessionId,
+        agentAlias: alias,
+        taskId,
+        folderId,
+        updatedAt: stampNow(),
+        title,
+      }]);
+      setActiveSessionId(sessionId);
+      return { accepted: true, sessionId: gatewayId, mode: 'new' };
+    });
+  }, []);
+
   const toggleRight = useCallback(() => {
     setRightCollapsed((v) => {
       const next = !v;
@@ -536,6 +602,7 @@ export default function ChatWorkspace({
         onRename={renameSession}
         onNewFolder={newFolder}
         onSelectFolder={setActiveFolderId}
+        userId={userId}
         userName={userName}
         userRole={userRole}
         userRegion={userRegion}

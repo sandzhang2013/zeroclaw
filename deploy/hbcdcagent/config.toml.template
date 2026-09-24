@@ -12,33 +12,40 @@ port = 42617
 trusted_proxy = true        # 信任 BFF 写入的身份头
 path_prefix = "/hbcdcagent"
 web_dist_dir = "/opt/zeroclaw/web/dist"
+check_updates = false       # 内网离线，不要去查 GitHub 发布
 # 交付包 start-*.sh 会用 ZEROCLAW_gateway__web_dist_dir 覆盖为包内 web/dist
 # secret 不写这里！用环境变量 ZEROCLAW_gateway__trusted_proxy_secret
 
-# ── 内网模型（OpenAI 兼容）────────────────────────────
-[providers.models.openai.deepseek]
-uri = "http://<内网deepseek>/v1"
-model = "deepseek-chat"
+# ── 内网模型（vLLM / OpenAI 兼容，无外网）────────────────
+# 生产是离线私有模型。不要用 openai.*（不流式、不传 reasoning_effort），
+# 也不要用 deepseek.*（漏写 uri 会落到 api.deepseek.com，内网会失败或空等）。
+# 用 vllm 族：兼容实现会流式转发思考；漏写 uri 时默认 localhost，不会出公网。
+#
+# DeepSeek V4 Flash（vLLM 0.22，model 常为 dsv4）要靠请求体顶层
+# reasoning_effort 才出思考。[runtime].reasoning_enabled 只作用于 Ollama；
+# [runtime].reasoning_effort 按模型名白名单过滤，dsv4 会被丢掉。
+# 不要把 reasoning_effort 写成模型段独立字段，那个键不存在。
+# uri 填真实内网 IP 或 ASCII 主机名，不要中文/尖括号占位符。
+[providers.models.vllm.default]
+uri = "http://127.0.0.1:8000/v1"
+model = "dsv4"
 api_key = "not-needed"
 context_window = 128000
 
-[providers.models.openai.qwen]
-uri = "http://<内网qwen>/v1"
+[providers.models.vllm.default.provider_extra]
+reasoning_effort = "high"
+
+[providers.models.custom.qwen]
+uri = "http://127.0.0.1:8001/v1"
 model = "qwen-max"
 api_key = "not-needed"
 
-# ── 代理（alias 必须和工作台 URL 一致）────────────────
-# 工作台默认打开 /hbcdcagent/workbench/deepseek，对应 [agents.deepseek]。
-# CLI / 直连 daemon 常用 [agents.default]。两个都可以指向同一模型通道。
+# 工作台 URL `/workbench/<alias>` 必须对应下面某个 [agents.<alias>]。
+# 未配置的别名（例如书签还是 /workbench/deepseek）会回落到 default，不必复制一份相同的 agent。
+# CLI / 直连 daemon 常用 [agents.default]。
 [agents.default]
 enabled = true
-model_provider = "openai.deepseek"
-risk_profile = "default"
-runtime_profile = "default"
-
-[agents.deepseek]
-enabled = true
-model_provider = "openai.deepseek"
+model_provider = "vllm.default"
 risk_profile = "default"
 runtime_profile = "default"
 

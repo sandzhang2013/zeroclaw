@@ -140,11 +140,24 @@ pub async fn handle_agent_skills(
     if let Err(e) = require_auth(&state, &headers) {
         return e.into_response();
     }
+    // Plaza / 我的技能 write `user_workspace_dir`. Chat already loads that
+    // tree because the WS turn scopes BFF identity; this list must too, or
+    // the dashboard stays empty after a personal install.
+    let frozen_user = super::trusted_proxy::frozen_bff_user(&state, &headers);
     let config = state.config.read().clone();
     let install_root = config.install_root_dir();
     let service = SkillsService::new(&config, install_root);
 
-    match service.resolve_effective_skills(&alias) {
+    let resolved = if let Some(attrs) = frozen_user {
+        zeroclaw_runtime::agent::loop_::scope_user_attrs(Some(attrs), async {
+            service.resolve_effective_skills(&alias)
+        })
+        .await
+    } else {
+        service.resolve_effective_skills(&alias)
+    };
+
+    match resolved {
         Ok(set) => Json(AgentSkillsResult {
             agent: alias,
             skills: set.skills.into_iter().map(agent_skill_entry).collect(),
@@ -980,5 +993,101 @@ mod tests {
         .await;
         assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
         assert!(!expected.exists());
+    }
+
+    #[tokio::test]
+    async fn agent_skills_include_personal_skills_for_bff_caller() {
+        use crate::api::test_state;
+        use axum::http::HeaderValue;
+        use zeroclaw_api::ROLE_OPS;
+        use zeroclaw_config::schema::AliasedAgentConfig;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut config = zeroclaw_config::schema::Config {
+            data_dir: tmp.path().join("data"),
+            config_path: tmp.path().join("config.toml"),
+            ..zeroclaw_config::schema::Config::default()
+        };
+        config.gateway.trusted_proxy = true;
+        config.gateway.trusted_proxy_secret = Some("s3cret".into());
+        config
+            .agents
+            .insert("web".into(), AliasedAgentConfig::default());
+        let state = test_state(config);
+
+        let mut ops = HeaderMap::new();
+        ops.insert("x-auth-secret", HeaderValue::from_static("s3cret"));
+        ops.insert("x-user-id", HeaderValue::from_static("alice"));
+        ops.insert(
+            "x-user-role",
+            HeaderValue::from_bytes(ROLE_OPS.as_bytes()).unwrap(),
+        );
+
+        let saved = handle_save_personal_skill(
+            State(state.clone()),
+            ops.clone(),
+            Json(PersonalSkillBody {
+                agent: "web".into(),
+                name: "syndrome-ili-alert".into(),
+                frontmatter: SkillFrontmatter {
+                    name: "syndrome-ili-alert".into(),
+                    description: "ILI alert".into(),
+                    ..Default::default()
+                },
+                body: "# ili".into(),
+            }),
+        )
+        .await;
+        assert_eq!(saved.status(), StatusCode::CREATED);
+
+        let listed = handle_agent_skills(State(state.clone()), ops, Path("web".into())).await;
+        assert_eq!(listed.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(listed.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let names: Vec<&str> = json["skills"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|s| s["name"].as_str())
+            .collect();
+        assert!(
+            names.contains(&"syndrome-ili-alert"),
+            "personal plaza install must show on agent skills: {json}"
+        );
+
+        let mut bob = HeaderMap::new();
+        bob.insert("x-auth-secret", HeaderValue::from_static("s3cret"));
+        bob.insert("x-user-id", HeaderValue::from_static("bob"));
+        bob.insert(
+            "x-user-role",
+            HeaderValue::from_bytes(ROLE_OPS.as_bytes()).unwrap(),
+        );
+        let bob_listed = handle_agent_skills(State(state.clone()), bob, Path("web".into())).await;
+        let bob_body = axum::body::to_bytes(bob_listed.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let bob_json: serde_json::Value = serde_json::from_slice(&bob_body).unwrap();
+        let bob_names: Vec<&str> = bob_json["skills"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|s| s["name"].as_str())
+            .collect();
+        assert!(!bob_names.contains(&"syndrome-ili-alert"));
+
+        let pairing = handle_agent_skills(State(state), HeaderMap::new(), Path("web".into())).await;
+        let pairing_body = axum::body::to_bytes(pairing.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let pairing_json: serde_json::Value = serde_json::from_slice(&pairing_body).unwrap();
+        let pairing_names: Vec<&str> = pairing_json["skills"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|s| s["name"].as_str())
+            .collect();
+        assert!(!pairing_names.contains(&"syndrome-ili-alert"));
     }
 }
