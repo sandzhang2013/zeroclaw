@@ -529,7 +529,7 @@ export default function ChatWorkspace({
       bridgeDoneRef.current.set(sessionId, gatewayId);
       const capped = clampWorkbenchAutonomy('supervised', maxAutonomyForRole(bridgeRoleRef.current));
       saveWorkbenchAutonomy(sessionId, capped);
-      const title = sanitizeSessionTitle(plan.title);
+      const title = sanitizeSessionTitle(plan.title) ?? undefined;
       setPendingPrompt({ sessionId, text: plan.modelText, autonomy: capped, files: [] });
       setSessions((prev) => [...prev, {
         id: sessionId,
