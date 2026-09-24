@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { BookOpen, ChevronDown, Plus, Search, Store, Trash2, Wrench } from 'lucide-react';
+import { BookOpen, ChevronDown, FileArchive, FolderInput, Plus, Search, Store, Trash2, Wrench } from 'lucide-react';
 import { ConfirmDialog } from '@/components/ui';
 import {
   ApiError,
@@ -14,6 +14,7 @@ import {
 } from '@/lib/api';
 import { getLocale, t } from '@/lib/i18n';
 import { filterPersonalSkills, isPersonalSkillEnabled, skillSlug } from '@/lib/personalSkill';
+import { readSkillFromFiles, readSkillFromZip, skillImportErrorKey, type PackageFile } from '@/lib/skillPackage';
 import {
   filterPlazaSkills,
   installedSkillNames,
@@ -50,7 +51,10 @@ export function MySkillsPage({
   const [toggling, setToggling] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  const [importing, setImporting] = useState(false);
   const addRef = useRef<HTMLDivElement>(null);
+  const folderRef = useRef<HTMLInputElement>(null);
+  const zipRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -206,11 +210,62 @@ export function MySkillsPage({
     }
   }
 
+  useEffect(() => {
+    if (folderRef.current) folderRef.current.webkitdirectory = true;
+  }, []);
+
+  async function importPackage(kind: 'folder' | 'zip', files: File[]) {
+    if (files.length === 0 || importing) return;
+    setImporting(true);
+    setError(null);
+    setAddOpen(false);
+    try {
+      const zipFile = kind === 'zip' ? files[0] : undefined;
+      if (kind === 'zip' && !zipFile) return;
+      const parsed = zipFile
+        ? await readSkillFromZip(await zipFile.arrayBuffer())
+        : await readSkillFromFiles(packageFiles(files));
+      if (!parsed.ok) {
+        setError(t(skillImportErrorKey(parsed.error)));
+        return;
+      }
+      const skill = parsed.skill;
+      await savePersonalSkill({
+        agent,
+        name: skill.name,
+        title: skill.title,
+        description: skill.description,
+        body: skill.body,
+      });
+      setSkills((prev) => {
+        const kept = prev.find((row) => row.name === skill.name);
+        const row = {
+          name: skill.name,
+          title: skill.title,
+          description: skill.description,
+          enabled: kept?.enabled ?? true,
+        };
+        return [...prev.filter((item) => item.name !== skill.name), row].sort((a, b) => a.name.localeCompare(b.name));
+      });
+      setView({ kind: 'browse' });
+      setPane('mine');
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : t('workbench.skill_import_failed'));
+    } finally {
+      setImporting(false);
+    }
+  }
+
   const editing = view.kind === 'create' || view.kind === 'edit';
   const plazaDetail = view.kind === 'plaza-detail' ? view.skill : null;
   const draft = editing ? view.draft : null;
   const canSave =
-    Boolean(draft && (view.kind === 'edit' || skillSlug(draft.name || draft.title)) && draft.body.trim()) && !saving;
+    Boolean(
+      draft
+      && (view.kind === 'edit' || skillSlug(draft.name || draft.title))
+      && draft.description.trim()
+      && draft.body.trim(),
+    ) && !saving;
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-pc-surface">
@@ -279,8 +334,52 @@ export function MySkillsPage({
                 <Plus className="size-3.5 text-pc-text-muted" />
                 {t('workbench.skill_plaza_create')}
               </button>
+              <button
+                type="button"
+                role="menuitem"
+                title={t('workbench.skill_import_rule')}
+                disabled={importing}
+                onClick={() => folderRef.current?.click()}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-pc-text hover:bg-[var(--pc-hover)] disabled:opacity-40"
+              >
+                <FolderInput className="size-3.5 text-pc-text-muted" />
+                {t('workbench.skill_import_folder')}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                title={t('workbench.skill_import_rule')}
+                disabled={importing}
+                onClick={() => zipRef.current?.click()}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-pc-text hover:bg-[var(--pc-hover)] disabled:opacity-40"
+              >
+                <FileArchive className="size-3.5 text-pc-text-muted" />
+                {t('workbench.skill_import_zip')}
+              </button>
             </div>
           ) : null}
+          <input
+            ref={folderRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={(event) => {
+              const files = [...(event.target.files ?? [])];
+              event.target.value = '';
+              void importPackage('folder', files);
+            }}
+          />
+          <input
+            ref={zipRef}
+            type="file"
+            accept=".zip,application/zip"
+            className="hidden"
+            onChange={(event) => {
+              const files = [...(event.target.files ?? [])];
+              event.target.value = '';
+              void importPackage('zip', files);
+            }}
+          />
         </div>
       </div>
 
@@ -459,6 +558,15 @@ export function MySkillsPage({
                   <Plus className="size-4" />
                   {t('workbench.skill_plaza_create')}
                 </button>
+                <button
+                  type="button"
+                  title={t('workbench.skill_import_rule')}
+                  onClick={() => folderRef.current?.click()}
+                  className="inline-flex h-9 items-center gap-1.5 rounded-full border border-pc-border px-3 text-sm text-pc-text hover:bg-[var(--pc-hover)]"
+                >
+                  <FolderInput className="size-4" />
+                  {t('workbench.skill_import_folder')}
+                </button>
               </div>
             ) : null}
           </div>
@@ -560,6 +668,13 @@ function SkillEnableSwitch({
       />
     </button>
   );
+}
+
+function packageFiles(list: readonly File[]): PackageFile[] {
+  return [...list].map((file) => ({
+    path: file.webkitRelativePath || file.name,
+    text: () => file.text(),
+  }));
 }
 
 function TabButton({
