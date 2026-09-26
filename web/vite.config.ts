@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
-import { copyFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { copyFileSync, readFileSync, watch, type FSWatcher } from "node:fs";
 import type { IncomingMessage, ClientRequest } from "node:http";
 import path from "path";
 import { defineConfig, type Plugin, type ProxyOptions } from "vite";
@@ -37,6 +38,20 @@ const IDENTITY_HEADERS = [
 ] as const;
 
 /** Default Vite public prefix. Empty `ZEROCLAW_WEB_BASE` opts back to `/`. */
+function gitCommitCount(): number | null {
+  try {
+    const out = execFileSync("git", ["rev-list", "--count", "HEAD"], {
+      cwd: path.resolve(__dirname, ".."),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    const count = Number(out);
+    return Number.isInteger(count) && count >= 0 ? count : null;
+  } catch {
+    return null;
+  }
+}
+
 function servePrefix(): string {
   const raw = process.env.ZEROCLAW_WEB_BASE;
   return normalizeWebPrefix(raw === undefined ? DEFAULT_WEB_PREFIX : raw);
@@ -150,12 +165,53 @@ function copyIframeBridge(): Plugin {
   };
 }
 
+function workbenchVersionPlugin(): Plugin {
+  const virtualId = "virtual:workbench-version";
+  const resolvedId = `\0${virtualId}`;
+  const gitDir = path.resolve(__dirname, "..", ".git");
+  const refFile = (): string => {
+    const head = readFileSync(path.join(gitDir, "HEAD"), "utf8").trim();
+    const ref = head.match(/^ref: (.+)$/)?.[1];
+    return ref ? path.join(gitDir, ref) : path.join(gitDir, "HEAD");
+  };
+  return {
+    name: "workbench-version",
+    resolveId(source) {
+      if (source === virtualId) return resolvedId;
+    },
+    load(source) {
+      if (source !== resolvedId) return;
+      const count = gitCommitCount();
+      return `export const workbenchCommitCount = ${count ?? "null"};\n`;
+    },
+    configureServer(server) {
+      let current: FSWatcher | undefined;
+      const arm = () => {
+        current?.close();
+        try {
+          current = watch(refFile(), () => {
+            const mod = server.moduleGraph.getModuleById(resolvedId);
+            if (mod) server.moduleGraph.invalidateModule(mod);
+            server.ws.send({ type: "full-reload" });
+            arm();
+          });
+        } catch {
+          current = undefined;
+        }
+      };
+      arm();
+      server.httpServer?.on("close", () => current?.close());
+    },
+  };
+}
+
 export default defineConfig(({ command }) => {
   const prefix = command === "serve" ? servePrefix() : "";
   return {
     base: command === "serve" ? `${prefix || ""}/` : "/_app/",
     plugins: [
       copyIframeBridge(),
+      workbenchVersionPlugin(),
       react(),
       tailwindcss(),
       // Dev-only: the production gateway serves static assets under `/_app/*` by

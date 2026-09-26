@@ -1,9 +1,16 @@
 /** Personal-skill draft helpers. Writes go to POST /api/user/skills. */
 
 export interface PersonalSkillDraft {
+  /** Issued directory id, for example sk0009. Empty until the allocator returns. */
   name: string;
+  title: string;
   description: string;
   body: string;
+}
+
+/** Ids handed out by POST /api/skill-ids. */
+export function isIssuedSkillId(raw: string): boolean {
+  return /^sk\d{4,}$/.test(raw.trim());
 }
 
 /** Directory slug: no path separators, no `..`, length-capped. */
@@ -28,7 +35,6 @@ export function draftPersonalSkill(input: {
   assistantText: string;
 }): PersonalSkillDraft {
   const title = skillTitleFromAsk(input.userText);
-  const name = skillSlug(title);
   const ask = input.userText.trim();
   const reply = input.assistantText.trim();
   const description = (ask.split('\n')[0]?.trim() || title).slice(0, 160);
@@ -41,7 +47,7 @@ export function draftPersonalSkill(input: {
     '## How we did it',
     reply || title,
   ].join('\n');
-  return { name, description, body };
+  return { name: '', title, description, body };
 }
 
 export function isPersonalSkillEnabled(skill: { enabled?: boolean }): boolean {
@@ -58,6 +64,18 @@ export function filterPersonalSkills<T extends { name: string; title?: string; d
     const hay = [skill.name, skill.title ?? '', skill.description ?? ''].join('\n').toLowerCase();
     return hay.includes(q);
   });
+}
+
+export function skillIdTakenKey(message: string): string | null {
+  if (message.includes('you already have this skill id')) return 'workbench.skill_id_taken_self';
+  if (
+    message.includes('skill id is already used')
+    || message.includes('skill already exists')
+    || message.includes('already on the skill plaza')
+  ) {
+    return 'workbench.skill_id_taken';
+  }
+  return null;
 }
 
 export function shouldShowSaveSkillButton(input: {

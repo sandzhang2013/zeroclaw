@@ -400,7 +400,8 @@ pub fn build_system_prompt_with_mode_and_effective_tools(
     // ── 4. Workspace ────────────────────────────────────────────
     let _ = writeln!(
         prompt,
-        "## Workspace\n\nWorking directory: `{}`\n",
+        "## Workspace\n\nWorking directory: `{}`\n\n\
+         Skill files are not in this directory. Read and run them from each skill's `<directory>`.\n",
         workspace_dir.display()
     );
 

@@ -24,7 +24,7 @@ const RANK: Record<WorkbenchAutonomy, number> = {
 export function maxAutonomyForRole(role?: string): WorkbenchAutonomy {
   if (role == null || role.trim() === '') return 'full';
   const canonical = normalizeRole(role);
-  if (canonical === '高级用户' || canonical === '运维') return 'full';
+  if (canonical === '高级用户' || canonical === '管理员') return 'full';
   return 'supervised';
 }
 

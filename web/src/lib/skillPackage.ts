@@ -11,6 +11,12 @@ export type SkillPackageError =
   | 'bad-zip'
   | 'too-large';
 
+export interface SkillPackageFile {
+  /** Path relative to the directory that contains SKILL.md. */
+  path: string;
+  bytes: Uint8Array;
+}
+
 export interface ImportedSkill {
   /** Directory slug sent to POST /api/user/skills. */
   name: string;
@@ -18,6 +24,8 @@ export interface ImportedSkill {
   title: string;
   description: string;
   body: string;
+  /** SKILL.md plus scripts, references, and other files under that directory. */
+  files: SkillPackageFile[];
 }
 
 export type SkillPackageResult =
@@ -25,7 +33,7 @@ export type SkillPackageResult =
   | { ok: false; error: SkillPackageError };
 
 const MAX_ZIP_BYTES = 8 * 1024 * 1024;
-const MAX_SKILL_MD_BYTES = 1024 * 1024;
+const MAX_FILE_BYTES = 1024 * 1024;
 const MAX_ZIP_ENTRIES = 512;
 
 export function skillImportErrorKey(error: SkillPackageError): string {
@@ -62,6 +70,7 @@ export function parseSkillMarkdown(content: string): SkillPackageResult {
       title,
       description,
       body,
+      files: [],
     },
   };
 }
@@ -91,7 +100,14 @@ export async function readSkillFromFiles(
   if (!located.ok) return located;
   const match = listed.find((file) => normalizePackagePath(file.path) === located.path);
   if (!match) return { ok: false, error: 'missing' };
-  return parseSkillMarkdown(await match.text());
+  const parsed = parseSkillMarkdown(await match.text());
+  if (!parsed.ok) return parsed;
+  const packed = await filesUnderSkill(
+    listed.map((file) => ({ path: file.path, bytes: () => file.bytes() })),
+    located.path,
+  );
+  if (!packed.ok) return packed;
+  return { ok: true, skill: { ...parsed.skill, files: packed.files } };
 }
 
 export async function readSkillFromZip(bytes: ArrayBuffer): Promise<SkillPackageResult> {
@@ -102,20 +118,66 @@ export async function readSkillFromZip(bytes: ArrayBuffer): Promise<SkillPackage
   if (!located.ok) return located;
   const entry = opened.entries.find((item) => item.name === located.path);
   if (!entry) return { ok: false, error: 'missing' };
-  const text = await entry.text();
-  if (text == null) return { ok: false, error: entry.reason };
-  return parseSkillMarkdown(text);
+  const textBytes = await entry.bytes();
+  if (!textBytes.ok) return textBytes;
+  const parsed = parseSkillMarkdown(new TextDecoder('utf-8').decode(textBytes.bytes));
+  if (!parsed.ok) return parsed;
+  const packed = await filesUnderSkill(
+    opened.entries.map((item) => ({
+      path: item.name,
+      bytes: async () => {
+        const read = await item.bytes();
+        return read.ok ? read.bytes : read.error;
+      },
+    })),
+    located.path,
+  );
+  if (!packed.ok) return packed;
+  return { ok: true, skill: { ...parsed.skill, files: packed.files } };
 }
 
 export interface PackageFile {
   path: string;
   text: () => Promise<string>;
+  bytes: () => Promise<Uint8Array>;
 }
 
 interface ZipEntry {
   name: string;
-  text: () => Promise<string | null>;
-  reason: 'bad-zip' | 'too-large';
+  bytes: () => Promise<{ ok: true; bytes: Uint8Array } | { ok: false; error: 'bad-zip' | 'too-large' }>;
+}
+
+async function filesUnderSkill(
+  files: Iterable<{ path: string; bytes: () => Promise<Uint8Array | SkillPackageError> }>,
+  skillMdPath: string,
+): Promise<{ ok: true; files: SkillPackageFile[] } | { ok: false; error: SkillPackageError }> {
+  const root = skillMdPath.includes('/') ? skillMdPath.slice(0, skillMdPath.lastIndexOf('/')) : '';
+  const packed: SkillPackageFile[] = [];
+  for (const file of files) {
+    const normalized = normalizePackagePath(file.path);
+    if (!normalized || isIgnoredPackagePath(normalized)) continue;
+    const relative = relativeToSkillRoot(normalized, root);
+    if (!relative || isIgnoredPackagePath(relative)) continue;
+    const bytes = await file.bytes();
+    if (!(bytes instanceof Uint8Array)) return { ok: false, error: bytes };
+    if (bytes.byteLength > MAX_FILE_BYTES) return { ok: false, error: 'too-large' };
+    packed.push({ path: relative, bytes });
+  }
+  if (!packed.some((file) => file.path === 'SKILL.md')) return { ok: false, error: 'missing' };
+  return { ok: true, files: packed };
+}
+
+function relativeToSkillRoot(path: string, root: string): string | null {
+  if (!root) return path;
+  const prefix = `${root}/`;
+  if (!path.startsWith(prefix)) return null;
+  const relative = path.slice(prefix.length);
+  return relative.length > 0 ? relative : null;
+}
+
+function isIgnoredPackagePath(path: string): boolean {
+  const parts = path.split('/');
+  return parts.some((part) => part === '__MACOSX' || part === '.DS_Store' || part === '.disabled');
 }
 
 function isSkillMarkdown(path: string): boolean {
@@ -206,11 +268,15 @@ function openZip(bytes: Uint8Array): { ok: true; entries: ZipEntry[] } | { ok: f
     if (!normalized || normalized.endsWith('/')) continue;
     entries.push({
       name: normalized,
-      reason: uncompressedSize > MAX_SKILL_MD_BYTES || compressedSize > MAX_SKILL_MD_BYTES ? 'too-large' : 'bad-zip',
-      text: async () => {
-        if (flags & 1) return null;
-        if (uncompressedSize > MAX_SKILL_MD_BYTES || compressedSize > MAX_SKILL_MD_BYTES) return null;
-        return inflateEntry(bytes, view, localOffset, method, compressedSize);
+      bytes: async () => {
+        if (flags & 1) return { ok: false, error: 'bad-zip' };
+        if (uncompressedSize > MAX_FILE_BYTES || compressedSize > MAX_FILE_BYTES) {
+          return { ok: false, error: 'too-large' };
+        }
+        const inflated = await inflateEntry(bytes, view, localOffset, method, compressedSize);
+        if (!inflated) return { ok: false, error: 'bad-zip' };
+        if (inflated.byteLength > MAX_FILE_BYTES) return { ok: false, error: 'too-large' };
+        return { ok: true, bytes: inflated };
       },
     });
   }
@@ -233,7 +299,7 @@ async function inflateEntry(
   localOffset: number,
   method: number,
   compressedSize: number,
-): Promise<string | null> {
+): Promise<Uint8Array | null> {
   if (localOffset + 30 > bytes.length || view.getUint32(localOffset, true) !== 0x04034b50) return null;
   const nameLen = view.getUint16(localOffset + 26, true);
   const extraLen = view.getUint16(localOffset + 28, true);
@@ -241,14 +307,21 @@ async function inflateEntry(
   const dataEnd = dataStart + compressedSize;
   if (dataEnd > bytes.length) return null;
   const compressed = bytes.subarray(dataStart, dataEnd);
-  if (method === 0) return new TextDecoder('utf-8').decode(compressed);
+  if (method === 0) return compressed;
   if (method !== 8 || typeof DecompressionStream === 'undefined') return null;
   try {
     const stream = new Blob([compressed]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
-    const inflated = new Uint8Array(await new Response(stream).arrayBuffer());
-    if (inflated.byteLength > MAX_SKILL_MD_BYTES) return null;
-    return new TextDecoder('utf-8').decode(inflated);
+    return new Uint8Array(await new Response(stream).arrayBuffer());
   } catch {
     return null;
   }
+}
+
+export function bytesToBase64(bytes: Uint8Array): string {
+  const parts: string[] = [];
+  const chunk = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunk) {
+    parts.push(String.fromCharCode(...bytes.subarray(offset, offset + chunk)));
+  }
+  return btoa(parts.join(''));
 }

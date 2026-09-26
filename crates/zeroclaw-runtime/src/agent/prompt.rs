@@ -419,7 +419,8 @@ impl PromptSection for WorkspaceSection {
 
     fn build(&self, ctx: &PromptContext<'_>) -> Result<String> {
         Ok(format!(
-            "## Workspace\n\nWorking directory: `{}`",
+            "## Workspace\n\nWorking directory: `{}`\n\n\
+             Skill files are not in this directory. Read and run them from each skill's `<directory>`.",
             ctx.workspace_dir.display()
         ))
     }
@@ -956,6 +957,9 @@ mod tests {
         assert!(output.contains("<available_skills>"));
         assert!(output.contains("<name>deploy</name>"));
         assert!(output.contains("<location>skills/deploy/SKILL.md</location>"));
+        assert!(output.contains("<directory>/tmp/workspace/skills/deploy</directory>"));
+        assert!(output.contains("Do not copy them into the session working directory"));
+        assert!(output.contains("Do not `cd` into `<directory>`"));
         assert!(output.contains("read_skill(name)"));
         assert!(!output.contains("<instruction>Run smoke tests before deploy.</instruction>"));
         // Compact mode should still include tools so the LLM knows about them.

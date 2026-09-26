@@ -25,7 +25,7 @@ export function SavePersonalSkillModal({
   const nameRef = useRef<HTMLInputElement>(null);
   const titleId = useId();
   const hintId = useId();
-  const canSave = Boolean(draft.name.trim() && draft.body.trim()) && !busy;
+  const canSave = Boolean(draft.name.trim() && draft.title.trim() && draft.body.trim()) && !busy;
 
   useFocusTrap(panelRef, {
     onClose,
@@ -75,11 +75,20 @@ export function SavePersonalSkillModal({
         </p>
         <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-5 py-3">
           <label className="block text-xs font-medium text-pc-text-secondary">
+            {t('workbench.home_edit_skill_id')}
+            <input
+              value={draft.name}
+              readOnly
+              className="mt-1 h-9 w-full rounded-[10px] border border-pc-border bg-pc-input px-3 font-mono text-sm text-pc-text read-only:opacity-70"
+            />
+            <p className="mt-1 font-normal text-pc-text-muted">{t('workbench.skill_id_rule')}</p>
+          </label>
+          <label className="block text-xs font-medium text-pc-text-secondary">
             {t('workbench.save_skill_name')}
             <input
               ref={nameRef}
-              value={draft.name}
-              onChange={(e) => onChange({ ...draft, name: e.target.value })}
+              value={draft.title}
+              onChange={(e) => onChange({ ...draft, title: e.target.value })}
               className="mt-1 h-9 w-full rounded-[10px] border border-pc-border bg-pc-input px-3 text-sm text-pc-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--pc-focus)]"
             />
           </label>

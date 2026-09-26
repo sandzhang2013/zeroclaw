@@ -16,7 +16,7 @@ pub const IDENTITY_HEADERS: &[&str] = &[
 
 pub const ROLE_NORMAL: &str = "普通用户";
 pub const ROLE_ADVANCED: &str = "高级用户";
-pub const ROLE_OPS: &str = "运维";
+pub const ROLE_OPS: &str = "管理员";
 
 /// Local demo mode: cookie carrying an impersonated user id.
 pub const MOCK_COOKIE_NAME: &str = "zeroclaw_mock_user";
@@ -54,7 +54,7 @@ pub const MOCK_USERS: &[MockUser] = &[
     },
     MockUser {
         user_id: "ops",
-        display_name: "系统运维",
+        display_name: "系统管理员",
         role: ROLE_OPS,
         region: "全省",
         org: "湖北省疾病预防控制中心",

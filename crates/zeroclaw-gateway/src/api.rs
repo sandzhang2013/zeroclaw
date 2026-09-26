@@ -1,6 +1,6 @@
 //! REST API handlers for the web dashboard.
 //! Ops `/api/*` routes accept a pairing bearer token, or BFF `X-Auth-Secret`
-//! plus `X-User-Role: 运维` when `gateway.trusted_proxy` is on. User-facing
+//! plus `X-User-Role: 管理员` when `gateway.trusted_proxy` is on. User-facing
 //! routes (status, sessions, chat) use [`crate::trusted_proxy::require_user_principal`].
 
 use super::AppState;
@@ -37,7 +37,7 @@ pub(crate) fn extract_bearer_token(headers: &HeaderMap) -> Option<&str> {
         .and_then(|auth| auth.strip_prefix("Bearer "))
 }
 
-/// Verify pairing bearer token, or BFF 运维 identity when trusted-proxy is on.
+/// Verify pairing bearer token, or BFF admin identity when trusted-proxy is on.
 /// Returns error response if unauthorized.
 pub(crate) fn require_auth(
     state: &AppState,
@@ -3706,6 +3706,7 @@ pub(crate) mod tests {
                 ..Default::default()
             },
             body: "# flu".into(),
+            files: Vec::new(),
         };
         let city_saved =
             handle_save_personal_skill(State(state.clone()), wuhan, Json(flu_skill())).await;

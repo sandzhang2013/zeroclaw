@@ -83,6 +83,8 @@ pub struct SkillShellTool {
     /// Resolved per-command timeout in seconds (manifest `timeout_secs`, or the
     /// `SKILL_SHELL_TIMEOUT_SECS` default), clamped to a minimum of 1.
     timeout_secs: u64,
+    /// Original skill directory. Relative script tokens resolve here.
+    skill_dir: Option<std::path::PathBuf>,
 }
 
 impl SkillShellTool {
@@ -111,7 +113,13 @@ impl SkillShellTool {
             security,
             runtime,
             timeout_secs: tool.timeout_secs.unwrap_or(SKILL_SHELL_TIMEOUT_SECS).max(1),
+            skill_dir: None,
         }
+    }
+
+    pub fn with_skill_dir(mut self, skill_dir: std::path::PathBuf) -> Self {
+        self.skill_dir = Some(skill_dir);
+        self
     }
 
     fn build_parameters_schema(&self) -> serde_json::Value {
@@ -167,6 +175,10 @@ impl Tool for SkillShellTool {
 
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
         let command = self.substitute_args(&args);
+        let command = match &self.skill_dir {
+            Some(dir) => crate::skills::bind_skill_relative_paths(&command, dir),
+            None => command,
+        };
 
         // Security validation — always requires explicit approval (approved=true)
         // since skill tools are user-defined and should be treated as medium-risk.
@@ -223,6 +235,9 @@ impl Tool for SkillShellTool {
         // Injected after env_clear so it survives; absent when the turn is unscoped.
         if let Some(session_id) = get_session_id() {
             cmd.env(SESSION_ID_ENV_VAR, session_id);
+        }
+        if let Some(skill_dir) = &self.skill_dir {
+            cmd.env("ZEROCLAW_SKILL_DIR", skill_dir);
         }
 
         let result =

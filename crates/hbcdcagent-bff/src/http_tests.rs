@@ -126,7 +126,7 @@ async fn mock_user_info(
         &json!({
             "userInfo": {
                 "userId": user_id,
-                "realName": if code == "ops-code" { "系统运维" } else { "爱丽丝" },
+                "realName": if code == "ops-code" { "系统管理员" } else { "爱丽丝" },
                 "tenantId": "tenant-wh",
                 "tenantName": "武汉疾控"
             }
@@ -903,7 +903,7 @@ async fn ops_allowlist_sets_ops_role() {
         .expect("resp");
     let body = json_body(resp).await;
     assert_eq!(body["user"], "ops-user");
-    assert_eq!(body["role"], "运维");
+    assert_eq!(body["role"], "管理员");
     uc_h.abort();
     up_h.abort();
 }

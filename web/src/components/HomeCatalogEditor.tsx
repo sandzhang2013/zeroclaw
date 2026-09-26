@@ -1,17 +1,18 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, Plus, Trash2, X } from 'lucide-react';
 import { Button, ConfirmDialog, Select } from '@/components/ui';
-import { ApiError, getWorkbenchHomeCatalog, putWorkbenchHomeCatalog } from '@/lib/api';
+import { ApiError, getWorkbenchHomeCatalog, listSkillPlaza, putWorkbenchHomeCatalog } from '@/lib/api';
 import { t } from '@/lib/i18n';
 import {
   canSubmitHomeDraft,
-  draftHomeCap,
+  capFromPlazaSkill,
   draftHomePrompt,
   draftHomeTab,
   moveItem,
   previewLabel,
   usedHomeIds,
 } from '@/lib/homeCatalogEdit';
+import { filterPlazaSkills, type PlazaSkillView } from '@/lib/skillPlaza';
 import { useFocusTrap, FOCUSABLE_SELECTOR_FORM } from '@/hooks/useFocusTrap';
 import {
   HOME_CAP_ICON_IDS,
@@ -22,7 +23,7 @@ import {
   type HomeTabEdit,
 } from '@/lib/workbenchHomeCatalog';
 
-type DraftKind = 'tab' | 'cap' | 'prompt';
+type DraftKind = 'tab' | 'prompt';
 type DeleteKind = 'tab' | 'cap' | 'prompt';
 
 export function HomeCatalogEditor({
@@ -43,6 +44,7 @@ export function HomeCatalogEditor({
   const [dirty, setDirty] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
   const [draftKind, setDraftKind] = useState<DraftKind | null>(null);
+  const [plazaOpen, setPlazaOpen] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<DeleteKind | null>(null);
 
   useEffect(() => {
@@ -115,12 +117,6 @@ export function HomeCatalogEditor({
       setTabIndex(catalog.tabs.length);
       setCapIndex(0);
       setPromptIndex(0);
-    } else if (draftKind === 'cap' && tab) {
-      const next = draftHomeCap(labelZh, labelEn, usedHomeIds(catalog.tabs));
-      const caps = [...tab.caps, next];
-      patchTab(tabIndex, { caps });
-      setCapIndex(caps.length - 1);
-      setPromptIndex(0);
     } else if (draftKind === 'prompt' && cap) {
       const next = draftHomePrompt(labelZh, labelEn, usedHomeIds(catalog.tabs));
       const prompts = [...cap.prompts, next];
@@ -128,6 +124,16 @@ export function HomeCatalogEditor({
       setPromptIndex(prompts.length - 1);
     }
     setDraftKind(null);
+  }
+
+  function addPlazaSkill(skill: PlazaSkillView) {
+    if (!catalog || !tab) return;
+    if (catalog.tabs.some((item) => item.caps.some((chip) => chip.id === skill.id))) return;
+    const caps = [...tab.caps, capFromPlazaSkill(skill)];
+    patchTab(tabIndex, { caps });
+    setCapIndex(caps.length - 1);
+    setPromptIndex(0);
+    setPlazaOpen(false);
   }
 
   function confirmDelete() {
@@ -346,7 +352,7 @@ export function HomeCatalogEditor({
               {tab ? (
                 <button
                   type="button"
-                  onClick={() => setDraftKind('cap')}
+                  onClick={() => setPlazaOpen(true)}
                   className="inline-flex items-center gap-1 rounded-full border border-dashed border-pc-border px-3 py-2 text-sm text-pc-text-muted hover:text-pc-text"
                 >
                   <Plus className="size-3.5" />
@@ -357,6 +363,12 @@ export function HomeCatalogEditor({
 
             {cap ? (
               <div className="mb-4 grid gap-3 rounded-xl border border-pc-border p-4 md:grid-cols-2">
+                <p className="text-sm text-pc-text-secondary md:col-span-2">
+                  {t('workbench.home_edit_skill_id')}
+                  <span className="mt-1 block rounded-md border border-pc-border bg-pc-elevated px-3 py-2 font-mono text-sm text-pc-text">
+                    {cap.id}
+                  </span>
+                </p>
                 <label className="text-sm text-pc-text-secondary">
                   {t('workbench.home_edit_cap_zh')}
                   <input
@@ -490,6 +502,12 @@ export function HomeCatalogEditor({
         kind={draftKind}
         onClose={() => setDraftKind(null)}
         onConfirm={confirmDraft}
+      />
+      <PlazaSkillPicker
+        open={plazaOpen}
+        usedIds={new Set((catalog?.tabs ?? []).flatMap((item) => item.caps.map((chip) => chip.id)))}
+        onClose={() => setPlazaOpen(false)}
+        onPick={addPlazaSkill}
       />
 
       <ConfirmDialog
@@ -670,6 +688,130 @@ function HomeCatalogNameDialog({
             </Button>
           </div>
         </form>
+      </div>
+    </div>
+  );
+}
+
+function PlazaSkillPicker({
+  open,
+  usedIds,
+  onClose,
+  onPick,
+}: {
+  open: boolean;
+  usedIds: Set<string>;
+  onClose: () => void;
+  onPick: (skill: PlazaSkillView) => void;
+}) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+  const [query, setQuery] = useState('');
+  const [skills, setSkills] = useState<PlazaSkillView[]>([]);
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+
+  useFocusTrap(panelRef, {
+    onClose,
+    enabled: open,
+    focusableSelector: FOCUSABLE_SELECTOR_FORM,
+    preventDefaultOnEscape: true,
+  });
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setQuery('');
+    setStatus('loading');
+    listSkillPlaza()
+      .then((data) => {
+        if (cancelled) return;
+        setSkills(
+          (data.skills ?? []).map((skill) => ({
+            id: skill.name,
+            title: skill.title || skill.name,
+            description: skill.description,
+            body: skill.body,
+          })),
+        );
+        setStatus('ready');
+      })
+      .catch(() => {
+        if (!cancelled) setStatus('error');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  if (!open) return null;
+  const shown = filterPlazaSkills(skills, query);
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={titleId}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <div className="absolute inset-0 bg-pc-base/70 backdrop-blur-sm" />
+      <div
+        ref={panelRef}
+        className="relative flex max-h-[70vh] w-full max-w-md flex-col rounded-[var(--radius-xl)] border border-pc-border bg-pc-base shadow-[var(--pc-shadow-md)]"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="px-6 pt-5 pb-2">
+          <h2 id={titleId} className="text-sm font-semibold text-pc-text">
+            {t('workbench.home_edit_plaza_title')}
+          </h2>
+          <p className="mt-1 text-xs leading-relaxed text-pc-text-muted">
+            {t('workbench.home_edit_plaza_hint')}
+          </p>
+        </div>
+        <div className="px-6 pb-2">
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder={t('workbench.home_edit_plaza_search')}
+            className="w-full rounded-md border border-pc-border bg-pc-elevated px-3 py-2 text-sm text-pc-text"
+          />
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
+          {status === 'loading' ? (
+            <p className="px-4 py-3 text-sm text-pc-text-muted">{t('workbench.attach_skill_loading')}</p>
+          ) : null}
+          {status === 'error' ? (
+            <p className="px-4 py-3 text-sm text-status-error">{t('workbench.home_edit_plaza_failed')}</p>
+          ) : null}
+          {status === 'ready' && shown.length === 0 ? (
+            <p className="px-4 py-3 text-sm text-pc-text-muted">{t('workbench.home_edit_plaza_empty')}</p>
+          ) : null}
+          {status === 'ready' ? (
+            <ul>
+              {shown.map((skill) => {
+                const placed = usedIds.has(skill.id);
+                return (
+                  <li key={skill.id}>
+                    <button
+                      type="button"
+                      disabled={placed}
+                      onClick={() => onPick(skill)}
+                      className="flex w-full flex-col items-start gap-0.5 rounded-md px-4 py-2 text-left hover:bg-[var(--pc-hover)] disabled:cursor-default disabled:opacity-50"
+                    >
+                      <span className="flex w-full items-center gap-2">
+                        <span className="min-w-0 flex-1 truncate text-sm text-pc-text">{skill.title}</span>
+                        {placed ? (
+                          <span className="shrink-0 text-xs text-pc-text-muted">{t('workbench.home_edit_plaza_added')}</span>
+                        ) : null}
+                      </span>
+                      <span className="w-full truncate font-mono text-xs text-pc-text-muted">{skill.id}</span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : null}
+        </div>
       </div>
     </div>
   );

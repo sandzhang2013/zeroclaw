@@ -637,21 +637,23 @@ fn append_user_skills(
     let user_dir = config
         .user_workspace_dir(&attrs.user_id, agent_alias)
         .join("skills");
-    let (user_skills, user_dropped) = load_skills_from_directory(&user_dir, false);
+    let allow_scripts = config.skills.allow_scripts;
+    let (user_skills, user_dropped) = load_skills_from_directory(&user_dir, allow_scripts);
     dropped.extend(user_dropped.into_iter().map(|mut d| {
         d.origin_hint = "user".into();
         d
     }));
     for skill in user_skills {
-        if seen.contains_key(&skill.name) {
+        // The installed personal copy is the one this user picked. It replaces
+        // a workspace or bundle skill with the same directory id.
+        if let Some(previous) = seen.insert(skill.name.clone(), "user") {
+            skills.retain(|existing| existing.name != skill.name);
             shadows.push(ShadowedSkill {
                 name: skill.name.clone(),
-                origin_hint: "user".into(),
+                origin_hint: previous.into(),
             });
-        } else {
-            seen.insert(skill.name.clone(), "user");
-            skills.push(skill);
         }
+        skills.push(skill);
     }
 }
 
@@ -1389,14 +1391,21 @@ fn load_skill_toml(path: &Path) -> Result<Skill> {
 fn load_skill_md(path: &Path, dir: &Path) -> Result<Skill> {
     let content = std::fs::read_to_string(path)?;
     let parsed = parse_skill_markdown(&content);
-    let name = dir
+    // Agent Skills: the prompt id is the directory name. YAML `name` is the
+    // card title and may be a different language.
+    let dir_name = dir
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("unknown")
         .to_string();
+    let name = if dir_name.is_empty() || dir_name == "unknown" {
+        parsed.meta.name.clone().unwrap_or(dir_name)
+    } else {
+        dir_name
+    };
 
     Ok(Skill {
-        name: parsed.meta.name.unwrap_or(name),
+        name,
         description: parsed
             .meta
             .description
@@ -1646,6 +1655,156 @@ fn display_skill_location(path: &Path) -> String {
     }
 }
 
+/// Directory that owns `SKILL.md` / `SKILL.toml`. Bundled scripts stay here.
+pub fn skill_home_dir(skill: &Skill) -> Option<PathBuf> {
+    let loc = skill.location.as_ref()?;
+    match loc.file_name().and_then(|n| n.to_str()) {
+        Some("SKILL.md" | "SKILL.toml" | "manifest.toml") => loc.parent().map(Path::to_path_buf),
+        _ => {
+            if loc.is_dir() {
+                Some(loc.clone())
+            } else {
+                loc.parent().map(Path::to_path_buf)
+            }
+        }
+    }
+}
+
+/// Distinct skill homes the OS sandbox must be able to read without copying.
+pub fn skill_sandbox_read_roots(skills: &[Skill]) -> Vec<PathBuf> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for skill in skills {
+        let Some(home) = skill_home_dir(skill) else {
+            continue;
+        };
+        let key = home.canonicalize().unwrap_or_else(|_| home.clone());
+        if seen.insert(key.clone()) {
+            out.push(key);
+        }
+    }
+    out
+}
+
+fn path_already_sandboxed(policy: &crate::security::SecurityPolicy, path: &Path) -> bool {
+    policy
+        .allowed_roots
+        .iter()
+        .any(|root| path.starts_with(root))
+        || policy
+            .allowed_roots_read_only
+            .iter()
+            .any(|root| path.starts_with(root))
+}
+
+/// When the session cwd is `…/workspace/sessions/<id>`, grant the sibling
+/// `…/workspace/skills` tree read-only so personal copies stay executable
+/// in place. Agent construction can run before user attrs are scoped, so
+/// [`grant_skill_homes_read_only`] may not have seen those homes yet.
+pub fn grant_session_sibling_skills_read_only(
+    policy: &mut crate::security::SecurityPolicy,
+    session_cwd: &Path,
+) {
+    let Some(workspace) = crate::security::policy::session_parent_workspace(session_cwd) else {
+        return;
+    };
+    let skills = workspace.join("skills");
+    if !skills.is_dir() {
+        return;
+    }
+    let skills = skills.canonicalize().unwrap_or(skills);
+    if path_already_sandboxed(policy, &skills) {
+        return;
+    }
+    policy.allowed_roots_read_only.push(skills);
+}
+
+/// Grant read-only sandbox access to each loaded skill's original directory.
+/// Does not copy files into the session workspace.
+pub fn grant_skill_homes_read_only(policy: &mut crate::security::SecurityPolicy, skills: &[Skill]) {
+    for home in skill_sandbox_read_roots(skills) {
+        if path_already_sandboxed(policy, &home) {
+            continue;
+        }
+        policy.allowed_roots_read_only.push(home);
+    }
+}
+
+/// Drop a leading `cd <allowed-dir> &&|` so the command survives the
+/// executable allowlist (`cd` is not listed). Relative tokens in the rest
+/// are bound against that directory when it is a granted skill/workspace root.
+pub fn rewrite_session_skill_cd(command: &str, policy: &crate::security::SecurityPolicy) -> String {
+    let Some((dir, rest)) = split_cd_prefix(command) else {
+        return command.to_string();
+    };
+    let target = policy.resolve_tool_path(dir);
+    let target_canon = target.canonicalize().unwrap_or_else(|_| target.clone());
+    let workspace = policy
+        .workspace_dir
+        .canonicalize()
+        .unwrap_or_else(|_| policy.workspace_dir.clone());
+    if target_canon == workspace {
+        return rest.to_string();
+    }
+    if !path_already_sandboxed(policy, &target_canon) && !path_already_sandboxed(policy, &target) {
+        return command.to_string();
+    }
+    bind_skill_relative_paths(rest, &target_canon)
+}
+
+fn split_cd_prefix(command: &str) -> Option<(&str, &str)> {
+    let s = command.trim();
+    let after = s.strip_prefix("cd")?;
+    if after.is_empty() || !after.starts_with(|c: char| c.is_whitespace()) {
+        return None;
+    }
+    let after = after.trim_start();
+    let (path, after_path) =
+        if let Some(quote) = after.chars().next().filter(|c| *c == '"' || *c == '\'') {
+            let rest = after.get(quote.len_utf8()..)?;
+            let end = rest.find(quote)?;
+            let path = &rest[..end];
+            let after_quote = rest.get(end + quote.len_utf8()..)?.trim_start();
+            (path, after_quote)
+        } else {
+            let sep = after.find("&&").or_else(|| after.find(';'))?;
+            (after[..sep].trim(), after[sep..].trim_start())
+        };
+    let rest = after_path
+        .strip_prefix("&&")
+        .or_else(|| after_path.strip_prefix(';'))?
+        .trim_start();
+    if path.is_empty() || rest.is_empty() {
+        return None;
+    }
+    Some((path, rest))
+}
+
+/// Rewrite relative path tokens that exist under the skill home to absolute
+/// paths so the shell can run them from the session cwd without copying.
+pub fn bind_skill_relative_paths(command: &str, skill_dir: &Path) -> String {
+    command
+        .split(' ')
+        .map(|token| {
+            if token.is_empty()
+                || token.starts_with('-')
+                || token.starts_with('/')
+                || token.contains("://")
+                || token.contains('=')
+            {
+                return token.to_string();
+            }
+            let candidate = skill_dir.join(token);
+            if candidate.exists() {
+                display_skill_location(&candidate)
+            } else {
+                token.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Build the available-skills prompt when no tool-availability context exists.
 /// Full mode is the safe fallback because compact mode requires `read_skill`.
 pub fn skills_to_prompt(skills: &[Skill], workspace_dir: &Path) -> String {
@@ -1723,7 +1882,10 @@ pub(crate) fn skills_to_prompt_with_mode_and_availability(
         String::from(
             "## Available Skills\n\n\
              Skill instructions and tool metadata are preloaded below.\n\
-             Follow these instructions directly; do not read skill files at runtime unless the user asks.\n\n\
+             Follow these instructions directly; do not read skill files at runtime unless the user asks.\n\
+             Skills are zero-copy: bundled scripts, templates, and references stay in `<directory>`.\n\
+             Run them by absolute path under that directory. Relative paths in the skill resolve against `<directory>`, not the session working directory. Do not copy skill files into the workspace.\n\
+             Do not `cd` into `<directory>` (`cd` is not an allowed command). Use that absolute path for `file_read`, `content_search`, `ls`, and `grep`. Do not list the skill tree to discover files after `read_skill`.\n\n\
              <available_skills>\n",
         )
     } else {
@@ -1732,6 +1894,8 @@ pub(crate) fn skills_to_prompt_with_mode_and_availability(
              Skill summaries are preloaded below to keep context compact.\n\
              Skill instructions are loaded on demand: call `read_skill(name)` with the skill's `<name>` when you need the full skill file.\n\
              Skills marked `always` include full instructions below even in compact mode.\n\
+             `<directory>` is the skill's original folder; run bundled scripts from there by absolute path. Do not copy them into the session working directory.\n\
+             Do not `cd` into `<directory>`. Use that absolute path for `file_read`, `content_search`, `grep`, and `python3`. Do not list the skill tree to discover files.\n\
              The `location` field is included for reference.\n\n\
              <available_skills>\n",
         )
@@ -1743,6 +1907,9 @@ pub(crate) fn skills_to_prompt_with_mode_and_availability(
         write_xml_text_element(&mut prompt, 4, "description", &skill.description);
         let location = render_skill_location(skill, workspace_dir, !is_full);
         write_xml_text_element(&mut prompt, 4, "location", &location);
+        if let Some(home) = skill_home_dir(skill) {
+            write_xml_text_element(&mut prompt, 4, "directory", &display_skill_location(&home));
+        }
 
         // Full mode inlines instructions eagerly. Compact mode does so only for
         // always-injected skills; other instructions load through `read_skill`.
@@ -1927,12 +2094,15 @@ pub(crate) fn skills_to_tools_with_context_and_runtime_optional_nat64(
             }
             match tool.kind.as_str() {
                 "shell" | "script" => {
-                    let inner = crate::skills::skill_tool::SkillShellTool::new_with_runtime(
+                    let mut inner = crate::skills::skill_tool::SkillShellTool::new_with_runtime(
                         &skill.name,
                         tool,
                         security.clone(),
                         runtime.clone(),
                     );
+                    if let Some(home) = skill_home_dir(skill) {
+                        inner = inner.with_skill_dir(home);
+                    }
                     tools.push(Box::new(zeroclaw_tools::wrappers::RateLimitedTool::new(
                         inner,
                         security.clone(),
@@ -4514,6 +4684,21 @@ Write it.
     }
 
     #[test]
+    fn load_skill_md_uses_directory_name_as_prompt_id() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("flu-trend");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(
+            dir.join("SKILL.md"),
+            "---\nname: 流感趋势解读\ndescription: 看近期流感活动。\n---\n\n# 正文\n",
+        )
+        .unwrap();
+        let skill = load_skill_md(&dir.join("SKILL.md"), &dir).unwrap();
+        assert_eq!(skill.name, "flu-trend");
+        assert!(skill.description.contains("看近期流感活动"));
+    }
+
+    #[test]
     fn load_skill_md_without_slash_options_is_empty() {
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("SKILL.md");
@@ -5103,6 +5288,178 @@ mod prompt_callable_name_tests {
             orphan_at > tools_at,
             "target-less mcp skill tool must render as unregistered, not callable:\n{prompt}"
         );
+    }
+}
+
+#[cfg(test)]
+mod skill_inplace_tests {
+    use super::*;
+    use std::path::{Path, PathBuf};
+
+    fn skill_at(location: &str) -> Skill {
+        Skill {
+            name: "report".into(),
+            description: "d".into(),
+            description_localizations: Default::default(),
+            version: "1.0.0".into(),
+            author: None,
+            tags: Vec::new(),
+            tools: Vec::new(),
+            prompts: Vec::new(),
+            slash_options: Vec::new(),
+            always: false,
+            location: Some(PathBuf::from(location)),
+        }
+    }
+
+    #[test]
+    fn skill_home_dir_is_the_folder_that_owns_skill_md() {
+        assert_eq!(
+            skill_home_dir(&skill_at(
+                "/Users/me/.zeroclaw/workspace/skills/report/SKILL.md"
+            ))
+            .as_deref(),
+            Some(Path::new("/Users/me/.zeroclaw/workspace/skills/report"))
+        );
+    }
+
+    #[test]
+    fn grant_session_sibling_skills_adds_workspace_skills_tree() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("workspace");
+        let session = workspace.join("sessions").join("s1");
+        let skills = workspace.join("skills");
+        std::fs::create_dir_all(&session).unwrap();
+        std::fs::create_dir_all(&skills).unwrap();
+
+        let mut policy = crate::security::SecurityPolicy::default();
+        policy.workspace_dir = session.clone();
+        grant_session_sibling_skills_read_only(&mut policy, &session);
+
+        let granted = skills.canonicalize().unwrap();
+        assert!(
+            policy.allowed_roots_read_only.iter().any(|p| *p == granted),
+            "session sibling skills/ must be granted read-only"
+        );
+    }
+
+    #[test]
+    fn grant_session_sibling_skills_skips_non_session_cwd() {
+        let root = tempfile::tempdir().unwrap();
+        let cwd = root.path().join("workspace");
+        std::fs::create_dir_all(cwd.join("skills")).unwrap();
+        let mut policy = crate::security::SecurityPolicy::default();
+        grant_session_sibling_skills_read_only(&mut policy, &cwd);
+        assert!(
+            policy.allowed_roots_read_only.is_empty(),
+            "only …/sessions/<id> cwds derive a sibling skills tree"
+        );
+    }
+
+    #[test]
+    fn grant_skill_homes_skips_roots_already_covered() {
+        let mut policy = crate::security::SecurityPolicy::default();
+        policy.allowed_roots.push(PathBuf::from("/tmp/agent"));
+        grant_skill_homes_read_only(
+            &mut policy,
+            &[skill_at("/tmp/agent/skills/report/SKILL.md")],
+        );
+        assert!(
+            !policy
+                .allowed_roots_read_only
+                .iter()
+                .any(|p| p.ends_with("report")),
+            "workspace skills are already readable via allowed_roots"
+        );
+
+        grant_skill_homes_read_only(&mut policy, &[skill_at("/opt/bundles/ops/report/SKILL.md")]);
+        assert!(
+            policy
+                .allowed_roots_read_only
+                .iter()
+                .any(|p| p.ends_with("report")),
+            "external skill homes must be granted read-only in place"
+        );
+    }
+
+    #[test]
+    fn bind_skill_relative_paths_rewrites_existing_script_tokens() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("scripts").join("extract.py");
+        std::fs::create_dir_all(script.parent().unwrap()).unwrap();
+        std::fs::write(&script, "print(1)\n").unwrap();
+        let out =
+            bind_skill_relative_paths("python3 scripts/extract.py --out report.html", dir.path());
+        assert!(
+            out.contains(&script.display().to_string()),
+            "relative script must become an absolute path: {out}"
+        );
+        assert!(out.contains("--out report.html"), "{out}");
+        assert!(!out.contains("python3 scripts/extract.py"), "{out}");
+    }
+
+    #[test]
+    fn prompt_advertises_absolute_directory_and_zero_copy_rule() {
+        let skill = skill_at("/tmp/workspace/skills/report/SKILL.md");
+        let prompt = skills_to_prompt_with_mode(
+            std::slice::from_ref(&skill),
+            Path::new("/tmp/workspace"),
+            zeroclaw_config::schema::SkillsPromptInjectionMode::Full,
+        );
+        assert!(prompt.contains("<directory>/tmp/workspace/skills/report</directory>"));
+        assert!(prompt.contains("Do not copy skill files into the workspace"));
+        assert!(prompt.contains("Do not `cd` into `<directory>`"));
+    }
+
+    #[test]
+    fn rewrite_session_skill_cd_drops_noop_cd_to_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut policy = crate::security::SecurityPolicy::default();
+        policy.workspace_dir = dir.path().to_path_buf();
+        let cmd = format!(
+            "cd {} && python3 /opt/skills/report/scripts/run.py --out out.json",
+            dir.path().display()
+        );
+        let out = rewrite_session_skill_cd(&cmd, &policy);
+        assert_eq!(
+            out,
+            "python3 /opt/skills/report/scripts/run.py --out out.json"
+        );
+    }
+
+    #[test]
+    fn rewrite_session_skill_cd_binds_relative_paths_under_granted_home() {
+        let root = tempfile::tempdir().unwrap();
+        let session = root.path().join("sessions").join("s1");
+        let skill = root.path().join("skills").join("report");
+        let script = skill.join("scripts").join("run.py");
+        std::fs::create_dir_all(&session).unwrap();
+        std::fs::create_dir_all(script.parent().unwrap()).unwrap();
+        std::fs::write(&script, "print(1)\n").unwrap();
+
+        let mut policy = crate::security::SecurityPolicy::default();
+        policy.workspace_dir = session;
+        policy.allowed_roots_read_only.push(skill.clone());
+
+        let cmd = format!(
+            "cd {} && python3 scripts/run.py --out out.json",
+            skill.display()
+        );
+        let out = rewrite_session_skill_cd(&cmd, &policy);
+        assert!(
+            out.contains(&script.display().to_string()),
+            "relative script must bind to the skill home: {out}"
+        );
+        assert!(!out.starts_with("cd "), "{out}");
+    }
+
+    #[test]
+    fn rewrite_session_skill_cd_leaves_ungranted_cd_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut policy = crate::security::SecurityPolicy::default();
+        policy.workspace_dir = dir.path().to_path_buf();
+        let cmd = "cd /etc && cat passwd";
+        assert_eq!(rewrite_session_skill_cd(cmd, &policy), cmd);
     }
 }
 

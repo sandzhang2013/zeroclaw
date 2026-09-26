@@ -6,7 +6,7 @@ import { DEFAULT_WEB_PREFIX } from './webPrefix.ts';
  * translates it into `X-User-*` + `X-Auth-Secret`. Never encode user_id
  * into gateway session_id. */
 
-export type CanonicalRole = '普通用户' | '高级用户' | '运维';
+export type CanonicalRole = '普通用户' | '高级用户' | '管理员';
 
 export interface PlatformUser {
   userId: string;
@@ -47,8 +47,8 @@ export const MOCK_USERS: PlatformUser[] = [
   },
   {
     userId: 'ops',
-    displayName: '系统运维',
-    role: '运维',
+    displayName: '系统管理员',
+    role: '管理员',
     region: '全省',
     org: '湖北省疾病预防控制中心',
     source: 'mock',
@@ -58,20 +58,20 @@ export const MOCK_USERS: PlatformUser[] = [
 export function normalizeRole(raw?: string): CanonicalRole {
   const v = (raw ?? '').trim();
   if (v === '高级用户' || v === 'advanced') return '高级用户';
-  if (v === '运维' || v === 'ops') return '运维';
+  if (v === '管理员' || v === 'ops') return '管理员';
   return '普通用户';
 }
 
 export function roleI18nKey(role: string): 'workbench.role_advanced' | 'workbench.role_ops' | 'workbench.role_user' {
   const canonical = normalizeRole(role);
   if (canonical === '高级用户') return 'workbench.role_advanced';
-  if (canonical === '运维') return 'workbench.role_ops';
+  if (canonical === '管理员') return 'workbench.role_ops';
   return 'workbench.role_user';
 }
 
 /** Config/Logs dashboard is ops-only. Standard and advanced users stay on the workbench. */
 export function canOpenDashboard(role?: string): boolean {
-  return normalizeRole(role) === '运维';
+  return normalizeRole(role) === '管理员';
 }
 
 /** Safe localStorage suffix for workbench UI state. Not a gateway identity. */

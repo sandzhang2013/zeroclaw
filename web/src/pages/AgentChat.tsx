@@ -7,7 +7,7 @@ import { AgentProvider, useAgent, type ChatMessage } from '@/contexts/AgentConte
 import { labelForProviderRef, resolveProviderRefArg } from '@/contexts/modelPicker.logic';
 import SessionPicker from '@/components/SessionPicker';
 import { useDraft } from '@/hooks/useDraft';
-import { t } from '@/lib/i18n';
+import { getLocale, t } from '@/lib/i18n';
 import {
   COMMANDS,
   helpText,
@@ -23,7 +23,7 @@ import { SavePersonalSkillModal } from '@/components/SavePersonalSkillModal';
 import { ThinkingTranscript } from '@/components/ThinkingTranscript';
 import ApprovalBanner from '@/components/ApprovalBanner';
 import { AutonomySelect } from '@/components/AutonomySelect';
-import { ApiError, savePersonalSkill, uploadAgentWorkspaceFile, uploadChatImage } from '@/lib/api';
+import { allocateSkillId, ApiError, savePersonalSkill, uploadAgentWorkspaceFile, uploadChatImage } from '@/lib/api';
 import {
   DEFAULT_WORKBENCH_AUTONOMY,
   loadWorkbenchAutonomy,
@@ -48,13 +48,13 @@ import { extractMcpToolText, extractToolImages, stripImageMarkers } from '@/lib/
 import { ChatImagePreview } from '@/components/ChatImagePreview';
 import { sanitizeSessionTitle, stripSessionTitleTimestamp } from '@/lib/workbenchSession';
 import { composeOutlineContinuePrompt, shouldShowOutlineEditButton } from '@/lib/outlineDraft';
-import { parseHomeSkillDisplay, titleFromUserMessage, type HomeSkillRef } from '@/lib/homeSend';
+import { composeInstalledSkillMessage, parseHomeSkillDisplay, titleFromUserMessage, type HomeSkillRef } from '@/lib/homeSend';
 import { stripProvideData } from '@/lib/iframeAsk';
 import { HomeSkillChip } from '@/components/HomeSkillChip';
+import { InstalledSkillButton, type InstalledSkillPick } from '@/components/InstalledSkillButton';
 import {
   draftPersonalSkill,
   shouldShowSaveSkillButton,
-  skillSlug,
   type PersonalSkillDraft,
 } from '@/lib/personalSkill';
 import { basePath } from '@/lib/basePath';
@@ -289,6 +289,7 @@ export function AgentChatInner({
   const consumedInitialRef = useRef(false);
   const wasTypingRef = useRef(false);
   const [attachments, setAttachments] = useState<PendingAttach[]>([]);
+  const [installedSkill, setInstalledSkill] = useState<InstalledSkillPick | null>(null);
   const attachmentsRef = useRef(attachments);
   attachmentsRef.current = attachments;
   const [dragOver, setDragOver] = useState(false);
@@ -459,9 +460,14 @@ export function AgentChatInner({
     }
 
     if (!connected) return;
-    if (!trimmed && ready.length === 0) return;
+    if (!trimmed && ready.length === 0 && !installedSkill) return;
 
-    const text = trimmed.startsWith('//') ? trimmed.slice(1) : trimmed;
+    const typed = trimmed.startsWith('//') ? trimmed.slice(1) : trimmed;
+    const text = composeInstalledSkillMessage({
+      userText: typed,
+      skill: installedSkill ? { id: installedSkill.id, title: installedSkill.title } : null,
+      locale: getLocale(),
+    });
     const payload = ready.length
       ? composeUploadMessage(
           text,
@@ -469,6 +475,7 @@ export function AgentChatInner({
         )
       : text;
     sendMessage(payload, clampWorkbenchAutonomy(autonomy, maxAutonomy));
+    setInstalledSkill(null);
     setAttachments((prev) => {
       for (const a of prev) {
         if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
@@ -667,18 +674,24 @@ export function AgentChatInner({
     const draft = draftPersonalSkill({ userText, assistantText });
     setSkillError(null);
     setSkillDraft(draft);
+    void allocateSkillId()
+      .then(({ id }) => {
+        setSkillDraft((current) => (current ? { ...current, name: id } : current));
+      })
+      .catch((err: unknown) => {
+        setSkillError(err instanceof ApiError ? err.message : t('workbench.save_skill_failed'));
+      });
   }, []);
 
   const handleSaveSkill = useCallback(async () => {
-    if (!skillDraft) return;
-    const name = skillSlug(skillDraft.name);
-    if (!name) return;
+    if (!skillDraft?.name.trim() || !skillDraft.title.trim()) return;
     setSkillSaving(true);
     setSkillError(null);
     try {
       await savePersonalSkill({
         agent: agentAlias,
-        name,
+        name: skillDraft.name.trim(),
+        title: skillDraft.title.trim(),
         description: skillDraft.description,
         body: skillDraft.body,
       });
@@ -821,7 +834,7 @@ export function AgentChatInner({
       />
       <SavePersonalSkillModal
         open={skillDraft != null}
-        draft={skillDraft ?? { name: '', description: '', body: '' }}
+        draft={skillDraft ?? { name: '', title: '', description: '', body: '' }}
         onChange={(next) => setSkillDraft(next)}
         onClose={() => {
           setSkillDraft(null);
@@ -1099,6 +1112,11 @@ export function AgentChatInner({
             }}
           />
           <div className="relative flex w-full min-w-0 flex-col rounded-2xl border border-pc-border bg-pc-elevated px-3 pt-3 pb-2">
+            {installedSkill ? (
+              <div className="mb-2">
+                <HomeSkillChip label={installedSkill.title} onClear={() => setInstalledSkill(null)} />
+              </div>
+            ) : null}
             {attachments.length > 0 && (
               <ul className="mb-2 flex flex-wrap gap-1.5">
                 {attachments.map((file) => (
@@ -1165,6 +1183,11 @@ export function AgentChatInner({
                 >
                   <Plus className="h-4 w-4" />
                 </button>
+                <InstalledSkillButton
+                  agent={agentAlias}
+                  disabled={!connected || !hydrated}
+                  onPick={setInstalledSkill}
+                />
                 <button
                   type="button"
                   onClick={() => imageInputRef.current?.click()}
@@ -1271,7 +1294,7 @@ export function AgentChatInner({
                       !connected
                       || !hydrated
                       || attachments.some((a) => a.status === 'uploading')
-                      || (!input.trim() && attachments.filter((a) => a.status === 'ready').length === 0)
+                      || (!input.trim() && !installedSkill && attachments.filter((a) => a.status === 'ready').length === 0)
                     }
                     className="flex-shrink-0 inline-flex size-8 items-center justify-center rounded-full bg-pc-text text-pc-base hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
                     aria-label={t('agent.send')}

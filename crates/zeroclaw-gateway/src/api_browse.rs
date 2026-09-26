@@ -540,7 +540,7 @@ mod tests {
         let state = test_state(config);
         let response = handle_agent_workspace_list(
             State(state),
-            bff_headers("ops", "运维"),
+            bff_headers("ops", "管理员"),
             AxumPath("deepseek".into()),
             Query(BrowseQuery {
                 path: Some(format!("sessions/{session}")),
@@ -597,7 +597,7 @@ mod tests {
         let ops_state = test_state(config.clone());
         let response = handle_agent_workspace_raw(
             State(ops_state),
-            bff_headers("ops", "运维"),
+            bff_headers("ops", "管理员"),
             AxumPath("deepseek".into()),
             Query(BrowseQuery {
                 path: Some(rel.clone()),
@@ -673,7 +673,7 @@ mod tests {
 
         let response = handle_agent_workspace_raw(
             State(test_state(config)),
-            bff_headers("ops", "运维"),
+            bff_headers("ops", "管理员"),
             AxumPath("deepseek".into()),
             Query(BrowseQuery {
                 path: Some(rel),
@@ -713,7 +713,7 @@ mod tests {
         let state = test_state(config.clone());
         let response = handle_agent_workspace_upload(
             State(state),
-            bff_headers("ops", "运维"),
+            bff_headers("ops", "管理员"),
             AxumPath("deepseek".into()),
             Query(BrowseQuery {
                 path: Some(rel.clone()),
@@ -755,7 +755,7 @@ mod tests {
             axum::http::Request::post(format!("/api/agents/deepseek/workspace/upload?path={rel}"))
                 .body(axum::body::Body::from(payload))
                 .unwrap();
-        *request.headers_mut() = bff_headers("ops", "运维");
+        *request.headers_mut() = bff_headers("ops", "管理员");
 
         let response = app.oneshot(request).await.expect("router response");
         assert_eq!(response.status(), StatusCode::OK);
@@ -779,7 +779,7 @@ mod tests {
         std::fs::write(user_dir.join("chart.png"), b"\x89PNG").unwrap();
         let response = handle_agent_workspace_raw(
             State(test_state(config)),
-            bff_headers("ops", "运维"),
+            bff_headers("ops", "管理员"),
             AxumPath("deepseek".into()),
             Query(BrowseQuery {
                 path: Some(format!("sessions/{session}/chart.png")),
@@ -825,7 +825,7 @@ mod tests {
         std::fs::write(user_dir.join("login.html"), b"<html>ok</html>").unwrap();
         let response = handle_agent_workspace_raw(
             State(test_state(config)),
-            bff_headers("ops", "运维"),
+            bff_headers("ops", "管理员"),
             AxumPath("deepseek".into()),
             Query(BrowseQuery {
                 path: Some(format!("sessions/{session}/login.html")),
@@ -857,7 +857,7 @@ mod tests {
         let state = test_state(config);
         let list = handle_agent_workspace_list(
             State(state.clone()),
-            bff_headers("ops", "运维"),
+            bff_headers("ops", "管理员"),
             AxumPath("deepseek".into()),
             Query(BrowseQuery {
                 path: Some("../etc".into()),
@@ -869,7 +869,7 @@ mod tests {
 
         let upload = handle_agent_workspace_upload(
             State(state.clone()),
-            bff_headers("ops", "运维"),
+            bff_headers("ops", "管理员"),
             AxumPath("deepseek".into()),
             Query(BrowseQuery {
                 path: Some("../escape.txt".into()),
@@ -882,7 +882,7 @@ mod tests {
 
         let missing = handle_agent_workspace_upload(
             State(state),
-            bff_headers("ops", "运维"),
+            bff_headers("ops", "管理员"),
             AxumPath("deepseek".into()),
             Query(BrowseQuery {
                 path: None,
@@ -904,7 +904,7 @@ mod tests {
         std::fs::write(user_dir.join("Chart.SVG"), b"<svg></svg>").unwrap();
         let response = handle_agent_workspace_raw(
             State(test_state(config)),
-            bff_headers("ops", "运维"),
+            bff_headers("ops", "管理员"),
             AxumPath("deepseek".into()),
             Query(BrowseQuery {
                 path: Some(format!("sessions/{session}/Chart.SVG")),
@@ -981,7 +981,7 @@ mod tests {
         std::fs::write(user_dir.join(name), b"<html>ok</html>").unwrap();
         let response = handle_agent_workspace_raw(
             State(test_state(config)),
-            bff_headers("ops", "运维"),
+            bff_headers("ops", "管理员"),
             AxumPath("deepseek".into()),
             Query(BrowseQuery {
                 path: Some(format!("sessions/{session}/{name}")),

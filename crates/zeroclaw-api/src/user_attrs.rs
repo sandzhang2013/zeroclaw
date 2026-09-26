@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 /// Platform roles carried on `X-User-Role`.
 pub const ROLE_NORMAL: &str = "普通用户";
 pub const ROLE_ADVANCED: &str = "高级用户";
-pub const ROLE_OPS: &str = "运维";
+pub const ROLE_OPS: &str = "管理员";
 
 /// Identity keys the model must never supply (stripped from MCP tool args).
 pub const MODEL_IDENTITY_ARG_KEYS: &[&str] =
@@ -578,7 +578,7 @@ mod tests {
         assert!(UserAttrs::new("liu").with_role(ROLE_ADVANCED).is_advanced());
         assert!(
             !UserAttrs::new("ops").with_role("ops").is_ops(),
-            "English aliases are frontend-only; BFF must send 运维"
+            "English aliases are frontend-only; BFF must send the admin role"
         );
         assert!(!UserAttrs::new("liu").with_role("advanced").is_advanced());
         assert!(!UserAttrs::new("chen").with_role(ROLE_NORMAL).is_ops());

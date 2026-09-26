@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   canSubmitHomeDraft,
+  capFromPlazaSkill,
   draftHomeCap,
   draftHomePrompt,
   draftHomeTab,
@@ -13,6 +14,24 @@ import {
   normalizeHomeCatalog,
   normalizeHomeCatalogEdit,
 } from './homeCatalogEdit.ts';
+
+test('capFromPlazaSkill keeps the plaza directory id', () => {
+  const cap = capFromPlazaSkill({
+    id: 'flu-trend',
+    title: '流感趋势解读',
+    description: '结合流感样病例和病原监测。',
+  });
+  assert.equal(cap.id, 'flu-trend');
+  assert.equal(cap.label_zh, '流感趋势解读');
+  assert.equal(cap.prompts[0]?.id, 'flu-trend_p1');
+  assert.equal(cap.prompts[0]?.text_zh, '结合流感样病例和病原监测。');
+  const long = capFromPlazaSkill({
+    id: 'epi-survey-report',
+    title: '流调报告',
+    description: '测'.repeat(5000),
+  });
+  assert.ok(new TextEncoder().encode(long.prompts[0]?.text_zh ?? '').length <= 4000);
+});
 
 test('suggestHomeId slugs ascii and avoids collisions', () => {
   assert.equal(suggestHomeId('Outbreak overview', []), 'outbreak_overview');

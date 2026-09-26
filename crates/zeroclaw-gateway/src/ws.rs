@@ -571,8 +571,9 @@ async fn handle_socket(
         return;
     }
 
-    let mut agent =
-        match zeroclaw_runtime::agent::Agent::from_live_config_with_session_cwd_and_mcp_backchannel(
+    let mut agent = match zeroclaw_runtime::agent::loop_::scope_user_attrs(
+        frozen_user.clone(),
+        zeroclaw_runtime::agent::Agent::from_live_config_with_session_cwd_and_mcp_backchannel(
             Arc::clone(&state.config),
             &agent_alias,
             Some(&session_cwd),
@@ -583,35 +584,36 @@ async fn handle_socket(
             state.sop_engine.clone(),
             state.sop_audit.clone(),
             Some(state.canvas_store.clone()),
-        )
-        .await
-        {
-            Ok(a) => a,
-            Err(e) => {
-                ::zeroclaw_log::record!(
-                    ERROR,
-                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
-                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
-                        .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
-                    "Agent initialization failed"
-                );
-                let err = serde_json::json!({
-                    "type": "error",
-                    "message": format!("Failed to initialise agent: {e}"),
-                    "code": "AGENT_INIT_FAILED"
-                });
-                let _ = sender.send(Message::Text(err.to_string().into())).await;
-                let _ = sender
-                    .send(Message::Close(Some(axum::extract::ws::CloseFrame {
-                        code: 1011,
-                        reason: axum::extract::ws::Utf8Bytes::from_static(
-                            "Agent initialization failed",
-                        ),
-                    })))
-                    .await;
-                return;
-            }
-        };
+        ),
+    )
+    .await
+    {
+        Ok(a) => a,
+        Err(e) => {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
+                "Agent initialization failed"
+            );
+            let err = serde_json::json!({
+                "type": "error",
+                "message": format!("Failed to initialise agent: {e}"),
+                "code": "AGENT_INIT_FAILED"
+            });
+            let _ = sender.send(Message::Text(err.to_string().into())).await;
+            let _ = sender
+                .send(Message::Close(Some(axum::extract::ws::CloseFrame {
+                    code: 1011,
+                    reason: axum::extract::ws::Utf8Bytes::from_static(
+                        "Agent initialization failed",
+                    ),
+                })))
+                .await;
+            return;
+        }
+    };
     // Keep ONE ingress identity for the WebSocket turn: the turn span records
     // `channel = "wss"`, and observer events derive from `Agent.channel_name`,
     // so this must stay `wss` or a single turn is split across two names.
@@ -2000,7 +2002,7 @@ mod tests {
     fn ws_autonomy_ceiling_advanced_and_ops_follow_config() {
         use zeroclaw_config::autonomy::AutonomyLevel;
         let advanced = zeroclaw_api::UserAttrs::new("liuyang").with_role("高级用户");
-        let ops = zeroclaw_api::UserAttrs::new("ops").with_role("运维");
+        let ops = zeroclaw_api::UserAttrs::new("ops").with_role("管理员");
         assert_eq!(
             ws_autonomy_ceiling(AutonomyLevel::Full, Some(&advanced)),
             AutonomyLevel::Full
@@ -2018,7 +2020,7 @@ mod tests {
         assert_eq!(
             ws_autonomy_ceiling(AutonomyLevel::Full, Some(&english_ops)),
             AutonomyLevel::Supervised,
-            "BFF must send 运维; English ops must not skip the ordinary-user cap"
+            "BFF must send the admin role; English ops must not skip the ordinary-user cap"
         );
         let english_advanced = zeroclaw_api::UserAttrs::new("liu").with_role("advanced");
         assert_eq!(

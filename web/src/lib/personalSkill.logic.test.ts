@@ -4,8 +4,10 @@ import test from 'node:test';
 import {
   draftPersonalSkill,
   filterPersonalSkills,
+  isIssuedSkillId,
   isPersonalSkillEnabled,
   shouldShowSaveSkillButton,
+  skillIdTakenKey,
   skillSlug,
   skillTitleFromAsk,
 } from './personalSkill.ts';
@@ -28,7 +30,11 @@ test('draftPersonalSkill keeps ask and reply in the body', () => {
     userText: '预测下周武汉流感',
     assistantText: '先查监测再出图。',
   });
-  assert.equal(draft.name, '预测下周武汉流感');
+  assert.equal(draft.name, '');
+  assert.equal(draft.title, '预测下周武汉流感');
+  assert.equal(isIssuedSkillId('sk0009'), true);
+  assert.equal(isIssuedSkillId('sk10000'), true);
+  assert.equal(isIssuedSkillId('sk-flu-trend'), false);
   assert.match(draft.description, /武汉流感/);
   assert.match(draft.body, /预测下周武汉流感/);
   assert.match(draft.body, /先查监测再出图/);
@@ -88,4 +94,16 @@ test('shouldShowSaveSkillButton only on finished assistant prose', () => {
     }),
     false,
   );
+});
+
+test('skillIdTakenKey maps duplicate skill ids', () => {
+  assert.equal(
+    skillIdTakenKey('API 409: {"error":"you already have this skill id"}'),
+    'workbench.skill_id_taken_self',
+  );
+  assert.equal(
+    skillIdTakenKey('API 409: {"error":"skill id is already used"}'),
+    'workbench.skill_id_taken',
+  );
+  assert.equal(skillIdTakenKey('API 500: {"error":"Failed to write SKILL.md"}'), null);
 });

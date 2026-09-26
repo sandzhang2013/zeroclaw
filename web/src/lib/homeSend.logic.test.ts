@@ -3,11 +3,14 @@ import test from 'node:test';
 
 import {
   canSubmitHomeMessage,
+  composeHomeCapMessage,
   composeHomeMessage,
+  composeInstalledSkillMessage,
   homeSessionTitle,
   nextStoredSessionTitle,
   parseHomeSkillDisplay,
   recoverHomeSkill,
+  titleFromTranscript,
   titleFromUserMessage,
 } from './homeSend.ts';
 
@@ -16,6 +19,38 @@ const weekly = {
   kind: 'outline',
   prompts: [{ text: '帮我起草本周传染病监测周报提纲。' }],
 };
+
+test('composeHomeCapMessage invokes an installed skill by directory id', () => {
+  const text = composeHomeCapMessage({
+    userText: '',
+    installed: true,
+    cap: { id: 'flu-trend', label: '流感趋势解读', prompts: [{ text: '看近期流感' }] },
+  });
+  assert.equal(text, '请使用技能「flu-trend」（流感趋势解读）完成下面的任务。\n看近期流感');
+  assert.equal(parseHomeSkillDisplay(text).skillId, 'flu-trend');
+  assert.equal(parseHomeSkillDisplay(text).skillLabel, '流感趋势解读');
+});
+
+test('composeHomeCapMessage sends the example when the chip is not an installed skill', () => {
+  const text = composeHomeCapMessage({
+    userText: '只要武汉',
+    installed: false,
+    cap: { id: 'outbreak', label: '疫情概况', prompts: [{ text: '概述近期疫情' }] },
+  });
+  assert.equal(text, '概述近期疫情\n补充要求：只要武汉');
+});
+
+test('composeInstalledSkillMessage names the installed skill and keeps the typed text', () => {
+  const text = composeInstalledSkillMessage({
+    userText: '用这个信号出报告',
+    skill: { id: 'sk0024', title: '流调报告' },
+  });
+  assert.equal(text, '请使用技能「sk0024」（流调报告）完成下面的任务。\n用这个信号出报告');
+  assert.equal(parseHomeSkillDisplay(text).skillId, 'sk0024');
+  assert.equal(parseHomeSkillDisplay(text).skillLabel, '流调报告');
+  assert.equal(parseHomeSkillDisplay(text).visible, '用这个信号出报告');
+  assert.equal(composeInstalledSkillMessage({ userText: '只要正文' }), '只要正文');
+});
 
 test('composeHomeMessage without a skill is the typed text', () => {
   assert.equal(composeHomeMessage({ userText: '  湖北的23周  ' }), '湖北的23周');
@@ -176,6 +211,19 @@ test('titleFromUserMessage uses visible text after a date prefix and skill wrapp
     titleFromUserMessage('[CURRENT DATE & TIME: 2026-09-09 20:06:50 +08:00]\n\n', '监测周报'),
     '监测周报',
   );
+});
+
+test('titleFromTranscript uses the first user turn and ignores a date prefix', () => {
+  const model = composeHomeMessage({ userText: '帮我起草疾控工作简报提纲', skill: weekly });
+  assert.equal(
+    titleFromTranscript([
+      { role: 'user', content: `[CURRENT DATE & TIME: 2026-09-09 20:06:50 +08:00]\n\n${model}` },
+      { role: 'assistant', content: '提纲如下' },
+    ]),
+    '帮我起草疾控工作简报提纲',
+  );
+  assert.equal(titleFromTranscript([{ role: 'assistant', content: '只有回复' }], '监测周报'), '监测周报');
+  assert.equal(titleFromTranscript([]), undefined);
 });
 
 test('nextStoredSessionTitle does not fall back to a hex task id', () => {

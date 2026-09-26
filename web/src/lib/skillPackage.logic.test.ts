@@ -68,22 +68,46 @@ test('locateSkillMarkdown picks the shallowest SKILL.md', () => {
   );
 });
 
+test('readSkillFromFiles keeps scripts next to SKILL.md', async () => {
+  const parsed = await readSkillFromFiles([
+    packageFile('flu/SKILL.md', VALID),
+    packageFile('flu/scripts/compute.py', 'print(1)\n'),
+    packageFile('flu/references/usage.md', '# usage\n'),
+    packageFile('other/README.md', 'skip\n'),
+    packageFile('flu/.DS_Store', 'noise'),
+  ]);
+  assert.equal(parsed.ok, true);
+  if (!parsed.ok) return;
+  const paths = parsed.skill.files.map((file) => file.path).sort();
+  assert.deepEqual(paths, ['SKILL.md', 'references/usage.md', 'scripts/compute.py']);
+});
+
 test('readSkillFromFiles rejects a folder without a valid SKILL.md', async () => {
   const missing = await readSkillFromFiles([
-    { path: 'flu/README.md', text: async () => '# hi' },
+    packageFile('flu/README.md', '# hi'),
   ]);
   assert.deepEqual(missing, { ok: false, error: 'missing' });
 
   const bare = await readSkillFromFiles([
-    { path: 'flu/SKILL.md', text: async () => '# 没有 YAML\n' },
+    packageFile('flu/SKILL.md', '# 没有 YAML\n'),
   ]);
   assert.deepEqual(bare, { ok: false, error: 'frontmatter' });
 });
 
 test('readSkillFromZip reads SKILL.md from a stored or deflated archive', async () => {
-  const stored = await readSkillFromZip(zipBytes([{ name: 'flu-weekly/SKILL.md', data: Buffer.from(VALID) }], 0).buffer);
+  const stored = await readSkillFromZip(zipBytes([
+    { name: 'flu-weekly/SKILL.md', data: Buffer.from(VALID) },
+    { name: 'flu-weekly/scripts/compute.py', data: Buffer.from('print(1)\n') },
+    { name: 'notes.txt', data: Buffer.from('outside') },
+  ], 0).buffer);
   assert.equal(stored.ok, true);
-  if (stored.ok) assert.equal(stored.skill.description, '按周汇总流感监测数据。');
+  if (stored.ok) {
+    assert.equal(stored.skill.description, '按周汇总流感监测数据。');
+    assert.deepEqual(
+      stored.skill.files.map((file) => file.path).sort(),
+      ['SKILL.md', 'scripts/compute.py'],
+    );
+  }
 
   const deflated = await readSkillFromZip(
     zipBytes([{ name: 'flu-weekly/SKILL.md', data: Buffer.from(VALID) }], 8).buffer,
@@ -97,6 +121,15 @@ test('readSkillFromZip reads SKILL.md from a stored or deflated archive', async 
     error: 'bad-zip',
   });
 });
+
+function packageFile(path: string, text: string) {
+  const bytes = new TextEncoder().encode(text);
+  return {
+    path,
+    text: async () => text,
+    bytes: async () => bytes,
+  };
+}
 
 function zipBytes(files: { name: string; data: Buffer }[], method: 0 | 8): Uint8Array {
   const locals: Buffer[] = [];

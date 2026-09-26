@@ -8,8 +8,7 @@ use zeroclaw_config::schema::{RuntimeKind, SandboxBackend, SandboxConfig};
 /// Extra filesystem roots beyond the primary workspace that a sandbox should
 /// also grant access to, mirroring `SecurityPolicy`'s allowed-roots tiers
 /// (`allowed_roots`, `allowed_roots_read_only`, `allowed_roots_write_only`).
-/// Only backends that build per-path rulesets (currently Landlock) consume
-/// this; others ignore it.
+/// Landlock and macOS Seatbelt consume these; other backends ignore them.
 #[derive(Debug, Clone, Default)]
 pub struct SandboxExtraRoots {
     pub read_write: Vec<PathBuf>,
@@ -418,10 +417,8 @@ fn create_selected_sandbox(
             }
             #[cfg(not(all(feature = "sandbox-landlock", target_os = "linux")))]
             {
-                // Landlock is the only backend that consumes the extra roots, so
-                // without it the parameter is genuinely unused. Bind it here to
-                // keep the signature uniform across cfgs without tripping
-                // `-D warnings` on the feature-disabled build.
+                // Seatbelt (macOS) also consumes extra roots. Bind the
+                // parameter on this cfg so the signature stays uniform.
                 let _ = extra_roots;
                 None
             }
@@ -472,9 +469,14 @@ fn create_selected_sandbox(
         SelectedSandboxBackend::SandboxExec => {
             #[cfg(target_os = "macos")]
             {
-                super::seatbelt::SeatbeltSandbox::with_workspace(workspace_dir)
-                    .map(|sandbox| Arc::new(sandbox) as Arc<dyn Sandbox>)
-                    .ok()
+                super::seatbelt::SeatbeltSandbox::with_roots(
+                    workspace_dir,
+                    &extra_roots.read_write,
+                    &extra_roots.read_only,
+                    &extra_roots.write_only,
+                )
+                .map(|sandbox| Arc::new(sandbox) as Arc<dyn Sandbox>)
+                .ok()
             }
             #[cfg(not(target_os = "macos"))]
             {

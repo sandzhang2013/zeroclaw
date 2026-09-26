@@ -106,6 +106,7 @@ pub(crate) fn router(cfg: Config) -> anyhow::Result<Router> {
         .route(Config::TICKET_VERIFY_PATH, post(verify_alert_ticket))
         .route("/sso/auth/verify", post(verify_alert_ticket))
         .fallback(fallback)
+        .layer(axum::extract::DefaultBodyLimit::max(12 * 1024 * 1024))
         .with_state(state))
 }
 

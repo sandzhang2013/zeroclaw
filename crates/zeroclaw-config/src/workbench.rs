@@ -134,7 +134,7 @@ fn default_kind() -> String {
 pub fn builtin_home_caps() -> Vec<WorkbenchHomeCap> {
     vec![
         cap(
-            "outbreak",
+            "sk0001",
             "query",
             "数据查询",
             "Query",
@@ -146,7 +146,7 @@ pub fn builtin_home_caps() -> Vec<WorkbenchHomeCap> {
             "Query and summarize recent infectious-disease conditions across the province.",
         ),
         cap(
-            "vaccine",
+            "sk0002",
             "query",
             "数据查询",
             "Query",
@@ -158,7 +158,7 @@ pub fn builtin_home_caps() -> Vec<WorkbenchHomeCap> {
             "Look up and explain recent vaccination coverage.",
         ),
         cap(
-            "cases",
+            "sk0003",
             "query",
             "数据查询",
             "Query",
@@ -170,7 +170,7 @@ pub fn builtin_home_caps() -> Vec<WorkbenchHomeCap> {
             "Search cases by region and time, then highlight the key points.",
         ),
         cap(
-            "orgs",
+            "sk0004",
             "query",
             "数据查询",
             "Query",
@@ -182,7 +182,7 @@ pub fn builtin_home_caps() -> Vec<WorkbenchHomeCap> {
             "Look up CDC and medical facilities and organize them into a table.",
         ),
         cap(
-            "trend",
+            "sk0005",
             "monitor",
             "监测分析",
             "Surveillance",
@@ -194,7 +194,7 @@ pub fn builtin_home_caps() -> Vec<WorkbenchHomeCap> {
             "Analyze recent epidemic trends from surveillance data and explain key changes.",
         ),
         cap(
-            "cluster",
+            "sk0006",
             "monitor",
             "监测分析",
             "Surveillance",
@@ -206,7 +206,7 @@ pub fn builtin_home_caps() -> Vec<WorkbenchHomeCap> {
             "Summarize recent cluster outbreaks and flag risk points.",
         ),
         cap(
-            "alert",
+            "sk0007",
             "monitor",
             "监测分析",
             "Surveillance",
@@ -218,7 +218,7 @@ pub fn builtin_home_caps() -> Vec<WorkbenchHomeCap> {
             "Analyze recent alert signals and provide an assessment.",
         ),
         cap(
-            "region",
+            "sk0008",
             "monitor",
             "监测分析",
             "Surveillance",
@@ -230,7 +230,7 @@ pub fn builtin_home_caps() -> Vec<WorkbenchHomeCap> {
             "Compare prefecture-level indicators and mark unusual areas.",
         ),
         cap(
-            "brief",
+            "sk0009",
             "report",
             "报告撰写",
             "Reports",
@@ -242,7 +242,7 @@ pub fn builtin_home_caps() -> Vec<WorkbenchHomeCap> {
             "Draft a CDC work-brief outline with a clear structure and key points.",
         ),
         cap(
-            "weekly",
+            "sk0010",
             "report",
             "报告撰写",
             "Reports",
@@ -254,7 +254,7 @@ pub fn builtin_home_caps() -> Vec<WorkbenchHomeCap> {
             "Draft an outline for this week’s infectious-disease surveillance report.",
         ),
         cap(
-            "special",
+            "sk0011",
             "report",
             "报告撰写",
             "Reports",
@@ -266,7 +266,7 @@ pub fn builtin_home_caps() -> Vec<WorkbenchHomeCap> {
             "Draft a special-analysis report outline covering background, findings, and recommendations.",
         ),
         cap(
-            "minutes",
+            "sk0012",
             "report",
             "报告撰写",
             "Reports",
@@ -771,7 +771,7 @@ mod tests {
         assert_eq!(edit.tabs.len(), 3);
         let flat = edit_catalog_to_caps(&edit.tabs).expect("flatten");
         assert_eq!(flat.len(), original.len());
-        assert_eq!(flat[0].id, "outbreak");
+        assert_eq!(flat[0].id, "sk0001");
         assert_eq!(flat[0].tab, "query");
         assert_eq!(flat[0].label_zh, "疫情概况");
         assert_eq!(flat[0].tab_label_zh, "数据查询");

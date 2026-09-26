@@ -42,6 +42,30 @@ hbcdcagent_ensure_config() {
     echo "    请填内网模型 uri 后重跑本脚本" >&2
     exit 1
   fi
+  hbcdcagent_seed_skill_plaza
+}
+
+# Copy shipped plaza skills into <config>/shared/skill-plaza.
+# Missing files are filled in. Files already on disk stay, including local edits.
+hbcdcagent_seed_skill_plaza() {
+  local src="$ROOT/skill-plaza"
+  local dest="$ZEROCLAW_CONFIG_DIR/shared/skill-plaza"
+  local dir name file rel
+  [[ -d "$src" ]] || return 0
+  mkdir -p "$dest"
+  for dir in "$src"/*/; do
+    [[ -f "${dir}SKILL.md" ]] || continue
+    name="$(basename "$dir")"
+    mkdir -p "$dest/$name"
+    while IFS= read -r -d '' file; do
+      rel="${file#"$dir"}"
+      [[ "$rel" == ".disabled" || "$rel" == ".DS_Store" ]] && continue
+      if [[ ! -e "$dest/$name/$rel" ]]; then
+        mkdir -p "$(dirname "$dest/$name/$rel")"
+        cp "$file" "$dest/$name/$rel"
+      fi
+    done < <(find "$dir" -type f ! -name '.DS_Store' -print0)
+  done
 }
 
 hbcdcagent_export_runtime_env() {

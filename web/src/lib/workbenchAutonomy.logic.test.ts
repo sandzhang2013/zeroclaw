@@ -66,7 +66,7 @@ test('unknown roles follow the ordinary-user cap; advanced aliases do not', () =
   assert.equal(maxAutonomyForRole('admin'), 'supervised');
   assert.equal(maxAutonomyForRole('user'), 'supervised');
   assert.equal(maxAutonomyForRole('advanced'), 'full');
-  assert.equal(maxAutonomyForRole('运维'), 'full');
+  assert.equal(maxAutonomyForRole('管理员'), 'full');
   assert.deepEqual(autonomyLevelsUpTo('readonly'), ['readonly']);
   assert.deepEqual(autonomyLevelsUpTo('full'), ['readonly', 'supervised', 'full']);
 });

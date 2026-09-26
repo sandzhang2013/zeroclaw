@@ -252,6 +252,10 @@ install -m 0644 \
 
 install -m 0644 "${SCRIPT_DIR}/config.toml.template" "$STAGE/config/"
 install -m 0644 "${SCRIPT_DIR}/env.example" "$STAGE/config/env.example"
+if [[ -d "${SCRIPT_DIR}/skill-plaza" ]]; then
+  mkdir -p "$STAGE/skill-plaza"
+  cp -R "${SCRIPT_DIR}/skill-plaza/." "$STAGE/skill-plaza/"
+fi
 
 if [[ "$WITH_SECRETS" -eq 1 ]]; then
   echo "==> 打入密钥（$ENV_FILE → config/.env + systemd，不回显）"

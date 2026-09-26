@@ -4,6 +4,7 @@ import {
   ChevronRight,
   Folder,
   FolderPlus,
+  Library,
   PanelLeftClose,
   PanelLeftOpen,
   PenSquare,
@@ -23,6 +24,8 @@ import {
   writeFolderNav,
   type FolderNavState,
 } from '@/lib/workbenchFolderNav';
+import { workbenchVersionLabel } from '@/lib/workbenchVersion';
+import { workbenchCommitCount } from 'virtual:workbench-version';
 
 export interface SessionIndicator {
   streaming: boolean;
@@ -49,10 +52,12 @@ export interface WorkbenchSidebarProps {
   onSwitchUser?: () => void;
   onOpenMySkills?: () => void;
   skillsOpen?: boolean;
+  onOpenSkillCenter?: () => void;
+  skillCenterOpen?: boolean;
   userId?: string;
 }
 
-const WORKBENCH_VERSION = '0.6.2';
+const WORKBENCH_VERSION = workbenchVersionLabel(workbenchCommitCount);
 
 const CARD =
   'h-9 min-w-0 w-full justify-start gap-3 rounded-[10px] px-3 py-[7.5px] text-left text-sm text-pc-text-muted transition-colors hover:bg-[var(--pc-hover)] hover:text-pc-text';
@@ -107,6 +112,8 @@ export function WorkbenchSidebar({
   onSwitchUser,
   onOpenMySkills,
   skillsOpen = false,
+  onOpenSkillCenter,
+  skillCenterOpen = false,
   userId,
 }: WorkbenchSidebarProps) {
   const [nav, setNav] = useState<FolderNavState>(() => readFolderNav(userId));
@@ -320,6 +327,22 @@ export function WorkbenchSidebar({
           >
             <Sparkles className="size-4 shrink-0" />
             {!collapsed && <span className="truncate">{t('workbench.my_skills')}</span>}
+          </button>
+        )}
+        {onOpenSkillCenter && canOpenDashboard(userRole) && (
+          <button
+            type="button"
+            onClick={onOpenSkillCenter}
+            title={t('workbench.skill_center')}
+            className={[
+              'flex items-center',
+              CARD,
+              skillCenterOpen ? 'bg-[var(--pc-hover)] text-pc-text' : '',
+              collapsed ? 'w-9 px-0 justify-center mx-auto' : '',
+            ].join(' ')}
+          >
+            <Library className="size-4 shrink-0" />
+            {!collapsed && <span className="truncate">{t('workbench.skill_center')}</span>}
           </button>
         )}
       </div>

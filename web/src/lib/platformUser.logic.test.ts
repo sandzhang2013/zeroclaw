@@ -41,14 +41,16 @@ test('parsePlatformPayload maps BFF roles and skips login identity into session_
 });
 
 test('normalizeRole and storage id stay UI-only', () => {
-  assert.equal(normalizeRole('运维'), '运维');
-  assert.equal(normalizeRole('ops'), '运维');
+  assert.equal(normalizeRole('管理员'), '管理员');
+  assert.equal(normalizeRole('运维'), '普通用户');
+  assert.equal(normalizeRole('ops'), '管理员');
   assert.equal(roleI18nKey('高级用户'), 'workbench.role_advanced');
   assert.equal(workspaceStorageId('liu/yang'), 'liu_yang');
 });
 
 test('only ops can open the dashboard', () => {
-  assert.equal(canOpenDashboard('运维'), true);
+  assert.equal(canOpenDashboard('管理员'), true);
+  assert.equal(canOpenDashboard('运维'), false);
   assert.equal(canOpenDashboard('ops'), true);
   assert.equal(canOpenDashboard('普通用户'), false);
   assert.equal(canOpenDashboard('高级用户'), false);
@@ -85,7 +87,7 @@ test('parsePlatformPayload keeps colon in userId and does not mint session keys'
 test('normalizeRole maps aliases and unknown values to 普通用户', () => {
   assert.equal(normalizeRole('普通用户'), '普通用户');
   assert.equal(normalizeRole('advanced'), '高级用户');
-  assert.equal(normalizeRole('  ops  '), '运维');
+  assert.equal(normalizeRole('  ops  '), '管理员');
   assert.equal(normalizeRole('admin'), '普通用户');
   assert.equal(normalizeRole(undefined), '普通用户');
   assert.equal(roleI18nKey('ops'), 'workbench.role_ops');
@@ -108,7 +110,7 @@ test('parseMockUserCookie reads among other cookies and decodes URI', () => {
   const hex = parseMockUserCookie('zeroclaw_mock_user=%6C%69%75%79%61%6E%67');
   assert.equal(hex?.userId, 'liuyang');
   assert.equal(parseMockUserCookie('zeroclaw_mock_user=%E0%A4%A'), null);
-  assert.equal(parseMockUserCookie('zeroclaw_mock_user=ops')?.role, '运维');
+  assert.equal(parseMockUserCookie('zeroclaw_mock_user=ops')?.role, '管理员');
   assert.equal(
     parseMockUserCookie('zeroclaw_mock_user=chenmin; zeroclaw_mock_user=ops')?.userId,
     'ops',
@@ -140,14 +142,14 @@ test('pickWorkbenchIdentity prefers mock cookie over a stale HTML inject', () =>
   assert.equal(canOpenDashboard(switched?.role), true);
 
   const fromInject = pickWorkbenchIdentity({
-    injected: { userId: 'ops', displayName: '系统运维', role: '运维' },
+    injected: { userId: 'ops', displayName: '系统管理员', role: '管理员' },
     cookieHeader: '',
   });
   assert.equal(fromInject?.userId, 'ops');
   assert.equal(fromInject?.source, 'mock');
 
   const sso = pickWorkbenchIdentity({
-    injected: { userId: 'alice', displayName: '爱丽丝', role: '运维' },
+    injected: { userId: 'alice', displayName: '爱丽丝', role: '管理员' },
   });
   assert.equal(sso?.userId, 'alice');
   assert.equal(sso?.source, 'platform');

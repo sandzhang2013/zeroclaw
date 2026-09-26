@@ -237,7 +237,7 @@ mod tests {
         .into_response();
         assert_eq!(denied.status(), StatusCode::FORBIDDEN);
 
-        let ok = handle_workbench_home_catalog_get(State(state), bff_headers("ops", "运维"))
+        let ok = handle_workbench_home_catalog_get(State(state), bff_headers("ops", "管理员"))
             .await
             .into_response();
         assert_eq!(ok.status(), StatusCode::OK);
@@ -271,7 +271,7 @@ mod tests {
         };
         let response = handle_workbench_home_catalog_put(
             State(state.clone()),
-            bff_headers("ops", "运维"),
+            bff_headers("ops", "管理员"),
             Json(body),
         )
         .await
@@ -301,7 +301,7 @@ mod tests {
         }];
         let response = handle_workbench_home_catalog_put(
             State(state.clone()),
-            bff_headers("ops", "运维"),
+            bff_headers("ops", "管理员"),
             Json(HomeCatalogPut { tabs: vec![] }),
         )
         .await

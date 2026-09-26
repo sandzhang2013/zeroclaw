@@ -10,7 +10,7 @@ import {
 
 function roleTone(role: CanonicalRole): string {
   if (role === '高级用户') return 'text-pc-accent border-pc-accent/30 bg-pc-accent/10';
-  if (role === '运维') return 'text-[var(--color-status-warning)] border-[var(--color-status-warning-alpha-20)] bg-[var(--color-status-warning-alpha-05)]';
+  if (role === '管理员') return 'text-[var(--color-status-warning)] border-[var(--color-status-warning-alpha-20)] bg-[var(--color-status-warning-alpha-05)]';
   return 'text-pc-text-muted border-pc-border bg-pc-elevated';
 }
 

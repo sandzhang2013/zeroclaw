@@ -14,7 +14,7 @@ export type HomeSkillRef = {
 
 export function composeHomeMessage(input: {
   userText: string;
-  skill?: { label: string; kind?: string; prompts?: { text: string }[] } | null;
+  skill?: { id?: string; label: string; kind?: string; prompts?: { text: string }[] } | null;
   locale?: Locale;
   /** First turn includes the catalog prompt; later turns only keep the skill tag. */
   includePrompt?: boolean;
@@ -25,10 +25,11 @@ export function composeHomeMessage(input: {
 
   const locale = input.locale === 'en' ? 'en' : 'zh';
   const includePrompt = input.includePrompt !== false;
-  const name = skill.label.trim();
+  const title = skill.label.trim();
+  const id = skill.id?.trim() || title;
   const prompts = (skill.prompts ?? []).map((prompt) => prompt.text.trim()).filter(Boolean);
   const outline = skill.kind === 'outline';
-  const header = skillHeader(name, outline, locale);
+  const header = skillHeader(id, title, outline, locale);
   if (!includePrompt) {
     return user ? `${header}\n${user}` : header;
   }
@@ -59,6 +60,16 @@ export function titleFromUserMessage(raw: string, skillLabel?: string): string {
   });
 }
 
+/** First real user turn in a transcript, for sidebar recovery. */
+export function titleFromTranscript(
+  messages: Array<{ role?: string; content?: string }>,
+  skillLabel?: string,
+): string | undefined {
+  const first = messages.find((m) => m.role === 'user' && typeof m.content === 'string' && m.content.trim());
+  if (!first?.content) return sanitizeSessionTitle(skillLabel) ?? undefined;
+  return sanitizeSessionTitle(titleFromUserMessage(first.content, skillLabel)) ?? undefined;
+}
+
 /** Keep a real stored name; replace a wrapper/empty title with visible text or the skill label. */
 export function nextStoredSessionTitle(input: {
   stored?: string | null;
@@ -81,6 +92,49 @@ export function nextStoredSessionTitle(input: {
   return preview ?? skill ?? undefined;
 }
 
+/**
+ * Homepage chip. An installed skill is invoked by its directory id.
+ * A chip that is not an installed skill sends the example text only.
+ */
+export function composeHomeCapMessage(input: {
+  userText: string;
+  cap?: { id: string; label: string; kind?: string; prompts?: { text: string }[] } | null;
+  installed: boolean;
+  locale?: Locale;
+}): string {
+  const cap = input.cap;
+  const user = input.userText.trim();
+  if (!cap) return user;
+  if (input.installed && cap.id.trim()) {
+    return composeHomeMessage({
+      userText: user,
+      skill: { id: cap.id.trim(), label: cap.label, kind: cap.kind, prompts: cap.prompts },
+      locale: input.locale,
+    });
+  }
+  const locale = input.locale === 'en' ? 'en' : 'zh';
+  const lead = (cap.prompts ?? []).map((prompt) => prompt.text.trim()).filter(Boolean)[0] ?? '';
+  if (user && lead && user.includes(lead)) return user;
+  if (user && lead) return `${lead}\n${extraLine(user, locale)}`;
+  return user || lead;
+}
+
+/** Name one installed skill on this turn, without a homepage catalog prompt. */
+export function composeInstalledSkillMessage(input: {
+  userText: string;
+  skill?: { id: string; title?: string } | null;
+  locale?: Locale;
+}): string {
+  const id = input.skill?.id.trim() ?? '';
+  if (!id) return input.userText.trim();
+  return composeHomeMessage({
+    userText: input.userText,
+    skill: { id, label: input.skill?.title?.trim() || id },
+    locale: input.locale,
+    includePrompt: false,
+  });
+}
+
 export function canSubmitHomeMessage(input: {
   userText: string;
   hasAttachments: boolean;
@@ -89,15 +143,17 @@ export function canSubmitHomeMessage(input: {
   return Boolean(composeHomeMessage(input) || input.hasAttachments);
 }
 
-function skillHeader(name: string, outline: boolean, locale: Locale): string {
+function skillHeader(id: string, title: string, outline: boolean, locale: Locale): string {
+  const zhName = title && title !== id ? `「${id}」（${title}）` : `「${id}」`;
+  const enName = title && title !== id ? `"${id}" (${title})` : `"${id}"`;
   if (locale === 'en') {
     return outline
-      ? `Use the skill "${name}" for this task. Give an editable outline first, then write the body after confirmation.`
-      : `Use the skill "${name}" for this task.`;
+      ? `Use the skill ${enName} for this task. Give an editable outline first, then write the body after confirmation.`
+      : `Use the skill ${enName} for this task.`;
   }
   return outline
-    ? `请使用技能「${name}」完成下面的任务。先给出可修改的提纲，确认后再写正文。`
-    : `请使用技能「${name}」完成下面的任务。`;
+    ? `请使用技能${zhName}完成下面的任务。先给出可修改的提纲，确认后再写正文。`
+    : `请使用技能${zhName}完成下面的任务。`;
 }
 
 function extraLine(user: string, locale: Locale): string {
@@ -106,22 +162,26 @@ function extraLine(user: string, locale: Locale): string {
 
 /** Bubble view of a home-page send: skill is a tag, not a prose prefix. */
 export function parseHomeSkillDisplay(modelText: string): {
+  /** Directory id, present when the header also carries a display title. */
+  skillId?: string;
   skillLabel?: string;
   visible: string;
 } {
   const text = stripSessionTitleTimestamp(modelText);
   if (!text) return { visible: '' };
 
-  const zh = text.match(/^请使用技能「([^」]+)」完成下面的任务。(?:先给出可修改的提纲，确认后再写正文。)?/);
-  const en = text.match(/^Use the skill "([^"]+)" for this task\.(?: Give an editable outline first, then write the body after confirmation\.)?/);
+  const zh = text.match(/^请使用技能「([^」]+)」(?:（([^）]+)）)?完成下面的任务。(?:先给出可修改的提纲，确认后再写正文。)?/);
+  const en = text.match(/^Use the skill "([^"]+)"(?: \(([^)]+)\))? for this task\.(?: Give an editable outline first, then write the body after confirmation\.)?/);
   const header = zh ?? en;
   if (!header || header.index !== 0) return { visible: text };
 
-  const skillLabel = header[1]?.trim();
+  const quoted = header[1]?.trim();
+  const skillLabel = header[2]?.trim() || quoted;
+  const skillId = quoted && skillLabel && quoted !== skillLabel ? quoted : undefined;
   const rest = text.slice(header[0].length).replace(/^\n+/, '');
   const extra = rest.match(/(?:^|\n)(?:补充要求：|Additional request: )([\s\S]+)$/);
-  if (extra) return { skillLabel, visible: extra[1]?.trim() ?? '' };
-  return { skillLabel, visible: rest.trim() };
+  const visible = extra ? (extra[1]?.trim() ?? '') : rest.trim();
+  return skillId ? { skillId, skillLabel, visible } : { skillLabel, visible };
 }
 
 /** Recover the homepage skill tag from a stored user message (reopen / history). */
@@ -131,7 +191,7 @@ export function recoverHomeSkill(modelText: string): HomeSkillRef | undefined {
   const body = stripSessionTitleTimestamp(modelText);
   const outline = /先给出可修改的提纲|editable outline/i.test(body);
   return {
-    id: parsed.skillLabel,
+    id: parsed.skillId ?? parsed.skillLabel,
     label: parsed.skillLabel,
     kind: outline ? 'outline' : 'chat',
   };

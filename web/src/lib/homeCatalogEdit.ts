@@ -63,6 +63,34 @@ export function draftHomeTab(labelZh: string, labelEn: string, used: Iterable<st
   };
 }
 
+const MAX_HOME_PROMPT_BYTES = 4000;
+
+/** Homepage chip for a plaza skill. The cap id is the plaza directory id. */
+export function capFromPlazaSkill(skill: { id: string; title: string; description: string }): HomeCapEdit {
+  const id = skill.id.trim();
+  const title = skill.title.trim() || id;
+  const description = clipUtf8(skill.description.trim(), MAX_HOME_PROMPT_BYTES);
+  return {
+    id,
+    icon: 'file-text',
+    kind: 'chat',
+    label_zh: title,
+    label_en: '',
+    prompts: description ? [{ id: `${id}_p1`, text_zh: description, text_en: '' }] : [],
+  };
+}
+
+function clipUtf8(text: string, maxBytes: number): string {
+  const encoder = new TextEncoder();
+  if (encoder.encode(text).length <= maxBytes) return text;
+  let out = '';
+  for (const char of text) {
+    if (encoder.encode(out + char).length > maxBytes) break;
+    out += char;
+  }
+  return out;
+}
+
 export function draftHomeCap(labelZh: string, labelEn: string, used: Iterable<string>): HomeCapEdit {
   const zh = labelZh.trim();
   const en = labelEn.trim();

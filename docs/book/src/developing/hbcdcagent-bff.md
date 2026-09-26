@@ -113,7 +113,7 @@ and `crates/zeroclaw-gateway/src/trusted_proxy.rs`: `X-Auth-Secret`,
 UTF-8 header bytes for
 Chinese role/region values. Query `user_id` remains ignored by the
 daemon. MCP geography: non-ops calls are rewritten to the frozen
-`X-User-Region`. Ops (`运维`) calls follow the user turn text: no named
+`X-User-Region`. Admin (`管理员`) calls follow the user turn text: no named
 city → `全省`; an explicit city (e.g. 武汉) → that city. Model-chosen
 geography is ignored when it disagrees with the user text. The system
 prompt also tells the model that an upstream “全省 = 武汉哨点口径”

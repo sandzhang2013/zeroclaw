@@ -4,10 +4,12 @@ import test from 'node:test';
 import {
   MAX_SESSION_TITLE_LENGTH,
   WORKSPACE_STORAGE_KEY,
+  applyKnownTitles,
   gatewaySessionsToRecover,
   readWorkspaceSnapshot,
   sanitizeSessionTitle,
   sessionDisplayTitle,
+  sessionNeedsTitle,
   stripSessionTitleTimestamp,
   workspaceStorageKey,
   dropSessionFromList,
@@ -163,6 +165,53 @@ test('leftover unscoped snapshot is merged into an existing empty scoped copy', 
   assert.equal(merged.activeSessionId, 'deepseek::old');
   assert.equal(store.has(WORKSPACE_STORAGE_KEY), false);
   assert.equal(readWorkspaceSnapshot('liuyang'), null);
+});
+
+test('leftover unscoped snapshot does not wipe a scoped title on the same id', () => {
+  const store = new Map<string, string>();
+  Object.defineProperty(globalThis, 'localStorage', {
+    value: {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        store.set(key, value);
+      },
+      removeItem: (key: string) => {
+        store.delete(key);
+      },
+    },
+    configurable: true,
+  });
+
+  store.set(WORKSPACE_STORAGE_KEY, JSON.stringify({
+    sessions: [{ id: 'deepseek::old' }],
+    activeSessionId: 'deepseek::old',
+  }));
+  store.set(workspaceStorageKey('chenmin'), JSON.stringify({
+    sessions: [{ id: 'deepseek::old', title: '周报提纲' }],
+    activeSessionId: 'deepseek::old',
+  }));
+
+  const merged = JSON.parse(readWorkspaceSnapshot('chenmin') ?? '{}') as {
+    sessions: Array<{ id: string; title?: string }>;
+  };
+  assert.equal(merged.sessions[0]?.title, '周报提纲');
+});
+
+test('applyKnownTitles fills blank and timestamp-only labels', () => {
+  const titles = new Map([['a', '周报'], ['b', '提纲']]);
+  const next = applyKnownTitles(
+    [
+      { id: 'a' },
+      { id: 'b', title: '[CURRENT DATE & TIME: 2026-09-09 20:06:50 +08:00]' },
+      { id: 'c', title: '已有名称' },
+    ],
+    titles,
+  );
+  assert.equal(next[0]?.title, '周报');
+  assert.equal(next[1]?.title, '提纲');
+  assert.equal(next[2]?.title, '已有名称');
+  assert.equal(sessionNeedsTitle({ title: '周报' }), false);
+  assert.equal(sessionNeedsTitle({ title: '  ' }), true);
 });
 
 test('gatewaySessionsToRecover keeps owned transcripts and skips empty or foreign rows', () => {

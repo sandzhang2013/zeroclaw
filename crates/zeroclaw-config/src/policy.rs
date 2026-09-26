@@ -901,6 +901,16 @@ fn is_null_device(path: &Path) -> bool {
     }
 }
 
+/// When `cwd` is `…/sessions/<id>`, return the parent workspace (`…`).
+#[must_use]
+pub fn session_parent_workspace(cwd: &Path) -> Option<&Path> {
+    let sessions_dir = cwd.parent()?;
+    if sessions_dir.file_name() != Some(std::ffi::OsStr::new("sessions")) {
+        return None;
+    }
+    sessions_dir.parent()
+}
+
 fn rootless_path(path: &Path) -> Option<PathBuf> {
     let mut relative = PathBuf::new();
 
@@ -3433,8 +3443,9 @@ impl SecurityPolicy {
     pub fn resolve_tool_path(&self, path: &str) -> PathBuf {
         let expanded = expand_user_path(path);
         if expanded.is_absolute() {
-            expanded
-        } else if let Some(workspace_hint) = rootless_path(&self.workspace_dir) {
+            return expanded;
+        }
+        let joined = if let Some(workspace_hint) = rootless_path(&self.workspace_dir) {
             if let Ok(stripped) = expanded.strip_prefix(&workspace_hint) {
                 if stripped.as_os_str().is_empty() {
                     self.workspace_dir.clone()
@@ -3450,11 +3461,22 @@ impl SecurityPolicy {
                     self.workspace_dir.join(stripped)
                 }
             } else {
-                self.workspace_dir.join(expanded)
+                self.workspace_dir.join(&expanded)
             }
         } else {
-            self.workspace_dir.join(expanded)
+            self.workspace_dir.join(&expanded)
+        };
+        // Workbench session cwd is `…/workspace/sessions/<id>`. Models often
+        // pass `skills/<id>/…` as if cwd were the parent workspace.
+        if !joined.exists()
+            && let Some(workspace) = session_parent_workspace(&self.workspace_dir)
+        {
+            let sibling = workspace.join(&expanded);
+            if sibling.exists() {
+                return sibling;
+            }
         }
+        joined
     }
 
     pub fn is_under_allowed_root(&self, path: &str) -> bool {
@@ -7291,6 +7313,31 @@ mod tests {
         };
         let resolved = p.resolve_tool_path("relative/path.txt");
         assert_eq!(resolved, PathBuf::from("/workspace/relative/path.txt"));
+    }
+
+    #[test]
+    fn session_parent_workspace_reads_sessions_id_shape() {
+        assert_eq!(
+            session_parent_workspace(Path::new("/ws/sessions/abc")),
+            Some(Path::new("/ws"))
+        );
+        assert_eq!(session_parent_workspace(Path::new("/ws")), None);
+    }
+
+    #[test]
+    fn resolve_tool_path_maps_session_sibling_skills_when_cwd_misses() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("workspace");
+        let session = workspace.join("sessions").join("s1");
+        let skill_ref = workspace.join("skills").join("report").join("references");
+        std::fs::create_dir_all(&session).unwrap();
+        std::fs::create_dir_all(&skill_ref).unwrap();
+
+        let p = SecurityPolicy {
+            workspace_dir: session,
+            ..SecurityPolicy::default()
+        };
+        assert_eq!(p.resolve_tool_path("skills/report/references"), skill_ref);
     }
 
     #[test]

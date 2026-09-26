@@ -129,7 +129,7 @@ pub fn has_bff_secret(headers: &HeaderMap) -> bool {
     header_str(headers, HEADER_AUTH_SECRET).is_some()
 }
 
-/// Config / logs / org-skill writes. Pairing still works; BFF 运维 also works.
+/// Config / logs / org-skill writes. Pairing still works; BFF admin role also works.
 pub fn require_ops_auth(state: &AppState, headers: &HeaderMap) -> Result<(), AuthError> {
     if trusted_proxy_enabled(state) && has_bff_secret(headers) {
         let (principal, _) = require_trusted_proxy(state, headers)?;
@@ -138,7 +138,7 @@ pub fn require_ops_auth(state: &AppState, headers: &HeaderMap) -> Result<(), Aut
         }
         return Err(json_err(
             StatusCode::FORBIDDEN,
-            "Forbidden — ops surface requires X-User-Role: 运维",
+            "Forbidden — ops surface requires X-User-Role: 管理员",
         ));
     }
     require_auth(state, headers)

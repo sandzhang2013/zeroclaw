@@ -55,3 +55,7 @@ level = "full"
 
 [runtime_profiles.default]
 max_context_tokens = 128000
+
+# 每轮只注入技能名称、说明和目录。正文在点选后由 read_skill 读取。
+[skills]
+prompt_injection_mode = "compact"

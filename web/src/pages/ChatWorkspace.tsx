@@ -8,7 +8,8 @@ import { ResultsPanel } from '@/components/ResultsPanel';
 import { WorkbenchHome } from '@/components/WorkbenchHome';
 import { ConfirmDialog } from '@/components/ui';
 import { MySkillsPage } from '@/components/MySkillsPage';
-import { deleteAgentWorkspacePath, deleteSession, getSessions } from '@/lib/api';
+import { SkillCenterPage } from '@/components/SkillCenterPage';
+import { deleteAgentWorkspacePath, deleteSession, getSessionMessages, getSessions, renameSession as renameGatewaySession } from '@/lib/api';
 import {
   adoptTaskSession,
   createTaskSessionId,
@@ -19,7 +20,7 @@ import {
 import { persistSessionId } from '@/lib/sessionId';
 import { generateUUID } from '@/lib/uuid';
 import { t } from '@/lib/i18n';
-import { nextStoredSessionTitle, type HomeSkillRef } from '@/lib/homeSend';
+import { nextStoredSessionTitle, titleFromTranscript, titleFromUserMessage, type HomeSkillRef } from '@/lib/homeSend';
 import {
   saveWorkbenchAutonomy,
   clampWorkbenchAutonomy,
@@ -27,13 +28,15 @@ import {
   type WorkbenchAutonomy,
 } from '@/lib/workbenchAutonomy';
 import {
+  applyKnownTitles,
   gatewaySessionsToRecover,
   readWorkspaceSnapshot,
   sanitizeSessionTitle,
+  sessionNeedsTitle,
   workspaceStorageKey,
   dropSessionFromList,
 } from '@/lib/workbenchSession';
-import { clearChatHistory } from '@/lib/chatHistoryStorage';
+import { clearChatHistory, loadChatHistory } from '@/lib/chatHistoryStorage';
 import { isEmbeddedFrame, planIframeAsk } from '@/lib/iframeAsk';
 
 const SIDEBAR_COLLAPSED_KEY = 'zeroclaw-workbench-sidebar-collapsed';
@@ -135,6 +138,12 @@ function dedupeSessions(sessions: WorkbenchSession[]): WorkbenchSession[] {
   });
 }
 
+function persistGatewayTitle(session: WorkbenchSession, title: string, userId?: string): void {
+  const gid = gatewayIdFor(session, userId);
+  if (!gid) return;
+  void renameGatewaySession(gid, title).catch(() => { /* persistence off or row not yet created */ });
+}
+
 function loadPersisted(userId?: string): Partial<PersistedStateV3> {
   try {
     const raw = readWorkspaceSnapshot(userId);
@@ -225,6 +234,7 @@ export default function ChatWorkspace({
   } | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [showSkills, setShowSkills] = useState(false);
+  const [showSkillCenter, setShowSkillCenter] = useState(false);
   const deletingRef = useRef(false);
   const showHome = !sessions.some((s) => s.id === activeSessionId);
 
@@ -241,6 +251,8 @@ export default function ChatWorkspace({
   const bridgeFolderRef = useRef(DEFAULT_FOLDER_ID);
   const bridgeFoldersRef = useRef<WorkbenchFolder[]>([]);
   const bridgeRoleRef = useRef(userRole);
+  const userIdRef = useRef(userId);
+  userIdRef.current = userId;
   const [indicators, setIndicators] = useState<Record<string, SessionIndicator>>({});
 
   const visibleSessionIds = useMemo(() => new Set([activeSessionId]), [activeSessionId]);
@@ -312,6 +324,9 @@ export default function ChatWorkspace({
             ));
           }
           if (!grew && nextTitle === current.title) return list;
+          if (nextTitle !== current.title) {
+            queueMicrotask(() => persistGatewayTitle(current, nextTitle, userIdRef.current));
+          }
           return list.map((sess) => (
             sess.id === sessionId
               ? { ...sess, title: nextTitle, updatedAt: grew ? stampNow() : sess.updatedAt }
@@ -353,17 +368,28 @@ export default function ChatWorkspace({
   useEffect(() => {
     let cancelled = false;
     const defaultId = getOrCreateSessionId(initialAlias, userId);
+
+    function gatewayIdOf(session: WorkbenchSession): string | null {
+      return session.taskId === '__default__'
+        ? defaultId
+        : resolveTaskSessionId(session.agentAlias, session.taskId);
+    }
+
     getSessions()
-      .then((rows) => {
+      .then(async (rows) => {
         if (cancelled) return;
         const recovered = gatewaySessionsToRecover(rows, defaultId, userId);
-        if (!recovered.length) return;
+        const nameByGid = new Map<string, string>();
+        for (const row of rows) {
+          const name = sanitizeSessionTitle(row.name);
+          if (name) nameByGid.set(row.session_id, name);
+        }
+
+        let snapshot: WorkbenchSession[] = [];
         setSessions((prev) => {
           const known = new Set<string>();
           for (const session of prev) {
-            const gid = session.taskId === '__default__'
-              ? defaultId
-              : resolveTaskSessionId(session.agentAlias, session.taskId);
+            const gid = gatewayIdOf(session);
             if (gid) known.add(gid);
           }
           const added: WorkbenchSession[] = [];
@@ -380,8 +406,40 @@ export default function ChatWorkspace({
               title: row.title,
             });
           }
-          return added.length ? dedupeSessions([...prev, ...added]) : prev;
+          const merged = added.length ? dedupeSessions([...prev, ...added]) : prev;
+          const fromGateway = new Map<string, string>();
+          for (const session of merged) {
+            const gid = gatewayIdOf(session);
+            const name = gid ? nameByGid.get(gid) : undefined;
+            if (name) fromGateway.set(session.id, name);
+          }
+          snapshot = applyKnownTitles(merged, fromGateway);
+          return snapshot;
         });
+
+        const titles = new Map<string, string>();
+        for (const session of snapshot) {
+          if (!sessionNeedsTitle(session) || titles.has(session.id)) continue;
+          const gid = gatewayIdOf(session);
+          if (!gid) continue;
+          const fromLocal = titleFromTranscript(loadChatHistory(gid), session.homeSkill?.label);
+          if (fromLocal) {
+            titles.set(session.id, fromLocal);
+            continue;
+          }
+          try {
+            const res = await getSessionMessages(gid);
+            if (cancelled) return;
+            const fromApi = titleFromTranscript(res.messages, session.homeSkill?.label);
+            if (fromApi) titles.set(session.id, fromApi);
+          } catch { /* leave untitled */ }
+        }
+        if (cancelled || titles.size === 0) return;
+        setSessions((prev) => applyKnownTitles(prev, titles));
+        for (const session of snapshot) {
+          const title = titles.get(session.id);
+          if (title) persistGatewayTitle(session, title, userId);
+        }
       })
       .catch(() => { /* keep the local snapshot */ });
     return () => { cancelled = true; };
@@ -415,14 +473,17 @@ export default function ChatWorkspace({
   ) => {
     const folderId = folders.some((f) => f.id === activeFolderId) ? activeFolderId : DEFAULT_FOLDER_ID;
     const taskId = createTaskSessionId(activeAlias);
-    const titleSource = (titleHint || text).trim().split('\n')[0] || files[0]?.name || '';
+    const title = sanitizeSessionTitle(titleHint)
+      ?? sanitizeSessionTitle(titleFromUserMessage(text, skill?.label))
+      ?? sanitizeSessionTitle(files[0]?.name)
+      ?? undefined;
     const session: WorkbenchSession = {
       id: makeSessionId(activeAlias, taskId),
       agentAlias: activeAlias,
       taskId,
       folderId,
       updatedAt: stampNow(),
-      title: sanitizeSessionTitle(titleSource) ?? undefined,
+      title,
       homeSkill: skill,
     };
     const capped = clampWorkbenchAutonomy(autonomy, maxAutonomyForRole(userRole));
@@ -436,10 +497,14 @@ export default function ChatWorkspace({
   const renameSession = useCallback((sessionId: string, name: string) => {
     const title = sanitizeSessionTitle(name);
     if (!title) return;
-    setSessions((list) => list.map((sess) => (
-      sess.id === sessionId ? { ...sess, title } : sess
-    )));
-  }, []);
+    setSessions((list) => {
+      const current = list.find((sess) => sess.id === sessionId);
+      if (current) queueMicrotask(() => persistGatewayTitle(current, title, userId));
+      return list.map((sess) => (
+        sess.id === sessionId ? { ...sess, title } : sess
+      ));
+    });
+  }, [userId]);
 
   const requestDeleteSession = useCallback((sessionId: string) => {
     setPendingDeleteId(sessionId);
@@ -608,15 +673,24 @@ export default function ChatWorkspace({
         userRegion={userRegion}
         onSwitchUser={onSwitchUser}
         skillsOpen={showSkills}
+        skillCenterOpen={showSkillCenter}
         onOpenMySkills={() => {
+          setShowSkillCenter(false);
           setShowSkills(true);
+          setActiveSessionId('');
+        }}
+        onOpenSkillCenter={() => {
+          setShowSkills(false);
+          setShowSkillCenter(true);
           setActiveSessionId('');
         }}
       />
 
       <div ref={splitRef} className="flex flex-1 min-w-0 min-h-0 bg-pc-surface">
-        {showSkills ? (
-          <MySkillsPage agent={activeAlias} onClose={() => setShowSkills(false)} />
+        {showSkillCenter ? (
+          <SkillCenterPage userName={userName} onClose={() => setShowSkillCenter(false)} />
+        ) : showSkills ? (
+          <MySkillsPage agent={activeAlias} userName={userName} onClose={() => setShowSkills(false)} />
         ) : showHome && (
           <WorkbenchHome
             onSend={startSessionFromHome}
@@ -627,7 +701,7 @@ export default function ChatWorkspace({
             userRole={userRole}
           />
         )}
-        {!showSkills && sessions.filter((session) => mountedSessionIds.has(session.id)).map((session) => {
+        {!showSkills && !showSkillCenter && sessions.filter((session) => mountedSessionIds.has(session.id)).map((session) => {
           const visible = session.id === activeSessionId;
           return (
             <div

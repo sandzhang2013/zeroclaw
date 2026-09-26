@@ -262,13 +262,14 @@ impl Tool for ShellTool {
 
                 anyhow::Error::msg("Missing 'command' parameter")
             })?;
+        let command = crate::skills::rewrite_session_skill_cd(command, &self.security);
         let approved = args
             .get("approved")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
         match self.security.validate_command_execution_for_shell(
-            command,
+            &command,
             approved,
             self.runtime.shell_dialect(),
         ) {
@@ -288,7 +289,7 @@ impl Tool for ShellTool {
         // null device only on the native Windows execution path.
         if let Some(path) = self
             .security
-            .forbidden_workspace_path_argument_for_shell(command, self.runtime.shell_dialect())
+            .forbidden_workspace_path_argument_for_shell(&command, self.runtime.shell_dialect())
         {
             return Ok(ToolResult {
                 success: false,
@@ -302,7 +303,7 @@ impl Tool for ShellTool {
         // (CWE-200), then re-add only safe, functional variables.
         let mut cmd = match self
             .runtime
-            .build_shell_command(command, &self.security.workspace_dir)
+            .build_shell_command(&command, &self.security.workspace_dir)
         {
             Ok(cmd) => cmd,
             Err(e) => {

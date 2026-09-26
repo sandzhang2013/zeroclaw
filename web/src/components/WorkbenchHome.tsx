@@ -10,10 +10,11 @@ import {
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { t, getLocale } from '@/lib/i18n';
-import { getStatus, getWorkbenchHome } from '@/lib/api';
+import { getStatus, getWorkbenchHome, listPersonalSkills } from '@/lib/api';
 import { DEFAULT_FOLDER_ID, type WorkbenchFolder } from '@/pages/ChatWorkspace';
 import { AutonomySelect } from '@/components/AutonomySelect';
 import { HomeSkillChip } from '@/components/HomeSkillChip';
+import { InstalledSkillButton, type InstalledSkillPick } from '@/components/InstalledSkillButton';
 import {
   DEFAULT_WORKBENCH_AUTONOMY,
   loadWorkbenchAutonomy,
@@ -32,7 +33,7 @@ import {
   homeCapIcon,
   type WorkbenchHomeCatalog,
 } from '@/lib/workbenchHomeCatalog';
-import { canSubmitHomeMessage, composeHomeMessage, homeSessionTitle, type HomeSkillRef } from '@/lib/homeSend';
+import { composeHomeCapMessage, composeInstalledSkillMessage, homeSessionTitle, type HomeSkillRef } from '@/lib/homeSend';
 
 type HomeAttach = {
   id: string;
@@ -60,6 +61,8 @@ export function WorkbenchHome({
   const [catalog, setCatalog] = useState<WorkbenchHomeCatalog>(() => fallbackHomeCatalog());
   const [tab, setTab] = useState<string>(() => fallbackHomeCatalog().tabs[0]?.id ?? 'query');
   const [skillId, setSkillId] = useState<string>('');
+  const [installedSkill, setInstalledSkill] = useState<InstalledSkillPick | null>(null);
+  const [installedIds, setInstalledIds] = useState<Set<string>>(() => new Set());
   const [model, setModel] = useState<string>('');
   const maxAutonomy = maxAutonomyForRole(userRole);
   const [autonomy, setAutonomy] = useState<WorkbenchAutonomy>(() =>
@@ -119,6 +122,27 @@ export function WorkbenchHome({
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    listPersonalSkills(agentAlias)
+      .then((data) => {
+        if (cancelled) return;
+        setInstalledIds(
+          new Set(
+            (data.skills ?? [])
+              .filter((skill) => skill.enabled !== false && !skill.blocked_reason)
+              .map((skill) => skill.name),
+          ),
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setInstalledIds(new Set());
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [agentAlias]);
+
+  useEffect(() => {
     if (!skillId) return;
     const skills =
       (catalog.tabs.find((item) => item.id === tab) ?? catalog.tabs[0])?.caps ?? [];
@@ -128,35 +152,46 @@ export function WorkbenchHome({
 
   const currentTab = catalog.tabs.find((item) => item.id === tab) ?? catalog.tabs[0];
   const skills = currentTab?.caps ?? [];
-  const selectedSkill = skills.find((cap) => cap.id === skillId);
+  const selectedSkill = installedSkill ? undefined : skills.find((cap) => cap.id === skillId);
   const SelectedSkillIcon = selectedSkill ? homeCapIcon(selectedSkill.icon) : null;
-  const canSend = canSubmitHomeMessage({
-    userText: input,
-    hasAttachments: attachments.length > 0,
-    skill: selectedSkill,
-  });
+  const capInstalled = Boolean(selectedSkill && installedIds.has(selectedSkill.id));
+  function draftMessage(userText: string) {
+    if (installedSkill) {
+      return composeInstalledSkillMessage({
+        userText,
+        skill: { id: installedSkill.id, title: installedSkill.title },
+        locale: getLocale(),
+      });
+    }
+    return composeHomeCapMessage({
+      userText,
+      cap: selectedSkill,
+      installed: capInstalled,
+      locale: getLocale(),
+    });
+  }
+  const canSend = Boolean(draftMessage(input) || attachments.length > 0);
 
   function submit() {
     const trimmed = input.trim();
-    const message = composeHomeMessage({
-      userText: trimmed,
-      skill: selectedSkill,
-      locale: getLocale(),
-    });
+    const message = draftMessage(trimmed);
     if (!message && attachments.length === 0) return;
-    onSend(
-      message,
-      autonomy,
-      attachments.map((a) => a.file),
-      homeSessionTitle({ userText: trimmed, skillLabel: selectedSkill?.label }),
-      selectedSkill
+    const skillRef: HomeSkillRef | undefined = installedSkill
+      ? { id: installedSkill.id, label: installedSkill.title }
+      : capInstalled && selectedSkill
         ? {
             id: selectedSkill.id,
             label: selectedSkill.label,
             kind: selectedSkill.kind,
             icon: selectedSkill.icon,
           }
-        : undefined,
+        : undefined;
+    onSend(
+      message,
+      autonomy,
+      attachments.map((a) => a.file),
+      homeSessionTitle({ userText: trimmed, skillLabel: skillRef?.label }),
+      skillRef,
     );
     for (const a of attachments) {
       if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
@@ -165,6 +200,7 @@ export function WorkbenchHome({
     setAttachHint(null);
     setInput('');
     setSkillId('');
+    setInstalledSkill(null);
     inputRef.current?.focus();
   }
 
@@ -272,7 +308,10 @@ export function WorkbenchHome({
                 <button
                   key={cap.id}
                   type="button"
-                  onClick={() => setSkillId(cap.id)}
+                  onClick={() => {
+                  setInstalledSkill(null);
+                  setSkillId(cap.id);
+                }}
                   className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-pc-border bg-pc-surface px-3 text-sm text-pc-text-secondary transition-colors hover:bg-[var(--pc-hover)] hover:text-pc-text"
                 >
                   <Icon className="size-3.5 shrink-0" />
@@ -346,7 +385,12 @@ export function WorkbenchHome({
               </ul>
             )}
             <div className="flex min-h-[72px] flex-1 items-start gap-2 text-[15px] leading-[1.7]">
-              {selectedSkill ? (
+              {installedSkill ? (
+                <HomeSkillChip
+                  label={installedSkill.title}
+                  onClear={() => setInstalledSkill(null)}
+                />
+              ) : selectedSkill ? (
                 <HomeSkillChip
                   label={selectedSkill.label}
                   icon={SelectedSkillIcon}
@@ -386,6 +430,13 @@ export function WorkbenchHome({
                 >
                   <Plus className="size-4" />
                 </button>
+                <InstalledSkillButton
+                  agent={agentAlias}
+                  onPick={(skill) => {
+                    setSkillId('');
+                    setInstalledSkill(skill);
+                  }}
+                />
                 <FooterSelect
                   icon={Folder}
                   label={workspaceLabel(folders, activeFolderId)}

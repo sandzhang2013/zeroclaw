@@ -170,7 +170,7 @@ export interface AgentProviderProps {
   /** Frozen workbench identity. Used only as a localStorage key prefix so
    * mock-user switches do not reuse another user's gateway session UUID. */
   userId?: string;
-  /** When set, ops-only `/api/config/*` is skipped unless the role is 运维. */
+  /** When set, ops-only `/api/config/*` is skipped unless the role is 管理员. */
   userRole?: string;
   /**
    * Conversation to open. Omit to resume the alias's last one. The workspace

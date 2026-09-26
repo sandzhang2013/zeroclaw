@@ -1024,6 +1024,49 @@ export function deleteSkill(
   );
 }
 
+export interface SkillFileContent {
+  path: string;
+  content?: string;
+  binary?: boolean;
+}
+
+/** Shared plaza catalog: `<install>/shared/skill-plaza/<name>/SKILL.md`. */
+export function listSkillPlaza(): Promise<{
+  skills: Array<{
+    name: string;
+    title: string;
+    description: string;
+    body: string;
+    version?: string;
+    published_at?: string;
+    creator_id?: string;
+    creator_name?: string;
+  }>;
+}> {
+  return apiFetch('/api/skill-plaza');
+}
+
+/** Copy a plaza skill directory into the caller's personal skills. */
+export function installPlazaSkill(body: {
+  agent: string;
+  name: string;
+  update?: boolean;
+}): Promise<{ name: string; version?: string }> {
+  return apiFetch('/api/user/skills/from-plaza', {
+    method: 'POST',
+    body: JSON.stringify({
+      agent: body.agent,
+      name: body.name,
+      update: body.update === true,
+    }),
+  });
+}
+
+/** Next skill directory id. Opening a create form consumes the number. */
+export function allocateSkillId(): Promise<{ id: string }> {
+  return apiFetch<{ id: string }>("/api/skill-ids", { method: "POST" });
+}
+
 /** Write a personal SKILL.md under the frozen user's workspace. */
 export function savePersonalSkill(body: {
   agent: string;
@@ -1031,6 +1074,7 @@ export function savePersonalSkill(body: {
   title?: string;
   description?: string;
   body?: string;
+  files?: Array<{ path: string; data_base64: string }>;
 }): Promise<{ name: string }> {
   return apiFetch<{ name: string }>("/api/user/skills", {
     method: "POST",
@@ -1042,6 +1086,7 @@ export function savePersonalSkill(body: {
         description: body.description ?? "",
       },
       body: body.body ?? "",
+      files: body.files ?? [],
     }),
   });
 }
@@ -1051,6 +1096,10 @@ export interface PersonalSkillSummary {
   title: string;
   description: string;
   enabled?: boolean;
+  version?: string;
+  blocked_reason?: string;
+  from_plaza?: boolean;
+  review_status?: string;
 }
 
 export interface PersonalSkillDetail {
@@ -1059,6 +1108,8 @@ export interface PersonalSkillDetail {
   description: string;
   body: string;
   enabled?: boolean;
+  from_plaza?: boolean;
+  review_status?: string;
 }
 
 export function listPersonalSkills(agent: string): Promise<{ skills: PersonalSkillSummary[] }> {
@@ -1069,6 +1120,29 @@ export function listPersonalSkills(agent: string): Promise<{ skills: PersonalSki
 export function readPersonalSkill(agent: string, name: string): Promise<PersonalSkillDetail> {
   const q = new URLSearchParams({ agent });
   return apiFetch(`/api/user/skills/${encodeURIComponent(name)}?${q.toString()}`);
+}
+
+export function listPlazaSkillFiles(name: string): Promise<{ files: string[] }> {
+  return apiFetch(`/api/skill-plaza/${encodeURIComponent(name)}/files`);
+}
+
+export function readPlazaSkillFile(name: string, path: string): Promise<SkillFileContent> {
+  const q = new URLSearchParams({ path });
+  return apiFetch(`/api/skill-plaza/${encodeURIComponent(name)}/files?${q.toString()}`);
+}
+
+export function listPersonalSkillFiles(agent: string, name: string): Promise<{ files: string[] }> {
+  const q = new URLSearchParams({ agent });
+  return apiFetch(`/api/user/skills/${encodeURIComponent(name)}/files?${q.toString()}`);
+}
+
+export function readPersonalSkillFile(
+  agent: string,
+  name: string,
+  path: string,
+): Promise<SkillFileContent> {
+  const q = new URLSearchParams({ agent, path });
+  return apiFetch(`/api/user/skills/${encodeURIComponent(name)}/files?${q.toString()}`);
 }
 
 export function updatePersonalSkill(body: {
@@ -1107,6 +1181,122 @@ export function setPersonalSkillEnabled(body: {
     method: "PATCH",
     body: JSON.stringify({ agent: body.agent, enabled: body.enabled }),
   });
+}
+
+export function submitPersonalSkill(body: {
+  agent: string;
+  name: string;
+  displayName?: string;
+}): Promise<{ id: string; status: string; creator_id?: string }> {
+  return apiFetch(`/api/user/skills/${encodeURIComponent(body.name)}/submit`, {
+    method: "POST",
+    body: JSON.stringify({
+      agent: body.agent,
+      display_name: body.displayName ?? "",
+    }),
+  });
+}
+
+export function forkPersonalSkill(body: {
+  agent: string;
+  name: string;
+  newName: string;
+}): Promise<{ name: string }> {
+  return apiFetch(`/api/user/skills/${encodeURIComponent(body.name)}/fork`, {
+    method: "POST",
+    body: JSON.stringify({ agent: body.agent, name: body.newName }),
+  });
+}
+
+export interface SkillCenterSkill {
+  id: string;
+  title: string;
+  description: string;
+  body?: string;
+  status: string;
+  creator_id?: string;
+  creator_name?: string;
+  submitter_id?: string;
+  submitter_name?: string;
+  reject_reason?: string;
+  version?: number;
+  published_at?: string;
+  on_plaza?: boolean;
+  releases?: Array<{ version: number; published_at: string }>;
+}
+
+export function listSkillCenter(): Promise<{ skills: SkillCenterSkill[] }> {
+  return apiFetch("/api/skill-center");
+}
+
+export function readSkillCenter(id: string): Promise<SkillCenterSkill> {
+  return apiFetch(`/api/skill-center/${encodeURIComponent(id)}`);
+}
+
+export function createSkillCenter(body: {
+  name: string;
+  title?: string;
+  description?: string;
+  body?: string;
+  displayName?: string;
+}): Promise<{ id: string; status: string }> {
+  return apiFetch("/api/skill-center", {
+    method: "POST",
+    body: JSON.stringify({
+      name: body.name,
+      title: body.title ?? "",
+      description: body.description ?? "",
+      body: body.body ?? "",
+      display_name: body.displayName ?? "",
+    }),
+  });
+}
+
+export function updateSkillCenter(body: {
+  id: string;
+  title?: string;
+  description?: string;
+  body?: string;
+}): Promise<{ id: string; status: string }> {
+  return apiFetch(`/api/skill-center/${encodeURIComponent(body.id)}`, {
+    method: "PUT",
+    body: JSON.stringify({
+      title: body.title ?? "",
+      description: body.description ?? "",
+      body: body.body ?? "",
+    }),
+  });
+}
+
+export function submitSkillCenter(id: string, displayName?: string): Promise<{ id: string; status: string }> {
+  return apiFetch(`/api/skill-center/${encodeURIComponent(id)}/submit`, {
+    method: "POST",
+    body: JSON.stringify({ display_name: displayName ?? "" }),
+  });
+}
+
+export function reviewSkillCenter(id: string, decision: "approve" | "reject", note?: string): Promise<SkillCenterSkill> {
+  return apiFetch(`/api/skill-center/${encodeURIComponent(id)}/review`, {
+    method: "POST",
+    body: JSON.stringify({ decision, note: note ?? "" }),
+  });
+}
+
+export function publishSkillCenter(id: string): Promise<{ id: string; status: string; version: number; published_at: string }> {
+  return apiFetch(`/api/skill-center/${encodeURIComponent(id)}/publish`, { method: "POST" });
+}
+
+export function unpublishSkillCenter(id: string): Promise<{ id: string; status: string }> {
+  return apiFetch(`/api/skill-center/${encodeURIComponent(id)}/unpublish`, { method: "POST" });
+}
+
+export function listSkillCenterFiles(id: string): Promise<{ files: string[] }> {
+  return apiFetch(`/api/skill-center/${encodeURIComponent(id)}/files`);
+}
+
+export function readSkillCenterFile(id: string, path: string): Promise<SkillFileContent> {
+  const q = new URLSearchParams({ path });
+  return apiFetch(`/api/skill-center/${encodeURIComponent(id)}/files?${q.toString()}`);
 }
 
 // ── Config schema descriptions ───────────────────────────────────────

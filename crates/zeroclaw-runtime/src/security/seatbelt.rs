@@ -26,6 +26,18 @@ impl SeatbeltSandbox {
     /// If no workspace is provided, falls back to the process current
     /// directory for compatibility with direct construction.
     pub fn with_workspace(workspace: Option<&Path>) -> std::io::Result<Self> {
+        Self::with_roots(workspace, &[], &[], &[])
+    }
+
+    /// Workspace plus the same extra-root tiers `SecurityPolicy` grants
+    /// `file_read` / `file_write`. Session cwd is the write jail; skill
+    /// directories typically arrive as read-only or read-write extras.
+    pub fn with_roots(
+        workspace: Option<&Path>,
+        read_write: &[PathBuf],
+        read_only: &[PathBuf],
+        write_only: &[PathBuf],
+    ) -> std::io::Result<Self> {
         if !Self::is_installed() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
@@ -42,7 +54,7 @@ impl SeatbeltSandbox {
         let workspace = workspace
             .map(Path::to_path_buf)
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/tmp")));
-        let policy = generate_policy(&workspace);
+        let policy = generate_policy_with_roots(&workspace, read_write, read_only, write_only);
         std::fs::write(&policy_path, &policy)?;
 
         Ok(Self {
@@ -134,7 +146,47 @@ fn seatbelt_string_literal(value: &str) -> String {
 }
 
 fn generate_policy(workspace: &Path) -> String {
+    generate_policy_with_roots(workspace, &[], &[], &[])
+}
+
+fn seatbelt_subpath(path: &Path) -> Option<String> {
+    if path.as_os_str().is_empty() {
+        return None;
+    }
+    let rendered = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    Some(seatbelt_string_literal(&rendered.to_string_lossy()))
+}
+
+fn extra_root_rules(kind: &str, paths: &[&Path]) -> String {
+    let mut out = String::new();
+    for path in paths {
+        let Some(literal) = seatbelt_subpath(path) else {
+            continue;
+        };
+        out.push_str(&format!("(allow file-{kind}* (subpath \"{literal}\"))\n"));
+    }
+    out
+}
+
+fn generate_policy_with_roots(
+    workspace: &Path,
+    read_write: &[PathBuf],
+    read_only: &[PathBuf],
+    write_only: &[PathBuf],
+) -> String {
     let workspace_str = seatbelt_string_literal(&workspace.to_string_lossy());
+    let read_paths: Vec<&Path> = read_only
+        .iter()
+        .chain(read_write.iter())
+        .map(PathBuf::as_path)
+        .collect();
+    let write_paths: Vec<&Path> = read_write
+        .iter()
+        .chain(write_only.iter())
+        .map(PathBuf::as_path)
+        .collect();
+    let extra_reads = extra_root_rules("read", &read_paths);
+    let extra_writes = extra_root_rules("write", &write_paths);
     format!(
         r#"(version 1)
 
@@ -166,7 +218,7 @@ fn generate_policy(workspace: &Path) -> String {
 
 ;; Allow reading the workspace
 (allow file-read* (subpath "{workspace}"))
-
+{extra_reads}
 ;; Allow reading temp directories (needed for policy file itself)
 (allow file-read* (subpath "/tmp"))
 (allow file-read* (subpath "/private/tmp"))
@@ -181,7 +233,7 @@ fn generate_policy(workspace: &Path) -> String {
 ;; Only allow writes to workspace and temp directories
 (allow file-write*
     (subpath "{workspace}"))
-(allow file-write*
+{extra_writes}(allow file-write*
     (subpath "/tmp")
     (subpath "/private/tmp"))
 (allow file-write*
@@ -216,6 +268,8 @@ fn generate_policy(workspace: &Path) -> String {
 (allow mach-task-name)
 "#,
         workspace = workspace_str,
+        extra_reads = extra_reads,
+        extra_writes = extra_writes,
     )
 }
 
@@ -513,5 +567,78 @@ mod tests {
         let open = policy.chars().filter(|c| *c == '(').count();
         let close = policy.chars().filter(|c| *c == ')').count();
         assert_eq!(open, close, "parentheses must be balanced in .sb policy");
+    }
+
+    #[test]
+    fn generate_policy_grants_skill_dir_read_without_write() {
+        let workspace = PathBuf::from("/tmp/session-cwd");
+        let skills = PathBuf::from("/tmp/agent-workspace/skills");
+        let policy = generate_policy_with_roots(&workspace, &[], &[skills.clone()], &[]);
+        assert!(policy.contains(r#"(allow file-read* (subpath "/tmp/agent-workspace/skills"))"#));
+        assert!(!policy.contains(r#"(allow file-write* (subpath "/tmp/agent-workspace/skills"))"#));
+        let open = policy.chars().filter(|c| *c == '(').count();
+        let close = policy.chars().filter(|c| *c == ')').count();
+        assert_eq!(open, close, "parentheses must be balanced in .sb policy");
+    }
+
+    #[test]
+    fn generate_policy_grants_read_write_extra_root() {
+        let workspace = PathBuf::from("/tmp/session-cwd");
+        let agent = PathBuf::from("/tmp/agent-workspace");
+        let policy = generate_policy_with_roots(&workspace, &[agent.clone()], &[], &[]);
+        assert!(policy.contains(r#"(allow file-read* (subpath "/tmp/agent-workspace"))"#));
+        assert!(policy.contains(r#"(allow file-write* (subpath "/tmp/agent-workspace"))"#));
+    }
+
+    #[test]
+    fn seatbelt_can_read_skill_script_outside_session_cwd() {
+        if !SeatbeltSandbox::is_installed() {
+            return;
+        }
+
+        // tempfile lives under /var/folders, which the base policy already
+        // allows. Use a path under the crate so session-only jail is real.
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("seatbelt-skill-{}", uuid::Uuid::new_v4()));
+        let session = root.join("sessions").join("s1");
+        let skills = root.join("skills").join("report");
+        std::fs::create_dir_all(&session).unwrap();
+        std::fs::create_dir_all(&skills).unwrap();
+        let script = skills.join("gen.py");
+        std::fs::write(&script, "print('ok')\n").unwrap();
+        let script = script.canonicalize().unwrap();
+        struct Cleanup(PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _cleanup = Cleanup(root);
+
+        let blocked = SeatbeltSandbox::with_workspace(Some(&session)).unwrap();
+        let mut denied = Command::new("/bin/cat");
+        denied.arg(&script);
+        denied.current_dir(&session);
+        blocked.wrap_command(&mut denied).unwrap();
+        let denied_out = denied.output().unwrap();
+        assert!(
+            !denied_out.status.success(),
+            "session-only seatbelt must not read the skill script"
+        );
+
+        let allowed =
+            SeatbeltSandbox::with_roots(Some(&session), &[], &[skills.clone()], &[]).unwrap();
+        let mut ok = Command::new("/bin/cat");
+        ok.arg(&script);
+        ok.current_dir(&session);
+        allowed.wrap_command(&mut ok).unwrap();
+        let ok_out = ok.output().unwrap();
+        assert!(
+            ok_out.status.success(),
+            "skill-dir extra root must allow reading the script: {}",
+            String::from_utf8_lossy(&ok_out.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&ok_out.stdout), "print('ok')\n");
     }
 }

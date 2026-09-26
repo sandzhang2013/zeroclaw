@@ -18,6 +18,7 @@ pub mod api_personality;
 pub mod api_plugins;
 pub mod api_quickstart;
 pub mod api_sections;
+pub mod api_skill_center;
 pub mod api_skills;
 pub mod api_sop;
 pub mod api_sop_author;
@@ -1820,8 +1821,50 @@ pub async fn run_gateway(
                 .delete(api_skills::handle_delete_skill),
         )
         .route(
-            "/api/user/skills",
-            get(api_skills::handle_list_personal_skills).post(api_skills::handle_save_personal_skill),
+            "/api/skill-ids",
+            post(api_skill_center::handle_allocate_skill_id),
+        )
+        .route(
+            "/api/skill-center",
+            get(api_skill_center::handle_list_skill_center)
+                .post(api_skill_center::handle_create_skill_center),
+        )
+        .route(
+            "/api/skill-center/{name}/files",
+            get(api_skill_center::handle_skill_center_files),
+        )
+        .route(
+            "/api/skill-center/{name}/review",
+            post(api_skill_center::handle_review_skill_center),
+        )
+        .route(
+            "/api/skill-center/{name}/submit",
+            post(api_skill_center::handle_submit_skill_center),
+        )
+        .route(
+            "/api/skill-center/{name}/publish",
+            post(api_skill_center::handle_publish_skill_center),
+        )
+        .route(
+            "/api/skill-center/{name}/unpublish",
+            post(api_skill_center::handle_unpublish_skill_center),
+        )
+        .route(
+            "/api/skill-center/{name}",
+            get(api_skill_center::handle_read_skill_center)
+                .put(api_skill_center::handle_update_skill_center),
+        )
+        .route(
+            "/api/skill-plaza",
+            get(api_skills::handle_list_skill_plaza),
+        )
+        .route(
+            "/api/skill-plaza/{name}/files",
+            get(api_skills::handle_read_plaza_skill_file),
+        )
+        .route(
+            "/api/user/skills/from-plaza",
+            post(api_skills::handle_install_plaza_skill),
         )
         .route(
             "/api/user/skills/{name}",
@@ -1830,8 +1873,20 @@ pub async fn run_gateway(
                 .delete(api_skills::handle_delete_personal_skill),
         )
         .route(
+            "/api/user/skills/{name}/files",
+            get(api_skills::handle_read_personal_skill_file),
+        )
+        .route(
             "/api/user/skills/{name}/enabled",
             patch(api_skills::handle_set_personal_skill_enabled),
+        )
+        .route(
+            "/api/user/skills/{name}/submit",
+            post(api_skill_center::handle_submit_personal_skill),
+        )
+        .route(
+            "/api/user/skills/{name}/fork",
+            post(api_skill_center::handle_fork_personal_skill),
         )
         .route("/api/config/init", post(api_config::handle_init))
         .route("/api/config/migrate", post(api_config::handle_migrate))
@@ -1989,6 +2044,23 @@ pub async fn run_gateway(
     // route's own ceiling runs. The route keeps the extractor-level
     // DefaultBodyLimit at the same ceiling; the per-request size check against
     // live `multimodal.max_image_size_mb` happens inside the handler.
+    // Skill import posts the whole package (SKILL.md plus scripts and
+    // references) as base64 JSON. That exceeds the 64 KB control-plane cap
+    // and axum's 2 MB extractor default, so this route keeps its own ceiling.
+    let skill_package_router: Router = Router::new()
+        .route(
+            "/api/user/skills",
+            get(api_skills::handle_list_personal_skills)
+                .post(api_skills::handle_save_personal_skill)
+                .layer(axum::extract::DefaultBodyLimit::max(12 * 1024 * 1024)),
+        )
+        .with_state(state.clone())
+        .layer(RequestBodyLimitLayer::new(12 * 1024 * 1024))
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            Duration::from_secs(gateway_request_timeout_secs(&config.gateway)),
+        ));
+
     let upload_router: Router = Router::new()
         .route(
             "/api/upload",
@@ -2021,7 +2093,10 @@ pub async fn run_gateway(
             Duration::from_secs(gateway_long_running_request_timeout_secs(&config.gateway)),
         ));
 
-    let inner = inner.merge(upload_router).merge(long_running_router);
+    let inner = inner
+        .merge(skill_package_router)
+        .merge(upload_router)
+        .merge(long_running_router);
 
     // Nest under path prefix when configured (axum strips prefix before routing).
     // nest() at "/prefix" handles both "/prefix" and "/prefix/*" but not "/prefix/"

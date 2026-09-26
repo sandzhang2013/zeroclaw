@@ -1636,6 +1636,9 @@ impl Agent {
         {
             ::zeroclaw_log::record!(WARN, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_outcome(::zeroclaw_log::EventOutcome::Unknown).with_attrs(::serde_json::json!({"agent": agent_alias, "workspace": agent_workspace.display().to_string(), "e": e.to_string()})), "Failed to ensure per-agent bootstrap files (continuing with whatever exists): ");
         }
+        // Load skills before the shell sandbox is built so their original
+        // directories can be granted read-only. Scripts stay in place.
+        let skills = crate::skills::load_skills_for_agent_from_config(config, agent_alias);
         let security = Arc::new({
             // Use for_agent so the runtime profile (max_actions_per_hour,
             // shell_timeout_secs, etc.) is applied — from_risk_profile passes
@@ -1647,7 +1650,9 @@ impl Agent {
             if let Some(cwd) = session_cwd {
                 policy.workspace_dir = cwd.to_path_buf();
                 policy.allowed_roots.push(agent_workspace.clone());
+                crate::skills::grant_session_sibling_skills_read_only(&mut policy, cwd);
             }
+            crate::skills::grant_skill_homes_read_only(&mut policy, &skills);
             policy.attach_live_autonomy();
             policy
         });
@@ -1743,10 +1748,8 @@ impl Agent {
             // documented snapshot fallback.
             live_config.clone(),
         );
-        // Skills are loaded here and handed to `assemble`, which owns skill
-        // registration and resolves builtin/MCP elevation against the pre-filter
-        // arcs internally. Bundle-aware via `[agents.<alias>].skill_bundles`.
-        let skills = crate::skills::load_skills_for_agent_from_config(config, agent_alias);
+        // Skills were loaded before the sandbox so their homes are already
+        // on the policy. `assemble` still owns skill-tool registration.
         // Captured before `assemble` consumes the result: the concrete delegate
         // instance this registry built, so live-config regressions can drive its
         // nested-registry construction instead of re-deriving the wiring.

@@ -27,18 +27,36 @@ function idOf(item: unknown): string | null {
   return typeof id === 'string' && id ? id : null;
 }
 
+function titleOf(item: unknown): string {
+  if (!item || typeof item !== 'object') return '';
+  const title = (item as { title?: unknown }).title;
+  return typeof title === 'string' ? title.trim() : '';
+}
+
+/** Same id: keep the first record's fields, but take a missing title from the other. */
+function mergeSessionRecords(current: unknown, incoming: unknown): unknown {
+  if (!current || typeof current !== 'object') return incoming;
+  if (!incoming || typeof incoming !== 'object') return current;
+  if (titleOf(current) || !titleOf(incoming)) return current;
+  return { ...(incoming as object), ...(current as object), title: (incoming as { title?: unknown }).title };
+}
+
 function unionById(primary: unknown, secondary: unknown): unknown[] {
   const a = Array.isArray(primary) ? primary : [];
   const b = Array.isArray(secondary) ? secondary : [];
-  const seen = new Set<string>();
-  const out: unknown[] = [];
+  const byId = new Map<string, unknown>();
+  const order: string[] = [];
   for (const item of [...a, ...b]) {
     const id = idOf(item);
-    if (!id || seen.has(id)) continue;
-    seen.add(id);
-    out.push(item);
+    if (!id) continue;
+    if (!byId.has(id)) {
+      byId.set(id, item);
+      order.push(id);
+      continue;
+    }
+    byId.set(id, mergeSessionRecords(byId.get(id), item));
   }
-  return out;
+  return order.map((id) => byId.get(id));
 }
 
 /** Merge leftover pre-identity snapshot into the first user's scoped copy. */
@@ -156,6 +174,26 @@ export function sessionDisplayTitle(
   const skill = session.homeSkill?.label?.trim();
   if (skill) return skill;
   return untitledFallback;
+}
+
+export function sessionNeedsTitle(session: { title?: string }): boolean {
+  return sanitizeSessionTitle(session.title) == null;
+}
+
+/** Fill blank / timestamp-only sidebar labels without clobbering a real name. */
+export function applyKnownTitles<T extends { id: string; title?: string }>(
+  sessions: T[],
+  titlesById: ReadonlyMap<string, string>,
+): T[] {
+  let changed = false;
+  const next = sessions.map((session) => {
+    if (!sessionNeedsTitle(session)) return session;
+    const title = sanitizeSessionTitle(titlesById.get(session.id));
+    if (!title) return session;
+    changed = true;
+    return { ...session, title };
+  });
+  return changed ? next : sessions;
 }
 
 /** Drop a sidebar row and pick the next active id (empty string → home). */

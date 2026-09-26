@@ -47,8 +47,10 @@ For Python skills, put code in an auditable script file and run that file:
 #### sh
 
 ```sh
-python3 skills/portfolio/run.py
+python3 /absolute/path/to/skills/portfolio/run.py
 ```
+
+The skill's `<directory>` in the system prompt is that original folder. Run bundled scripts by absolute path from there. Do not copy them into the session working directory; relative paths in the skill resolve against `<directory>`, not the session cwd.
 
 </div>
 
@@ -102,7 +104,7 @@ If a skill needs outbound HTTP, change `runtime.docker.network` deliberately. If
 
 ## Workspace Mounts
 
-When `runtime.docker.mount_workspace = true`, ZeroClaw mounts the configured workspace at `/workspace` in the container and sets the container workdir there. Skill scripts should use workspace-relative paths whenever possible.
+When `runtime.docker.mount_workspace = true`, ZeroClaw mounts the configured workspace at `/workspace` in the container and sets the container workdir there. Write outputs into that workspace. Read bundled skill scripts from the skill `<directory>` by absolute path — the sandbox grants that folder read-only instead of copying it in.
 
 If your workspace path must be constrained further, configure the workspace allowlist. ZeroClaw validates the host workspace path against that allowlist before adding the Docker volume mount.
 
