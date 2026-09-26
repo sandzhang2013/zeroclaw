@@ -47,15 +47,20 @@ hbcdcagent_ensure_config() {
 
 # Copy shipped plaza skills into <config>/shared/skill-plaza.
 # Missing files are filled in. Files already on disk stay, including local edits.
+# A skill that has entered the catalog is left alone, so unpublishing it stays unpublished.
 hbcdcagent_seed_skill_plaza() {
   local src="$ROOT/skill-plaza"
   local dest="$ZEROCLAW_CONFIG_DIR/shared/skill-plaza"
+  local catalog="$ZEROCLAW_CONFIG_DIR/shared/skill-catalog"
   local dir name file rel
   [[ -d "$src" ]] || return 0
   mkdir -p "$dest"
   for dir in "$src"/*/; do
     [[ -f "${dir}SKILL.md" ]] || continue
     name="$(basename "$dir")"
+    if [[ -d "$catalog/$name" || -f "$catalog/$name.review.json" ]]; then
+      continue
+    fi
     mkdir -p "$dest/$name"
     while IFS= read -r -d '' file; do
       rel="${file#"$dir"}"

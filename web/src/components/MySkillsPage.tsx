@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { BookOpen, ChevronDown, ChevronRight, File, FileArchive, Folder, FolderInput, Plus, Search, Store, Trash2, Wrench } from 'lucide-react';
 import { ConfirmDialog } from '@/components/ui';
+import { skillCreatorLabel, skillVersionLine, WorkbenchSkillCard } from '@/components/WorkbenchSkillCard';
 import {
   allocateSkillId,
   ApiError,
@@ -26,10 +27,14 @@ import { filterPersonalSkills, isIssuedSkillId, isPersonalSkillEnabled, skillIdT
 import { skillDirPaths, skillFileTree, type SkillDirNode } from '@/lib/skillFileTree';
 import { bytesToBase64, readSkillFromFiles, readSkillFromZip, skillImportErrorKey, type PackageFile } from '@/lib/skillPackage';
 import {
+  canRollBack,
   filterPlazaSkills,
   installedSkillNames,
+  installedSkillStamp,
   isPlazaInstalled,
+  mineSkillUpdateAvailable,
   plazaCardAction,
+  releaseNoteText,
   type PlazaSkillView,
 } from '@/lib/skillPlaza';
 
@@ -66,6 +71,28 @@ function reviewStatusLabel(status: string): string {
     default:
       return '';
   }
+}
+
+function SkillSourceBadge({ fromPlaza }: { fromPlaza: boolean }) {
+  const badge = fromPlaza
+    ? {
+        label: t('workbench.skill_source_plaza'),
+        className: 'border-status-warning/40 bg-status-warning/20 text-status-warning',
+      }
+    : {
+        label: t('workbench.skill_source_own'),
+        className: 'border-status-success/40 bg-status-success/20 text-status-success',
+      };
+  return (
+    <span
+      className={[
+        'inline-flex h-5 items-center rounded-full border px-1.5 text-[11px] font-semibold leading-none',
+        badge.className,
+      ].join(' ')}
+    >
+      {badge.label}
+    </span>
+  );
 }
 
 export function MySkillsPage({
@@ -109,6 +136,8 @@ export function MySkillsPage({
               body: skill.body,
               version: skill.version,
               publishedAt: skill.published_at,
+              changeNote: skill.change_note,
+              previousVersion: skill.previous_version ?? undefined,
               creatorId: skill.creator_id,
               creatorName: skill.creator_name,
             })),
@@ -141,14 +170,52 @@ export function MySkillsPage({
   const mine = useMemo(() => filterPersonalSkills(skills, query), [skills, query]);
   const plaza = useMemo(() => filterPlazaSkills(plazaSkills, query), [plazaSkills, query]);
 
-  function plazaAction(skill: PlazaSkillView): 'add' | 'update' | 'added' {
-    const personal = skills.find((row) => row.name === skill.id);
-    return plazaCardAction({
-      installed: isPlazaInstalled(skill.id, installed),
-      ownCopy: personal?.from_plaza === false,
-      plazaVersion: skill.version,
-      installedVersion: personal?.version,
+  function plazaAction(skill: PlazaSkillView): 'add' | 'added' {
+    return plazaCardAction(isPlazaInstalled(skill.id, installed));
+  }
+
+  function skillStampText(name: string, installedVersion?: string): string {
+    const shared = plazaSkills.find((row) => row.id === name);
+    const stamp = installedSkillStamp({
+      installedVersion,
+      plazaVersion: shared?.version,
+      publishedAt: shared?.publishedAt,
     });
+    return [
+      stamp.version ? `${t('workbench.skill_center_version')} ${stamp.version}` : '',
+      stamp.publishedAt,
+    ].filter(Boolean).join(' · ');
+  }
+
+  function plazaCopyUpdate(name: string, fromPlaza: boolean, installedVersion?: string): PlazaSkillView | null {
+    if (!fromPlaza) return null;
+    const shared = plazaSkills.find((row) => row.id === name);
+    if (!shared || !mineSkillUpdateAvailable({
+      fromPlaza: true,
+      plazaVersion: shared.version,
+      installedVersion,
+    })) {
+      return null;
+    }
+    return shared;
+  }
+
+  function plazaNote(skill: PlazaSkillView | null): string {
+    if (!skill) return '';
+    return releaseNoteText(skill.changeNote);
+  }
+
+  function plazaPrevious(name: string, fromPlaza: boolean, installedVersion?: string): { skill: PlazaSkillView; version: number } | null {
+    const shared = plazaSkills.find((row) => row.id === name);
+    if (!shared || !canRollBack({
+      fromPlaza,
+      installedVersion,
+      plazaVersion: shared.version,
+      previousVersion: shared.previousVersion,
+    }) || shared.previousVersion == null) {
+      return null;
+    }
+    return { skill: shared, version: shared.previousVersion };
   }
 
   function showPane(next: Pane) {
@@ -167,22 +234,29 @@ export function MySkillsPage({
     }
   }
 
-  async function installPlaza(skill: PlazaSkillView, update = false) {
+  async function installPlaza(skill: PlazaSkillView, update = false, version?: number) {
     const already = isPlazaInstalled(skill.id, installed);
     if ((already && !update) || installingId) return;
     setInstallingId(skill.id);
     setError(null);
     try {
-      const saved = await installPlazaSkill({ agent, name: skill.id, update });
+      const saved = await installPlazaSkill({ agent, name: skill.id, update, version });
+      const viewing = view.kind === 'edit' && view.draft.name === skill.id;
+      const fresh = update ? await readPersonalSkill(agent, skill.id) : null;
+      if (viewing && fresh) {
+        setView({ kind: 'edit', draft: fresh });
+      }
       setSkills((prev) => {
         const kept = prev.find((row) => row.name === skill.id);
         const row: PersonalSkillSummary = {
           name: skill.id,
-          title: skill.title,
-          description: skill.description,
+          title: fresh?.title || skill.title,
+          description: fresh?.description || skill.description,
           enabled: kept?.enabled ?? true,
-          version: saved.version ?? skill.version,
+          version: fresh?.version ?? saved.version ?? skill.version,
           blocked_reason: kept?.blocked_reason,
+          from_plaza: true,
+          review_status: kept?.review_status,
         };
         return [...prev.filter((item) => item.name !== skill.id), row].sort((a, b) =>
           a.name.localeCompare(b.name),
@@ -193,7 +267,7 @@ export function MySkillsPage({
         setSkills((prev) =>
           prev.some((row) => row.name === skill.id)
             ? prev
-            : [...prev, { name: skill.id, title: skill.title, description: skill.description, enabled: true }].sort(
+            : [...prev, { name: skill.id, title: skill.title, description: skill.description, enabled: true, from_plaza: true }].sort(
                 (a, b) => a.name.localeCompare(b.name),
               ),
         );
@@ -563,11 +637,19 @@ export function MySkillsPage({
                 </label>
               </>
             ) : (
-              <div>
-                <h2 className="text-sm font-semibold text-pc-text">{draft.title || draft.name}</h2>
-                <p className="mt-1 font-mono text-xs text-pc-text-muted">
-                  {t('workbench.home_edit_skill_id')} {draft.name}
-                </p>
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <h2 className="truncate text-sm font-semibold text-pc-text">{draft.title || draft.name}</h2>
+                  <p className="mt-1 truncate font-mono text-xs text-pc-text-muted">
+                    {t('workbench.home_edit_skill_id')} {draft.name}
+                  </p>
+                  {skillStampText(draft.name, skills.find((row) => row.name === draft.name)?.version) ? (
+                    <p className="mt-1 text-xs text-pc-text-muted">
+                      {skillStampText(draft.name, skills.find((row) => row.name === draft.name)?.version)}
+                    </p>
+                  ) : null}
+                </div>
+                <SkillSourceBadge fromPlaza={fromPlaza} />
               </div>
             )}
             {fromPlaza ? (
@@ -601,6 +683,12 @@ export function MySkillsPage({
             {fromPlaza ? (
               <p className="text-xs leading-relaxed text-pc-text-muted">{t('workbench.skill_fork_id')}</p>
             ) : null}
+            {view.kind === 'edit' && plazaCopyUpdate(draft.name, fromPlaza, skills.find((row) => row.name === draft.name)?.version) ? (
+              <p className="text-xs leading-relaxed text-status-warning">
+                {t('workbench.skill_update_hint')}
+                {plazaNote(plazaSkills.find((row) => row.id === draft.name) ?? null) ? ` ${plazaNote(plazaSkills.find((row) => row.id === draft.name) ?? null)}` : ''}
+              </p>
+            ) : null}
             <div className="flex items-center gap-2">
               {view.kind === 'edit' && !fromPlaza && (!draft.review_status || draft.review_status === 'rejected') ? (
                 <button
@@ -623,6 +711,32 @@ export function MySkillsPage({
                 >
                   {t('workbench.my_skills_back')}
                 </button>
+                {view.kind === 'edit' && plazaCopyUpdate(draft.name, fromPlaza, skills.find((row) => row.name === draft.name)?.version) ? (
+                  <button
+                    type="button"
+                    disabled={saving || installingId === draft.name}
+                    onClick={() => {
+                      const shared = plazaCopyUpdate(draft.name, true, skills.find((row) => row.name === draft.name)?.version);
+                      if (shared) void installPlaza(shared, true);
+                    }}
+                    className="h-9 rounded-[8px] border border-status-warning/40 px-3 text-sm text-status-warning disabled:opacity-40"
+                  >
+                    {installingId === draft.name ? t('workbench.skill_plaza_adding') : t('workbench.skill_plaza_update')}
+                  </button>
+                ) : null}
+                {view.kind === 'edit' && plazaPrevious(draft.name, fromPlaza, skills.find((row) => row.name === draft.name)?.version) ? (
+                  <button
+                    type="button"
+                    disabled={saving || installingId === draft.name}
+                    onClick={() => {
+                      const previous = plazaPrevious(draft.name, true, skills.find((row) => row.name === draft.name)?.version);
+                      if (previous) void installPlaza(previous.skill, true, previous.version);
+                    }}
+                    className="h-9 rounded-[8px] border border-pc-border px-3 text-sm text-pc-text disabled:opacity-40"
+                  >
+                    {t('workbench.skill_rollback')}
+                  </button>
+                ) : null}
                 {fromPlaza ? (
                   <button
                     type="button"
@@ -686,14 +800,12 @@ export function MySkillsPage({
                 type="button"
                 disabled={plazaAction(plazaDetail) === 'added' || installingId === plazaDetail.id}
                 onClick={() => {
-                  void installPlaza(plazaDetail, plazaAction(plazaDetail) === 'update');
+                  void installPlaza(plazaDetail);
                 }}
                 className="inline-flex h-9 items-center gap-1.5 rounded-[8px] bg-pc-text px-3 text-sm font-medium text-pc-base disabled:cursor-default disabled:opacity-40"
               >
                 {installingId === plazaDetail.id ? (
                   t('workbench.skill_plaza_adding')
-                ) : plazaAction(plazaDetail) === 'update' ? (
-                  t('workbench.skill_plaza_update')
                 ) : plazaAction(plazaDetail) === 'added' ? (
                   t('workbench.skill_plaza_added')
                 ) : (
@@ -719,56 +831,42 @@ export function MySkillsPage({
               {query.trim() ? t('workbench.my_skills_search_empty') : t('workbench.skill_plaza_empty')}
             </p>
           ) : (
-            <ul className="grid grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] gap-3">
+            <ul className="grid grid-cols-[repeat(auto-fill,minmax(16rem,1fr))] gap-2">
               {plaza.map((skill) => {
                 const action = plazaAction(skill);
                 const busy = installingId === skill.id;
                 return (
                   <li key={skill.id}>
-                    <article className="flex h-full flex-col rounded-[12px] border border-pc-border bg-pc-elevated p-4">
-                      <button
-                        type="button"
-                        onClick={() => setView({ kind: 'plaza-detail', skill })}
-                        className="min-w-0 flex-1 text-left"
-                      >
-                        <h3 className="truncate text-sm font-semibold text-pc-text">{skill.title}</h3>
-                        <p className="mt-1 truncate font-mono text-xs text-pc-text-muted">{skill.id}</p>
-                        <p className="mt-2 line-clamp-3 text-xs leading-relaxed text-pc-text-muted">
-                          {skill.description}
-                        </p>
-                        {skill.version || skill.publishedAt ? (
-                          <p className="mt-2 text-xs text-pc-text-muted">
-                            {skill.version ? `${t('workbench.skill_center_version')} ${skill.version}` : ''}
-                            {skill.version && skill.publishedAt ? ' · ' : ''}
-                            {skill.publishedAt ?? ''}
-                          </p>
-                        ) : null}
-                      </button>
-                      <div className="mt-3 flex justify-end">
+                    <WorkbenchSkillCard
+                      title={skill.title}
+                      id={skill.id}
+                      description={skill.description}
+                      versionLine={skillVersionLine(skill.version, skill.publishedAt)}
+                      creator={skillCreatorLabel({ creator_id: skill.creatorId, creator_name: skill.creatorName })}
+                      onOpen={() => setView({ kind: 'plaza-detail', skill })}
+                      badge={(
                         <button
                           type="button"
                           disabled={action === 'added' || busy}
                           onClick={(event) => {
                             event.stopPropagation();
-                            void installPlaza(skill, action === 'update');
+                            void installPlaza(skill);
                           }}
-                          className="inline-flex h-8 items-center gap-1 rounded-full border border-pc-border px-3 text-xs text-pc-text hover:bg-[var(--pc-hover)] disabled:cursor-default disabled:opacity-50"
+                          className="inline-flex h-5 items-center gap-0.5 rounded-full border border-pc-border px-1.5 text-[11px] leading-none text-pc-text hover:bg-[var(--pc-hover)] disabled:cursor-default disabled:opacity-50"
                         >
                           {busy ? (
                             t('workbench.skill_plaza_adding')
-                          ) : action === 'update' ? (
-                            t('workbench.skill_plaza_update')
                           ) : action === 'added' ? (
                             t('workbench.skill_plaza_added')
                           ) : (
                             <>
-                              <Plus className="size-3.5" />
+                              <Plus className="size-3" />
                               {t('workbench.skill_plaza_add')}
                             </>
                           )}
                         </button>
-                      </div>
-                    </article>
+                      )}
+                    />
                   </li>
                 );
               })}
@@ -810,39 +908,47 @@ export function MySkillsPage({
             ) : null}
           </div>
         ) : (
-          <ul className="grid grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] gap-3">
+          <ul className="grid grid-cols-[repeat(auto-fill,minmax(16rem,1fr))] gap-2">
             {mine.map((skill) => {
               const on = isPersonalSkillEnabled(skill);
+              const updateTarget = plazaCopyUpdate(skill.name, skill.from_plaza === true, skill.version);
+              const previous = plazaPrevious(skill.name, skill.from_plaza === true, skill.version);
+              const stampText = skillStampText(skill.name, skill.version);
+              const shared = plazaSkills.find((row) => row.id === skill.name);
               return (
               <li key={skill.name}>
-                <article
-                  className={[
-                    'flex h-full flex-col rounded-[12px] border border-pc-border bg-pc-elevated p-4',
-                    on ? '' : 'opacity-60',
-                  ].join(' ')}
-                >
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void openSkill(skill.name);
-                    }}
-                    className="min-w-0 flex-1 text-left"
-                  >
-                    <h3 className="truncate text-sm font-semibold text-pc-text">{skill.title || skill.name}</h3>
-                    <p className="mt-1 truncate font-mono text-xs text-pc-text-muted">{skill.name}</p>
-                    {skill.review_status ? (
-                      <p className="mt-1 text-xs text-pc-text-secondary">{reviewStatusLabel(skill.review_status)}</p>
-                    ) : null}
-                    <p className="mt-2 line-clamp-3 text-xs leading-relaxed text-pc-text-muted">
-                      {skill.description || t('workbench.my_skills_no_description')}
-                    </p>
-                    {skill.blocked_reason ? (
-                      <p className="mt-2 line-clamp-3 text-xs leading-relaxed text-status-error">
-                        {t('workbench.skill_blocked')} {skill.blocked_reason}
-                      </p>
-                    ) : null}
-                  </button>
-                  <div className="mt-3 flex items-center justify-between gap-2">
+                <WorkbenchSkillCard
+                  title={skill.title}
+                  id={skill.name}
+                  description={skill.description}
+                  versionLine={stampText}
+                  creator={skill.from_plaza && shared ? skillCreatorLabel({
+                    creator_id: shared.creatorId,
+                    creator_name: shared.creatorName,
+                  }) : ''}
+                  statusText={skill.review_status ? reviewStatusLabel(skill.review_status) : ''}
+                  dimmed={!on}
+                  badge={<SkillSourceBadge fromPlaza={skill.from_plaza === true} />}
+                  onOpen={() => {
+                    void openSkill(skill.name);
+                  }}
+                  notes={updateTarget || skill.blocked_reason ? (
+                    <>
+                      {updateTarget ? (
+                        <p className="mt-1 truncate text-[11px] font-medium leading-4 text-status-warning">
+                          {t('workbench.skill_update_available')}
+                          {plazaNote(updateTarget) ? ` · ${plazaNote(updateTarget)}` : ''}
+                        </p>
+                      ) : null}
+                      {skill.blocked_reason ? (
+                        <p className="mt-1 line-clamp-2 text-[11px] leading-4 text-status-error">
+                          {t('workbench.skill_blocked')} {skill.blocked_reason}
+                        </p>
+                      ) : null}
+                    </>
+                  ) : null}
+                  footer={(
+                  <div className="flex items-center justify-between gap-2">
                     <SkillEnableSwitch
                       enabled={on}
                       busy={toggling === skill.name}
@@ -850,17 +956,44 @@ export function MySkillsPage({
                         void toggleEnabled(skill.name, !on);
                       }}
                     />
-                    <button
-                      type="button"
-                      onClick={() => setPendingDelete(skill.name)}
-                      className="inline-flex size-8 items-center justify-center rounded-[8px] text-pc-text-muted hover:bg-[var(--pc-hover)] hover:text-status-error"
-                      aria-label={t('workbench.my_skills_delete')}
-                      title={t('workbench.my_skills_delete')}
-                    >
-                      <Trash2 className="size-3.5" />
-                    </button>
+                    <div className="flex items-center gap-2">
+                      {updateTarget ? (
+                        <button
+                          type="button"
+                          disabled={installingId === skill.name}
+                          onClick={() => {
+                            void installPlaza(updateTarget, true);
+                          }}
+                          className="h-6 rounded-full border border-status-warning/40 px-2 text-[11px] font-medium text-status-warning disabled:opacity-40"
+                        >
+                          {installingId === skill.name ? t('workbench.skill_plaza_adding') : t('workbench.skill_plaza_update')}
+                        </button>
+                      ) : null}
+                      {previous ? (
+                        <button
+                          type="button"
+                          disabled={installingId === skill.name}
+                          onClick={() => {
+                            void installPlaza(previous.skill, true, previous.version);
+                          }}
+                          className="h-6 rounded-full border border-pc-border px-2 text-[11px] font-medium text-pc-text disabled:opacity-40"
+                        >
+                          {t('workbench.skill_rollback')}
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() => setPendingDelete(skill.name)}
+                        className="inline-flex size-6 items-center justify-center rounded-[6px] text-pc-text-muted hover:bg-[var(--pc-hover)] hover:text-status-error"
+                        aria-label={t('workbench.my_skills_delete')}
+                        title={t('workbench.my_skills_delete')}
+                      >
+                        <Trash2 className="size-3.5" />
+                      </button>
+                    </div>
                   </div>
-                </article>
+                  )}
+                />
               </li>
               );
             })}

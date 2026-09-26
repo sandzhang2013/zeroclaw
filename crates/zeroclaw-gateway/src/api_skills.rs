@@ -1179,12 +1179,17 @@ fn read_plaza_skill(
         doc.frontmatter.name
     };
     let (creator_id, creator_name) = crate::api_skill_center::plaza_creator(config, name);
+    let (change_kind, change_note, previous_version) =
+        crate::api_skill_center::plaza_release_notice(config, name);
     Some(serde_json::json!({
         "name": name,
         "title": title,
         "description": doc.frontmatter.description,
         "version": doc.frontmatter.version.unwrap_or_default(),
         "published_at": crate::api_skill_center::plaza_published_at(config, name),
+        "change_kind": change_kind,
+        "change_note": change_note,
+        "previous_version": previous_version,
         "body": doc.body,
         "creator_id": creator_id,
         "creator_name": creator_name,
@@ -1197,6 +1202,9 @@ pub struct InstallPlazaSkillBody {
     pub name: String,
     #[serde(default)]
     pub update: bool,
+    /// `0` installs the current plaza copy. A positive number installs that kept release.
+    #[serde(default)]
+    pub version: u32,
 }
 
 fn personal_skill_block_reason(dir: &std::path::Path, allow_scripts: bool) -> String {
@@ -1364,11 +1372,20 @@ pub async fn handle_install_plaza_skill(
         Err(resp) => return resp,
     };
     let config = state.config.read().clone();
-    let src = skill_plaza_dir(&config).join(&name);
+    let src = if body.version > 0 {
+        crate::api_skill_center::skill_release_dir(&config, &name, body.version)
+    } else {
+        skill_plaza_dir(&config).join(&name)
+    };
     if !src.join("SKILL.md").is_file() {
+        let error = if body.version > 0 {
+            "that skill release is not kept"
+        } else {
+            "skill not found"
+        };
         return (
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "skill not found"})),
+            Json(serde_json::json!({ "error": error })),
         )
             .into_response();
     }
@@ -1914,6 +1931,7 @@ mod tests {
             agent: "deepseek".into(),
             name: "flu-trend".into(),
             update: false,
+            version: 0,
         };
         let installed =
             handle_install_plaza_skill(State(state.clone()), headers.clone(), Json(body)).await;
@@ -1937,6 +1955,7 @@ mod tests {
                 agent: "deepseek".into(),
                 name: "flu-trend".into(),
                 update: false,
+                version: 0,
             }),
         )
         .await;
@@ -1959,6 +1978,7 @@ mod tests {
                 agent: "deepseek".into(),
                 name: "flu-trend".into(),
                 update: true,
+                version: 0,
             }),
         )
         .await;

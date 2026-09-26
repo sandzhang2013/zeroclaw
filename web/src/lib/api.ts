@@ -1039,6 +1039,9 @@ export function listSkillPlaza(): Promise<{
     body: string;
     version?: string;
     published_at?: string;
+    change_kind?: string;
+    change_note?: string;
+    previous_version?: number | null;
     creator_id?: string;
     creator_name?: string;
   }>;
@@ -1051,6 +1054,7 @@ export function installPlazaSkill(body: {
   agent: string;
   name: string;
   update?: boolean;
+  version?: number;
 }): Promise<{ name: string; version?: string }> {
   return apiFetch('/api/user/skills/from-plaza', {
     method: 'POST',
@@ -1058,6 +1062,7 @@ export function installPlazaSkill(body: {
       agent: body.agent,
       name: body.name,
       update: body.update === true,
+      version: body.version ?? 0,
     }),
   });
 }
@@ -1222,7 +1227,7 @@ export interface SkillCenterSkill {
   version?: number;
   published_at?: string;
   on_plaza?: boolean;
-  releases?: Array<{ version: number; published_at: string }>;
+  releases?: Array<{ version: number; published_at: string; kind?: string; note?: string }>;
 }
 
 export function listSkillCenter(): Promise<{ skills: SkillCenterSkill[] }> {
@@ -1282,8 +1287,14 @@ export function reviewSkillCenter(id: string, decision: "approve" | "reject", no
   });
 }
 
-export function publishSkillCenter(id: string): Promise<{ id: string; status: string; version: number; published_at: string }> {
-  return apiFetch(`/api/skill-center/${encodeURIComponent(id)}/publish`, { method: "POST" });
+export function publishSkillCenter(
+  id: string,
+  note: string,
+): Promise<{ id: string; status: string; version: number; published_at: string }> {
+  return apiFetch(`/api/skill-center/${encodeURIComponent(id)}/publish`, {
+    method: "POST",
+    body: JSON.stringify({ note }),
+  });
 }
 
 export function unpublishSkillCenter(id: string): Promise<{ id: string; status: string }> {

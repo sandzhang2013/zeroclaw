@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 
-import { filterPlazaSkills, installedSkillNames, isPlazaInstalled, plazaCardAction, plazaUpdateAvailable, type PlazaSkillView } from './skillPlaza.ts';
+import { canRollBack, filterPlazaSkills, installedSkillNames, installedSkillStamp, isPlazaInstalled, mineSkillUpdateAvailable, plazaCardAction, plazaUpdateAvailable, publishFailureKey, releaseNoteText, type PlazaSkillView } from './skillPlaza.ts';
 
 const rows: PlazaSkillView[] = [
   {
@@ -33,10 +33,28 @@ test('isPlazaInstalled uses the catalog id as the personal skill name', () => {
   assert.equal(isPlazaInstalled('infectious-weekly', installed), false);
 });
 
-test('own working copy stays added even when the plaza version differs', () => {
-  assert.equal(plazaCardAction({ installed: true, ownCopy: true, plazaVersion: '2', installedVersion: '' }), 'added');
-  assert.equal(plazaCardAction({ installed: true, ownCopy: false, plazaVersion: '2', installedVersion: '1' }), 'update');
-  assert.equal(plazaCardAction({ installed: false, ownCopy: false, plazaVersion: '1' }), 'add');
+test('plaza cards only add or show added', () => {
+  assert.equal(plazaCardAction(true), 'added');
+  assert.equal(plazaCardAction(false), 'add');
+});
+
+test('installed stamp keeps the date only when the versions match', () => {
+  assert.deepEqual(installedSkillStamp({ installedVersion: '2', plazaVersion: '2', publishedAt: '2026-09-26 08:38' }), {
+    version: '2',
+    publishedAt: '2026-09-26 08:38',
+  });
+  assert.deepEqual(installedSkillStamp({ installedVersion: '1', plazaVersion: '2', publishedAt: '2026-09-26 08:38' }), {
+    version: '1',
+    publishedAt: '',
+  });
+  assert.deepEqual(installedSkillStamp({ installedVersion: '2' }), { version: '2', publishedAt: '' });
+});
+
+test('my skills offers an update only for a plaza copy on a different version', () => {
+  assert.equal(mineSkillUpdateAvailable({ fromPlaza: true, plazaVersion: '2', installedVersion: '1' }), true);
+  assert.equal(mineSkillUpdateAvailable({ fromPlaza: true, plazaVersion: '2', installedVersion: '2' }), false);
+  assert.equal(mineSkillUpdateAvailable({ fromPlaza: false, plazaVersion: '2', installedVersion: '1' }), false);
+  assert.equal(mineSkillUpdateAvailable({ fromPlaza: true, plazaVersion: '', installedVersion: '1' }), false);
 });
 
 test('plazaUpdateAvailable only when the installed version differs', () => {
@@ -44,6 +62,26 @@ test('plazaUpdateAvailable only when the installed version differs', () => {
   assert.equal(plazaUpdateAvailable('1', '1', true), false);
   assert.equal(plazaUpdateAvailable('', '1', true), false);
   assert.equal(plazaUpdateAvailable('2', '1', false), false);
+});
+
+test('a change note is the sentence on its own', () => {
+  assert.equal(releaseNoteText('加了一种口径'), '加了一种口径');
+  assert.equal(releaseNoteText('  '), '');
+});
+
+test('publish failures map onto the reason the admin can fix', () => {
+  assert.equal(publishFailureKey('API 400: {"error":"description must say when to use this skill"}'), 'workbench.skill_center_need_description');
+  assert.equal(publishFailureKey('a one-line change note is required'), 'workbench.skill_center_need_note');
+  assert.equal(publishFailureKey('skill package looks like it contains a secret: SKILL.md'), 'workbench.skill_center_secret');
+  assert.equal(publishFailureKey('scripts/run.sh: script-like files are blocked by skill security policy.'), 'workbench.skill_center_script');
+  assert.equal(publishFailureKey('something else'), null);
+});
+
+test('rollback is offered only on the latest plaza copy', () => {
+  assert.equal(canRollBack({ fromPlaza: true, installedVersion: '2', plazaVersion: '2', previousVersion: 1 }), true);
+  assert.equal(canRollBack({ fromPlaza: true, installedVersion: '1', plazaVersion: '2', previousVersion: 1 }), false);
+  assert.equal(canRollBack({ fromPlaza: false, installedVersion: '2', plazaVersion: '2', previousVersion: 1 }), false);
+  assert.equal(canRollBack({ fromPlaza: true, installedVersion: '2', plazaVersion: '2' }), false);
 });
 
 test('shipped plaza skills are SKILL.md directories', () => {

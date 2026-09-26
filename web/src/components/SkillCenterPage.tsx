@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Plus } from 'lucide-react';
 import { SkillFileBrowser } from '@/components/MySkillsPage';
+import { skillCreatorLabel, skillVersionLine, WorkbenchSkillCard } from '@/components/WorkbenchSkillCard';
 import {
   allocateSkillId,
   ApiError,
@@ -18,6 +19,7 @@ import {
 } from '@/lib/api';
 import { t } from '@/lib/i18n';
 import { isIssuedSkillId, skillIdTakenKey } from '@/lib/personalSkill';
+import { publishFailureKey, releaseNoteText } from '@/lib/skillPlaza';
 
 type View =
   | { kind: 'list' }
@@ -73,16 +75,11 @@ function editLockHint(status: string): string | null {
   return null;
 }
 
-function creatorLabel(skill: { creator_id?: string; creator_name?: string }): string {
-  const name = skill.creator_name?.trim() ?? '';
-  const id = skill.creator_id?.trim() ?? '';
-  if (name && id && name !== id) return `${name} (${id})`;
-  return name || id;
-}
-
 function skillWriteError(err: unknown, fallbackKey: string): string {
   const message = err instanceof Error ? err.message : '';
-  return t(skillIdTakenKey(message) ?? fallbackKey);
+  const key = skillIdTakenKey(message) ?? publishFailureKey(message);
+  if (key) return t(key);
+  return t(fallbackKey);
 }
 
 export function SkillCenterPage({
@@ -99,6 +96,7 @@ export function SkillCenterPage({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState('');
+  const [publishNote, setPublishNote] = useState('');
 
   async function reload() {
     const { skills: next } = await listSkillCenter();
@@ -131,6 +129,7 @@ export function SkillCenterPage({
   async function openSkill(id: string) {
     setError(null);
     setNote('');
+    setPublishNote('');
     try {
       setView({ kind: 'detail', skill: await readSkillCenter(id) });
     } catch (err) {
@@ -265,7 +264,8 @@ export function SkillCenterPage({
           </form>
         ) : detail ? (
           <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 md:grid-cols-2 md:[grid-template-rows:minmax(0,1fr)]">
-            <div className="flex min-h-0 flex-col gap-3 overflow-y-auto">
+            <div className="flex min-h-0 flex-col">
+              <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
               <div>
                 <h2 className="text-sm font-semibold text-pc-text">{detail.title || detail.id}</h2>
                 <p className="mt-1 font-mono text-xs text-pc-text-muted">
@@ -274,7 +274,7 @@ export function SkillCenterPage({
               </div>
               <dl className="grid grid-cols-[5rem_1fr] gap-y-1 text-xs">
                 <dt className="text-pc-text-muted">{t('workbench.skill_center_creator')}</dt>
-                <dd className="text-pc-text">{creatorLabel(detail)}</dd>
+                <dd className="text-pc-text">{skillCreatorLabel(detail)}</dd>
                 <dt className="text-pc-text-muted">{t('workbench.skill_center_status')}</dt>
                 <dd className="text-pc-text">{statusLabel(detail.status)}</dd>
                 <dt className="text-pc-text-muted">{t('workbench.skill_center_version')}</dt>
@@ -288,6 +288,21 @@ export function SkillCenterPage({
                 </p>
               ) : null}
               {lockHint ? <p className="text-xs text-pc-text-secondary">{lockHint}</p> : null}
+              {(detail.releases ?? []).length > 0 ? (
+                <div>
+                  <p className="text-xs font-medium text-pc-text-secondary">{t('workbench.skill_center_releases')}</p>
+                  <ul className="mt-1 space-y-1 text-xs text-pc-text-muted">
+                    {detail.releases?.map((release) => {
+                      const noteText = releaseNoteText(release.note);
+                      return (
+                        <li key={`${release.version}-${release.published_at}`}>
+                          {release.version} · {release.published_at}{noteText ? ` · ${noteText}` : ''}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              ) : null}
               <label className="block text-xs font-medium text-pc-text-secondary">
                 {t('workbench.save_skill_name')}
                 <input
@@ -316,17 +331,18 @@ export function SkillCenterPage({
                   spellCheck={false}
                 />
               </label>
-              {(detail.releases ?? []).length > 0 ? (
-                <div>
-                  <p className="text-xs font-medium text-pc-text-secondary">{t('workbench.skill_center_releases')}</p>
-                  <ul className="mt-1 space-y-1 text-xs text-pc-text-muted">
-                    {detail.releases?.map((release) => (
-                      <li key={`${release.version}-${release.published_at}`}>
-                        {release.version} · {release.published_at}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
+              </div>
+              <div className="mt-3 shrink-0 space-y-2 border-t border-pc-border pt-3">
+              {detail.status === 'approved' ? (
+                <label className="block text-xs font-medium text-pc-text-secondary">
+                  {t('workbench.skill_center_change_note')}
+                  <input
+                    value={publishNote}
+                    onChange={(event) => setPublishNote(event.target.value)}
+                    placeholder={t('workbench.skill_center_change_note_hint')}
+                    className="mt-1 h-9 w-full rounded-[10px] border border-pc-border bg-pc-input px-3 text-sm text-pc-text"
+                  />
+                </label>
               ) : null}
               {detail.status === 'pending' || detail.status === 'approved' ? (
                 <label className="block text-xs font-medium text-pc-text-secondary">
@@ -410,14 +426,14 @@ export function SkillCenterPage({
                 {detail.status === 'approved' ? (
                   <button
                     type="button"
-                    disabled={busy}
+                    disabled={busy || !publishNote.trim()}
                     onClick={() => {
                       void run(async () => {
-                        await publishSkillCenter(detail.id);
+                        await publishSkillCenter(detail.id, publishNote.trim());
                         await openSkill(detail.id);
                       });
                     }}
-                    className="h-9 rounded-[8px] bg-pc-text px-3 text-sm font-medium text-pc-base"
+                    className="h-9 rounded-[8px] bg-pc-text px-3 text-sm font-medium text-pc-base disabled:opacity-40"
                   >
                     {t('workbench.skill_center_publish')}
                   </button>
@@ -437,6 +453,7 @@ export function SkillCenterPage({
                     {t('workbench.skill_center_unpublish')}
                   </button>
                 ) : null}
+              </div>
               </div>
             </div>
             <SkillFileBrowser
@@ -468,40 +485,29 @@ export function SkillCenterPage({
             ) : visible.length === 0 ? (
               <p className="py-16 text-center text-sm text-pc-text-muted">{t('workbench.skill_center_empty')}</p>
             ) : (
-              <ul className="grid grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] gap-3">
+              <ul className="grid grid-cols-[repeat(auto-fill,minmax(16rem,1fr))] gap-2">
                 {visible.map((skill) => (
                   <li key={skill.id}>
-                    <button
-                      type="button"
-                      onClick={() => {
+                    <WorkbenchSkillCard
+                      title={skill.title}
+                      id={skill.id}
+                      description={skill.description}
+                      versionLine={skillVersionLine(skill.version, skill.published_at)}
+                      creator={skillCreatorLabel(skill)}
+                      badge={(
+                        <span
+                          className={[
+                            'inline-flex h-5 items-center rounded-full border px-1.5 text-[11px] font-semibold leading-none',
+                            statusBadgeClass(skill.status),
+                          ].join(' ')}
+                        >
+                          {statusLabel(skill.status)}
+                        </span>
+                      )}
+                      onOpen={() => {
                         void openSkill(skill.id);
                       }}
-                      className="relative flex h-full w-full flex-col rounded-[12px] border border-pc-border bg-pc-elevated p-4 text-left"
-                    >
-                      <span
-                        className={[
-                          'absolute right-3 top-3 rounded-full border px-2 py-0.5 text-[11px] font-semibold',
-                          statusBadgeClass(skill.status),
-                        ].join(' ')}
-                      >
-                        {statusLabel(skill.status)}
-                      </span>
-                      <span className="truncate pr-16 text-sm font-semibold text-pc-text">{skill.title || skill.id}</span>
-                      <span className="mt-1 truncate font-mono text-xs text-pc-text-muted">{skill.id}</span>
-                      <span className="mt-2 line-clamp-3 text-xs leading-relaxed text-pc-text-muted">
-                        {skill.description}
-                      </span>
-                      {creatorLabel(skill) ? (
-                        <span className="mt-2 truncate text-xs text-pc-text-muted">{creatorLabel(skill)}</span>
-                      ) : null}
-                      {skill.version || skill.published_at ? (
-                        <span className="mt-1 text-xs text-pc-text-muted">
-                          {skill.version ? `${t('workbench.skill_center_version')} ${skill.version}` : ''}
-                          {skill.version && skill.published_at ? ' · ' : ''}
-                          {skill.published_at ?? ''}
-                        </span>
-                      ) : null}
-                    </button>
+                    />
                   </li>
                 ))}
               </ul>

@@ -32,6 +32,11 @@ fn can_edit_content(status: &str) -> bool {
 struct SkillRelease {
     version: u32,
     published_at: String,
+    /// Left empty. Older files may still carry a value; the product no longer classifies a release.
+    #[serde(default)]
+    kind: String,
+    #[serde(default)]
+    note: String,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -72,6 +77,12 @@ pub struct SkillCenterWriteBody {
 #[derive(Deserialize)]
 pub struct SkillCenterReviewBody {
     pub decision: String,
+    #[serde(default)]
+    pub note: String,
+}
+
+#[derive(Deserialize)]
+pub struct SkillCenterPublishBody {
     #[serde(default)]
     pub note: String,
 }
@@ -463,6 +474,41 @@ pub(crate) fn plaza_published_at(config: &zeroclaw_config::schema::Config, name:
     load_review(config, name)
         .map(|review| review.published_at)
         .unwrap_or_default()
+}
+
+/// Immutable copy of one published plaza tree: `shared/skill-releases/<id>/<version>/`.
+#[must_use]
+pub(crate) fn skill_release_dir(
+    config: &zeroclaw_config::schema::Config,
+    id: &str,
+    version: u32,
+) -> PathBuf {
+    config
+        .install_root_dir()
+        .join("shared")
+        .join("skill-releases")
+        .join(id)
+        .join(version.to_string())
+}
+
+/// Latest change note, plus the previous version when that snapshot is still on disk.
+#[must_use]
+pub(crate) fn plaza_release_notice(
+    config: &zeroclaw_config::schema::Config,
+    name: &str,
+) -> (String, String, Option<u32>) {
+    let Some(review) = load_review(config, name) else {
+        return (String::new(), String::new(), None);
+    };
+    let Some(latest) = review.releases.last() else {
+        return (String::new(), String::new(), None);
+    };
+    let previous = latest.version.checked_sub(1).filter(|version| {
+        skill_release_dir(config, name, *version)
+            .join("SKILL.md")
+            .is_file()
+    });
+    (latest.kind.clone(), latest.note.clone(), previous)
 }
 
 /// Review status when this user created or most recently submitted the platform skill.
@@ -1019,11 +1065,121 @@ pub async fn handle_review_skill_center(
     Json(review_json(&review, on_plaza(&config, &id))).into_response()
 }
 
+fn require_release_note(body: &SkillCenterPublishBody) -> Result<String, Response> {
+    let note = body.note.trim();
+    if note.is_empty() || note.chars().count() > 200 {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "a one-line change note is required",
+        ));
+    }
+    Ok(note.to_string())
+}
+
+/// Blocks a publish that would ship an unclear description, a secret, or a package the loader would skip.
+fn publish_block_reason(dir: &Path, allow_scripts: bool) -> Result<Option<String>, String> {
+    let content = std::fs::read_to_string(dir.join("SKILL.md")).map_err(|err| err.to_string())?;
+    let doc = zeroclaw_runtime::skills::document::SkillDocument::parse(&content)
+        .map_err(|_| "SKILL.md must include YAML name and description".to_string())?;
+    if doc.frontmatter.description.trim().chars().count() < 8 {
+        return Ok(Some(
+            "description must say when to use this skill".to_string(),
+        ));
+    }
+    match zeroclaw_runtime::skills::audit::audit_skill_directory_with_options(
+        dir,
+        zeroclaw_runtime::skills::audit::SkillAuditOptions { allow_scripts },
+    ) {
+        Ok(report) if !report.is_clean() => return Ok(Some(report.summary())),
+        Err(err) => return Ok(Some(err.to_string())),
+        Ok(_) => {}
+    }
+    if let Some(path) = package_secret_path(dir) {
+        return Ok(Some(format!(
+            "skill package looks like it contains a secret: {path}"
+        )));
+    }
+    Ok(None)
+}
+
+fn package_secret_path(dir: &Path) -> Option<String> {
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(current) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&current) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if name.to_string_lossy().starts_with('.') {
+                continue;
+            }
+            let path = entry.path();
+            let Ok(meta) = std::fs::symlink_metadata(&path) else {
+                continue;
+            };
+            if meta.file_type().is_symlink() {
+                continue;
+            }
+            if meta.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if !meta.is_file() || meta.len() > 256 * 1024 {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            if looks_like_secret(&text) {
+                return Some(
+                    path.strip_prefix(dir)
+                        .unwrap_or(&path)
+                        .display()
+                        .to_string(),
+                );
+            }
+        }
+    }
+    None
+}
+
+fn looks_like_secret(text: &str) -> bool {
+    if text.contains("BEGIN PRIVATE KEY") || text.contains("BEGIN OPENSSH PRIVATE KEY") {
+        return true;
+    }
+    let lower = text.to_ascii_lowercase();
+    for key in [
+        "api_key", "api-key", "apikey", "secret", "password", "token",
+    ] {
+        let mut from = 0;
+        while let Some(rel) = lower[from..].find(key) {
+            let after = from + rel + key.len();
+            let rest = lower[after..].trim_start();
+            if rest.starts_with(['=', ':']) {
+                let value = rest[1..].trim_start().trim_matches(['"', '\'']);
+                let token: String = value
+                    .chars()
+                    .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_' || *ch == '-')
+                    .collect();
+                if token.len() >= 12 {
+                    return true;
+                }
+            }
+            from = after;
+            if from >= lower.len() {
+                break;
+            }
+        }
+    }
+    false
+}
+
 /// `POST /api/skill-center/{name}/publish` — only an approved skill. This bumps the version.
 pub async fn handle_publish_skill_center(
     State(state): State<AppState>,
     headers: HeaderMap,
     AxumPath(name): AxumPath<String>,
+    Json(body): Json<SkillCenterPublishBody>,
 ) -> Response {
     if let Err(resp) = require_admin(&state, &headers) {
         return resp;
@@ -1042,17 +1198,44 @@ pub async fn handle_publish_skill_center(
             "only an approved skill can be published",
         );
     }
+    let note = match require_release_note(&body) {
+        Ok(note) => note,
+        Err(resp) => return resp,
+    };
     let next = review.version.saturating_add(1);
     let published_at = local_now();
     let src = catalog_dir(&config, &id);
+    match publish_block_reason(&src, config.skills.allow_scripts) {
+        Ok(None) => {}
+        Ok(Some(reason)) => return json_error(StatusCode::BAD_REQUEST, &reason),
+        Err(err) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("Failed to check skill package: {err}"),
+            );
+        }
+    }
+    if review.version > 0 {
+        let prior = skill_release_dir(&config, &id, review.version);
+        let plaza_now = skill_plaza_dir(&config).join(&id);
+        if plaza_now.join("SKILL.md").is_file() && !prior.join("SKILL.md").is_file() {
+            if let Err(resp) = replace_skill_tree(&plaza_now, &prior) {
+                return resp;
+            }
+        }
+    }
+    let kept = skill_release_dir(&config, &id, next);
+    if let Err(resp) = replace_skill_tree(&src, &kept) {
+        return resp;
+    }
+    if let Err(resp) = write_skill_version(&kept.join("SKILL.md"), next) {
+        return resp;
+    }
     let plaza = skill_plaza_dir(&config).join(&id);
-    if let Err(resp) = replace_skill_tree(&src, &plaza) {
+    if let Err(resp) = replace_skill_tree(&kept, &plaza) {
         return resp;
     }
     if let Err(resp) = write_skill_version(&src.join("SKILL.md"), next) {
-        return resp;
-    }
-    if let Err(resp) = write_skill_version(&plaza.join("SKILL.md"), next) {
         return resp;
     }
     review.version = next;
@@ -1062,6 +1245,8 @@ pub async fn handle_publish_skill_center(
     review.releases.push(SkillRelease {
         version: next,
         published_at: published_at.clone(),
+        kind: String::new(),
+        note,
     });
     if let Err(resp) = save_review(&config, &id, &review) {
         return resp;
@@ -1296,10 +1481,14 @@ mod tests {
         SkillCenterWriteBody {
             name: name.into(),
             title: title.into(),
-            description: "说明".into(),
+            description: "用户询问这项内容时使用。".into(),
             body: body.into(),
             display_name: String::new(),
         }
+    }
+
+    fn publish_note(note: &str) -> SkillCenterPublishBody {
+        SkillCenterPublishBody { note: note.into() }
     }
 
     #[test]
@@ -1313,6 +1502,46 @@ mod tests {
         );
         assert!(replaced.contains("version: \"2\""));
         assert!(!replaced.contains("version: \"1\""));
+    }
+
+    #[test]
+    fn publish_blocks_a_short_description_a_secret_and_a_shell_script() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let skill = tmp.path().join("short");
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: 短\ndescription: 说明\n---\n\n# 正文\n",
+        )
+        .unwrap();
+        let short = publish_block_reason(&skill, false).unwrap().unwrap();
+        assert!(short.contains("when to use"));
+
+        let secret = tmp.path().join("secret");
+        std::fs::create_dir_all(&secret).unwrap();
+        std::fs::write(
+            secret.join("SKILL.md"),
+            "---\nname: 密钥\ndescription: 用户询问这项内容时使用。\n---\n\npassword: supersecretvalue\n",
+        )
+        .unwrap();
+        let leaked = publish_block_reason(&secret, false).unwrap().unwrap();
+        assert!(leaked.contains("secret"));
+
+        let script = tmp.path().join("script");
+        std::fs::create_dir_all(script.join("scripts")).unwrap();
+        std::fs::write(
+            script.join("SKILL.md"),
+            "---\nname: 脚本\ndescription: 用户询问这项内容时使用。\n---\n\n# 正文\n",
+        )
+        .unwrap();
+        std::fs::write(script.join("scripts").join("run.sh"), "echo hi\n").unwrap();
+        assert!(
+            publish_block_reason(&script, false)
+                .unwrap()
+                .unwrap()
+                .contains("script")
+        );
+        assert!(publish_block_reason(&script, true).unwrap().is_none());
     }
 
     #[tokio::test]
@@ -1373,6 +1602,7 @@ mod tests {
             State(state.clone()),
             admin.clone(),
             AxumPath("sk-center".into()),
+            Json(publish_note("补充了查询口径。")),
         )
         .await;
         assert_eq!(early.status(), StatusCode::CONFLICT);
@@ -1446,10 +1676,19 @@ mod tests {
         )
         .await;
 
+        let missing_note = handle_publish_skill_center(
+            State(state.clone()),
+            admin.clone(),
+            AxumPath("sk-center".into()),
+            Json(SkillCenterPublishBody { note: "  ".into() }),
+        )
+        .await;
+        assert_eq!(missing_note.status(), StatusCode::BAD_REQUEST);
         let published = handle_publish_skill_center(
             State(state.clone()),
             admin.clone(),
             AxumPath("sk-center".into()),
+            Json(publish_note("补充了查询口径。")),
         )
         .await;
         assert_eq!(published.status(), StatusCode::OK);
@@ -1465,6 +1704,9 @@ mod tests {
             plaza_json["skills"][0]["published_at"],
             published_json["published_at"]
         );
+        assert_eq!(plaza_json["skills"][0]["change_kind"], "");
+        assert_eq!(plaza_json["skills"][0]["change_note"], "补充了查询口径。");
+        assert!(plaza_json["skills"][0]["previous_version"].is_null());
         assert!(
             std::fs::read_to_string(
                 skill_plaza_dir(state.config.read().deref())
@@ -1555,9 +1797,17 @@ mod tests {
             State(state.clone()),
             admin.clone(),
             AxumPath("sk-center".into()),
+            Json(publish_note("改了正文。")),
         )
         .await;
         assert_eq!(json_body(again).await["version"], 2);
+        let previous = std::fs::read_to_string(
+            skill_release_dir(state.config.read().deref(), "sk-center", 1).join("SKILL.md"),
+        )
+        .unwrap();
+        assert!(previous.contains("version: \"1\""));
+        assert!(previous.contains("# 一"));
+        assert!(!previous.contains("# 改过"));
 
         let rejected = handle_create_skill_center(
             State(state.clone()),
@@ -1663,7 +1913,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("scripts")).unwrap();
         std::fs::write(
             dir.join("SKILL.md"),
-            "---\nname: 爱丽丝的技能\ndescription: 说明\n---\n\n# 个人\n",
+            "---\nname: 爱丽丝的技能\ndescription: 用户询问这项内容时使用。\n---\n\n# 个人\n",
         )
         .unwrap();
         std::fs::write(dir.join("scripts").join("run.py"), "print(2)\n").unwrap();
@@ -1685,7 +1935,7 @@ mod tests {
         assert!(!on_plaza(state.config.read().deref(), "sk-alice"));
         std::fs::write(
             dir.join("SKILL.md"),
-            "---\nname: 爱丽丝的技能\ndescription: 说明\n---\n\n# 修订\n",
+            "---\nname: 爱丽丝的技能\ndescription: 用户询问这项内容时使用。\n---\n\n# 修订\n",
         )
         .unwrap();
         let blocked = handle_submit_personal_skill(
@@ -1760,6 +2010,7 @@ mod tests {
             State(state.clone()),
             headers("ops", ROLE_OPS),
             AxumPath("sk-alice".into()),
+            Json(publish_note("补充了查询口径。")),
         )
         .await;
         assert_eq!(published_alice.status(), StatusCode::OK);
@@ -1806,6 +2057,7 @@ mod tests {
                 agent: "deepseek".into(),
                 name: "sk-alice".into(),
                 update: true,
+                version: 0,
             }),
         )
         .await;
@@ -1823,6 +2075,7 @@ mod tests {
                 agent: "deepseek".into(),
                 name: "sk-center".into(),
                 update: false,
+                version: 0,
             }),
         )
         .await;
@@ -1848,6 +2101,7 @@ mod tests {
                 agent: "deepseek".into(),
                 name: "sk-live".into(),
                 update: false,
+                version: 0,
             }),
         )
         .await;
