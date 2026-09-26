@@ -254,7 +254,7 @@ export function MySkillsPage({
           title: fresh?.title || skill.title,
           description: fresh?.description || skill.description,
           enabled: kept?.enabled ?? true,
-          version: fresh?.version ?? saved.version ?? skill.version,
+          version: saved.version ?? skill.version,
           blocked_reason: kept?.blocked_reason,
           from_plaza: true,
           review_status: kept?.review_status,

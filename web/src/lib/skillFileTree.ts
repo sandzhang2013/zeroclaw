@@ -20,6 +20,7 @@ export function skillFileTree(files: readonly string[]): SkillDirNode {
     let node = root;
     for (let index = 0; index < parts.length - 1; index += 1) {
       const name = parts[index];
+      if (name === undefined) continue;
       const path = parts.slice(0, index + 1).join('/');
       let child = node.dirs.find((dir) => dir.name === name);
       if (!child) {
@@ -29,6 +30,7 @@ export function skillFileTree(files: readonly string[]): SkillDirNode {
       node = child;
     }
     const name = parts[parts.length - 1];
+    if (name === undefined) continue;
     if (!node.files.some((file) => file.path === raw)) {
       node.files.push({ name, path: raw });
     }
