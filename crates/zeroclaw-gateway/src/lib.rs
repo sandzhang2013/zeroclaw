@@ -1830,6 +1830,14 @@ pub async fn run_gateway(
                 .post(api_skill_center::handle_create_skill_center),
         )
         .route(
+            "/api/skill-center/export",
+            get(api_skill_center::handle_export_skill_center_bundle),
+        )
+        .route(
+            "/api/skill-center/{name}/export",
+            get(api_skill_center::handle_export_skill_center),
+        )
+        .route(
             "/api/skill-center/{name}/files",
             get(api_skill_center::handle_skill_center_files),
         )
@@ -1875,6 +1883,10 @@ pub async fn run_gateway(
         .route(
             "/api/user/skills/{name}/files",
             get(api_skills::handle_read_personal_skill_file),
+        )
+        .route(
+            "/api/user/skills/{name}/export",
+            get(api_skills::handle_export_personal_skill),
         )
         .route(
             "/api/user/skills/{name}/enabled",

@@ -6,6 +6,7 @@ import {
   allocateSkillId,
   ApiError,
   deletePersonalSkill,
+  downloadSkillZip,
   forkPersonalSkill,
   installPlazaSkill,
   listPersonalSkillFiles,
@@ -690,6 +691,32 @@ export function MySkillsPage({
               </p>
             ) : null}
             <div className="flex items-center gap-2">
+              {view.kind === 'edit' ? (
+                <button
+                  type="button"
+                  disabled={saving}
+                  title={t('workbench.skill_export_one_hint')}
+                  onClick={() => {
+                    void (async () => {
+                      setSaving(true);
+                      setError(null);
+                      try {
+                        await downloadSkillZip(
+                          `/api/user/skills/${encodeURIComponent(draft.name)}/export?${new URLSearchParams({ agent }).toString()}`,
+                          `${draft.name}.zip`,
+                        );
+                      } catch (err) {
+                        setError(skillWriteError(err, 'workbench.skill_export_failed'));
+                      } finally {
+                        setSaving(false);
+                      }
+                    })();
+                  }}
+                  className="h-9 rounded-[8px] border border-pc-border px-3 text-sm text-pc-text disabled:opacity-40"
+                >
+                  {t('workbench.skill_export')}
+                </button>
+              ) : null}
               {view.kind === 'edit' && !fromPlaza && (!draft.review_status || draft.review_status === 'rejected') ? (
                 <button
                   type="button"

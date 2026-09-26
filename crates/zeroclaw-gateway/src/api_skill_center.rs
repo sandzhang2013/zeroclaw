@@ -13,8 +13,8 @@ use zeroclaw_runtime::skills::SkillFrontmatter;
 
 use super::AppState;
 use super::api_skills::{
-    personal_skills_dir, require_agent, require_personal_user, require_skill_name,
-    respond_skill_files, skill_plaza_dir, write_personal_skill_file,
+    SkillZipBuilder, personal_skills_dir, require_agent, require_personal_user, require_skill_name,
+    respond_skill_files, skill_plaza_dir, write_personal_skill_file, zip_download,
 };
 
 const STATUS_DRAFT: &str = "draft";
@@ -967,6 +967,134 @@ pub async fn handle_skill_center_files(
     respond_skill_files(&dir, &query.path)
 }
 
+/// `GET /api/skill-center/{name}/export` — one importable skill zip. No review file.
+pub async fn handle_export_skill_center(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(name): AxumPath<String>,
+) -> Response {
+    if let Err(resp) = require_admin(&state, &headers) {
+        return resp;
+    }
+    let id = match require_skill_name(&name) {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
+    let config = state.config.read().clone();
+    let Some(dir) = content_dir(&config, &id) else {
+        return json_error(StatusCode::NOT_FOUND, "skill not found");
+    };
+    let mut zip = SkillZipBuilder::one_skill();
+    if let Err(resp) = zip.add_tree(&dir, "") {
+        return resp;
+    }
+    match zip.finish() {
+        Ok(bytes) => zip_download(&format!("{id}.zip"), bytes),
+        Err(resp) => resp,
+    }
+}
+
+/// `GET /api/skill-center/export` — catalog, reviews, plaza, release snapshots, and the id counter.
+pub async fn handle_export_skill_center_bundle(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(resp) = require_admin(&state, &headers) {
+        return resp;
+    }
+    let config = state.config.read().clone();
+    let mut ids = std::collections::BTreeSet::new();
+    ids.extend(export_skill_ids(&catalog_root(&config)));
+    ids.extend(export_skill_ids(&skill_plaza_dir(&config)));
+    if ids.is_empty() {
+        return json_error(StatusCode::NOT_FOUND, "no skills to export");
+    }
+    let mut zip = SkillZipBuilder::bundle();
+    for id in &ids {
+        let catalog = catalog_dir(&config, id);
+        if catalog.join("SKILL.md").is_file() {
+            if let Err(resp) = zip.add_tree(&catalog, &format!("skill-catalog/{id}")) {
+                return resp;
+            }
+        }
+        let review = review_path(&config, id);
+        if review.is_file() {
+            match std::fs::read(&review) {
+                Ok(bytes) => {
+                    if let Err(resp) =
+                        zip.add_bytes(&format!("skill-catalog/{id}.review.json"), bytes)
+                    {
+                        return resp;
+                    }
+                }
+                Err(err) => {
+                    return json_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        &format!("Failed to read skill review: {err}"),
+                    );
+                }
+            }
+        }
+        let plaza = skill_plaza_dir(&config).join(id);
+        if plaza.join("SKILL.md").is_file() {
+            if let Err(resp) = zip.add_tree(&plaza, &format!("skill-plaza/{id}")) {
+                return resp;
+            }
+        }
+        let releases = config
+            .install_root_dir()
+            .join("shared")
+            .join("skill-releases")
+            .join(id);
+        if releases.is_dir() {
+            if let Err(resp) = zip.add_tree(&releases, &format!("skill-releases/{id}")) {
+                return resp;
+            }
+        }
+    }
+    let seq = skill_seq_path(&config);
+    if seq.is_file() {
+        match std::fs::read(&seq) {
+            Ok(bytes) => {
+                if let Err(resp) = zip.add_bytes("skill-seq", bytes) {
+                    return resp;
+                }
+            }
+            Err(err) => {
+                return json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("Failed to read skill id counter: {err}"),
+                );
+            }
+        }
+    }
+    match zip.finish() {
+        Ok(bytes) => zip_download("skills-shared.zip", bytes),
+        Err(resp) => resp,
+    }
+}
+
+fn export_skill_ids(dir: &Path) -> Vec<String> {
+    let mut ids = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return ids;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(id) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if require_skill_name(id).is_err() || !path.join("SKILL.md").is_file() {
+            continue;
+        }
+        ids.push(id.to_string());
+    }
+    ids
+}
+
 /// `POST /api/skill-center/{name}/submit`
 pub async fn handle_submit_skill_center(
     State(state): State<AppState>,
@@ -1489,6 +1617,79 @@ mod tests {
 
     fn publish_note(note: &str) -> SkillCenterPublishBody {
         SkillCenterPublishBody { note: note.into() }
+    }
+
+    #[tokio::test]
+    async fn export_zip_is_one_package_and_the_bundle_keeps_review_state() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let state = state_in(&tmp);
+        let admin = headers("ops", ROLE_OPS);
+        let user = headers("alice", "普通用户");
+        let catalog = tmp
+            .path()
+            .join("shared")
+            .join("skill-catalog")
+            .join("sk0001");
+        std::fs::create_dir_all(catalog.join("scripts")).unwrap();
+        std::fs::write(
+            catalog.join("SKILL.md"),
+            "---\nname: 甲\ndescription: 用户询问这项内容时使用。\n---\n\n# 甲\n",
+        )
+        .unwrap();
+        std::fs::write(catalog.join("scripts").join("compute.py"), b"print(1)\n").unwrap();
+        std::fs::write(catalog.join(".from-plaza"), b"1").unwrap();
+        std::fs::write(
+            tmp.path()
+                .join("shared")
+                .join("skill-catalog")
+                .join("sk0001.review.json"),
+            r#"{"status":"published","version":2}"#,
+        )
+        .unwrap();
+        let plaza = tmp.path().join("shared").join("skill-plaza").join("sk0001");
+        std::fs::create_dir_all(&plaza).unwrap();
+        std::fs::write(plaza.join("SKILL.md"), "plaza").unwrap();
+        std::fs::write(tmp.path().join("shared").join("skill-seq"), "30\n").unwrap();
+
+        let denied =
+            handle_export_skill_center(State(state.clone()), user, AxumPath("sk0001".into())).await;
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+
+        let one = handle_export_skill_center(
+            State(state.clone()),
+            admin.clone(),
+            AxumPath("sk0001".into()),
+        )
+        .await;
+        assert_eq!(one.status(), StatusCode::OK);
+        assert_eq!(
+            one.headers()
+                .get(axum::http::header::CONTENT_DISPOSITION)
+                .and_then(|value| value.to_str().ok()),
+            Some("attachment; filename=\"sk0001.zip\"")
+        );
+        let one_names = zip_names(one).await;
+        assert_eq!(
+            one_names,
+            vec!["SKILL.md".to_string(), "scripts/compute.py".to_string()]
+        );
+
+        let bundle = handle_export_skill_center_bundle(State(state), admin).await;
+        assert_eq!(bundle.status(), StatusCode::OK);
+        let names = zip_names(bundle).await;
+        assert!(names.contains(&"skill-catalog/sk0001/SKILL.md".to_string()));
+        assert!(names.contains(&"skill-catalog/sk0001/scripts/compute.py".to_string()));
+        assert!(names.contains(&"skill-catalog/sk0001.review.json".to_string()));
+        assert!(names.contains(&"skill-plaza/sk0001/SKILL.md".to_string()));
+        assert!(names.contains(&"skill-seq".to_string()));
+        assert!(names.iter().all(|name| !name.contains(".from-plaza")));
+    }
+
+    async fn zip_names(response: Response) -> Vec<String> {
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        crate::api_skills::zip_entry_names(&bytes)
     }
 
     #[test]

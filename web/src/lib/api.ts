@@ -1301,6 +1301,48 @@ export function unpublishSkillCenter(id: string): Promise<{ id: string; status: 
   return apiFetch(`/api/skill-center/${encodeURIComponent(id)}/unpublish`, { method: "POST" });
 }
 
+/** Download a skill zip. `fallbackName` is used when the response has no safe filename. */
+export async function downloadSkillZip(path: string, fallbackName: string): Promise<void> {
+  const token = getToken();
+  const headers = new Headers();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  applyEmbedSession(headers);
+  const response = await fetch(`${apiOrigin}${basePath}${path}`, { headers });
+  if (response.status === 401) {
+    clearToken();
+    window.dispatchEvent(new Event("zeroclaw-unauthorized"));
+    throw new UnauthorizedError();
+  }
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new HttpError(response.status, text);
+  }
+  const blob = await response.blob();
+  const name = filenameFromDisposition(response.headers.get("Content-Disposition"), fallbackName);
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = name;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function filenameFromDisposition(header: string | null, fallback: string): string {
+  if (!header) return fallback;
+  const star = /filename\*=UTF-8''([^;]+)/i.exec(header);
+  if (star?.[1]) {
+    try {
+      return decodeURIComponent(star[1]);
+    } catch {
+      return fallback;
+    }
+  }
+  const plain = /filename="([^"]+)"/.exec(header);
+  return plain?.[1] || fallback;
+}
+
 export function listSkillCenterFiles(id: string): Promise<{ files: string[] }> {
   return apiFetch(`/api/skill-center/${encodeURIComponent(id)}/files`);
 }

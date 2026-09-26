@@ -6,6 +6,7 @@ import {
   allocateSkillId,
   ApiError,
   createSkillCenter,
+  downloadSkillZip,
   listSkillCenter,
   listSkillCenterFiles,
   publishSkillCenter,
@@ -137,6 +138,19 @@ export function SkillCenterPage({
     }
   }
 
+  async function exportZip(path: string, filename: string) {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await downloadSkillZip(path, filename);
+    } catch (err) {
+      setError(skillWriteError(err, 'workbench.skill_export_failed'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function run(action: () => Promise<void>) {
     if (busy) return;
     setBusy(true);
@@ -177,6 +191,17 @@ export function SkillCenterPage({
           >
             <Plus className="size-3.5" />
             {t('workbench.skill_center_create')}
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            title={t('workbench.skill_export_all_hint')}
+            onClick={() => {
+              void exportZip('/api/skill-center/export', 'skills-shared.zip');
+            }}
+            className="inline-flex h-8 items-center rounded-[8px] border border-pc-border px-2.5 text-sm text-pc-text hover:bg-[var(--pc-hover)] disabled:opacity-40"
+          >
+            {t('workbench.skill_export_all')}
           </button>
           {onClose ? (
             <button
@@ -355,6 +380,17 @@ export function SkillCenterPage({
                 </label>
               ) : null}
               <div className="flex flex-wrap justify-end gap-2">
+                <button
+                  type="button"
+                  disabled={busy}
+                  title={t('workbench.skill_export_one_hint')}
+                  onClick={() => {
+                    void exportZip(`/api/skill-center/${encodeURIComponent(detail.id)}/export`, `${detail.id}.zip`);
+                  }}
+                  className="mr-auto h-9 rounded-[8px] border border-pc-border px-3 text-sm text-pc-text disabled:opacity-40"
+                >
+                  {t('workbench.skill_export')}
+                </button>
                 <button type="button" onClick={() => setView({ kind: 'list' })} className="h-9 rounded-[8px] px-3 text-sm text-pc-text-muted hover:bg-[var(--pc-hover)]">
                   {t('workbench.my_skills_back')}
                 </button>

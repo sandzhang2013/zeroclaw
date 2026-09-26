@@ -3,7 +3,7 @@
 use axum::{
     Json,
     extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
@@ -626,6 +626,296 @@ fn skill_package_error(status: StatusCode, message: &str) -> Response {
     (status, Json(serde_json::json!({ "error": message }))).into_response()
 }
 
+const MAX_SKILL_EXPORT_BUNDLE_FILES: usize = 4096;
+const MAX_SKILL_EXPORT_BUNDLE_BYTES: usize = 64 * 1024 * 1024;
+
+/// Files gathered for one zip. Dotfiles and symlinks stay out, so markers such
+/// as `.from-plaza` and `.disabled` are not part of a moved package.
+pub(crate) struct SkillZipBuilder {
+    files: Vec<(String, Vec<u8>)>,
+    total_bytes: usize,
+    max_files: usize,
+    max_bytes: usize,
+}
+
+impl SkillZipBuilder {
+    pub(crate) fn one_skill() -> Self {
+        Self::with_limits(MAX_SKILL_PACKAGE_FILES, MAX_SKILL_PACKAGE_BYTES)
+    }
+
+    pub(crate) fn bundle() -> Self {
+        Self::with_limits(MAX_SKILL_EXPORT_BUNDLE_FILES, MAX_SKILL_EXPORT_BUNDLE_BYTES)
+    }
+
+    fn with_limits(max_files: usize, max_bytes: usize) -> Self {
+        Self {
+            files: Vec::new(),
+            total_bytes: 0,
+            max_files,
+            max_bytes,
+        }
+    }
+
+    pub(crate) fn add_tree(
+        &mut self,
+        root: &std::path::Path,
+        prefix: &str,
+    ) -> Result<(), Response> {
+        if !root.is_dir() {
+            return Ok(());
+        }
+        self.walk(root, root, prefix)
+    }
+
+    pub(crate) fn add_bytes(&mut self, path: &str, bytes: Vec<u8>) -> Result<(), Response> {
+        self.push(path.to_string(), bytes)
+    }
+
+    pub(crate) fn finish(self) -> Result<Vec<u8>, Response> {
+        if self.files.is_empty() {
+            return Err(skill_package_error(
+                StatusCode::NOT_FOUND,
+                "no skills to export",
+            ));
+        }
+        Ok(stored_zip(&self.files))
+    }
+
+    fn walk(
+        &mut self,
+        root: &std::path::Path,
+        current: &std::path::Path,
+        prefix: &str,
+    ) -> Result<(), Response> {
+        let entries = std::fs::read_dir(current).map_err(|error| {
+            skill_package_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("Failed to read skill directory: {error}"),
+            )
+        })?;
+        let mut paths = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(|error| {
+                skill_package_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("Failed to read skill directory: {error}"),
+                )
+            })?;
+            paths.push(entry.path());
+        }
+        paths.sort();
+        for path in paths {
+            let Some(name) = path.file_name() else {
+                continue;
+            };
+            if export_name_skipped(name) {
+                continue;
+            }
+            let meta = std::fs::symlink_metadata(&path).map_err(|error| {
+                skill_package_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("Failed to read skill file: {error}"),
+                )
+            })?;
+            if meta.file_type().is_symlink() {
+                continue;
+            }
+            if meta.is_dir() {
+                self.walk(root, &path, prefix)?;
+                continue;
+            }
+            if !meta.is_file() {
+                continue;
+            }
+            if meta.len() > MAX_SKILL_PACKAGE_FILE_BYTES as u64 {
+                return Err(skill_package_error(
+                    StatusCode::BAD_REQUEST,
+                    "skill package is too large",
+                ));
+            }
+            let rel = path.strip_prefix(root).map_err(|_| {
+                skill_package_error(StatusCode::BAD_REQUEST, "invalid skill file path")
+            })?;
+            let rel = rel_to_slash(rel);
+            let stored = if prefix.is_empty() {
+                rel
+            } else {
+                format!("{prefix}/{rel}")
+            };
+            let bytes = std::fs::read(&path).map_err(|error| {
+                skill_package_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("Failed to read skill file: {error}"),
+                )
+            })?;
+            self.push(stored, bytes)?;
+        }
+        Ok(())
+    }
+
+    fn push(&mut self, path: String, bytes: Vec<u8>) -> Result<(), Response> {
+        if bytes.len() > MAX_SKILL_PACKAGE_FILE_BYTES {
+            return Err(skill_package_error(
+                StatusCode::BAD_REQUEST,
+                "skill package is too large",
+            ));
+        }
+        if self.files.len() >= self.max_files
+            || self.total_bytes.saturating_add(bytes.len()) > self.max_bytes
+        {
+            return Err(skill_package_error(
+                StatusCode::BAD_REQUEST,
+                "skill package is too large",
+            ));
+        }
+        self.total_bytes += bytes.len();
+        self.files.push((path, bytes));
+        Ok(())
+    }
+}
+
+fn export_name_skipped(name: &std::ffi::OsStr) -> bool {
+    let Some(text) = name.to_str() else {
+        return true;
+    };
+    text.is_empty() || text.starts_with('.') || text == "__MACOSX" || text.contains('\0')
+}
+
+pub(crate) fn zip_download(filename: &str, bytes: Vec<u8>) -> Response {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/zip"),
+    );
+    if let Ok(value) = HeaderValue::from_str(&content_disposition_attachment(filename)) {
+        headers.insert(header::CONTENT_DISPOSITION, value);
+    }
+    (headers, bytes).into_response()
+}
+
+/// Stored zip (method 0). The workbench importer already reads this method.
+fn stored_zip(files: &[(String, Vec<u8>)]) -> Vec<u8> {
+    let mut local = Vec::new();
+    let mut central = Vec::new();
+    for (name, bytes) in files {
+        let name_bytes = name.as_bytes();
+        let crc = crc32(bytes);
+        let offset = u32::try_from(local.len()).unwrap_or(u32::MAX);
+        write_u32(&mut local, 0x0403_4b50);
+        write_u16(&mut local, 20);
+        write_u16(&mut local, 0x0800);
+        write_u16(&mut local, 0);
+        write_u16(&mut local, 0);
+        write_u16(&mut local, 0);
+        write_u32(&mut local, crc);
+        write_u32(&mut local, bytes.len() as u32);
+        write_u32(&mut local, bytes.len() as u32);
+        write_u16(&mut local, name_bytes.len() as u16);
+        write_u16(&mut local, 0);
+        local.extend_from_slice(name_bytes);
+        local.extend_from_slice(bytes);
+
+        write_u32(&mut central, 0x0201_4b50);
+        write_u16(&mut central, 0x0314);
+        write_u16(&mut central, 20);
+        write_u16(&mut central, 0x0800);
+        write_u16(&mut central, 0);
+        write_u16(&mut central, 0);
+        write_u16(&mut central, 0);
+        write_u32(&mut central, crc);
+        write_u32(&mut central, bytes.len() as u32);
+        write_u32(&mut central, bytes.len() as u32);
+        write_u16(&mut central, name_bytes.len() as u16);
+        write_u16(&mut central, 0);
+        write_u16(&mut central, 0);
+        write_u16(&mut central, 0);
+        write_u16(&mut central, 0);
+        write_u32(&mut central, 0);
+        write_u32(&mut central, offset);
+        central.extend_from_slice(name_bytes);
+    }
+    let mut out = local;
+    let central_offset = u32::try_from(out.len()).unwrap_or(u32::MAX);
+    let central_size = u32::try_from(central.len()).unwrap_or(u32::MAX);
+    out.extend_from_slice(&central);
+    write_u32(&mut out, 0x0605_4b50);
+    write_u16(&mut out, 0);
+    write_u16(&mut out, 0);
+    write_u16(&mut out, files.len() as u16);
+    write_u16(&mut out, files.len() as u16);
+    write_u32(&mut out, central_size);
+    write_u32(&mut out, central_offset);
+    write_u16(&mut out, 0);
+    out
+}
+
+fn crc32(data: &[u8]) -> u32 {
+    let mut crc = 0xffff_ffffu32;
+    for &byte in data {
+        crc ^= u32::from(byte);
+        for _ in 0..8 {
+            let mask = (crc & 1).wrapping_neg();
+            crc = (crc >> 1) ^ (0xedb8_8320 & mask);
+        }
+    }
+    !crc
+}
+
+fn write_u16(buf: &mut Vec<u8>, value: u16) {
+    buf.extend_from_slice(&value.to_le_bytes());
+}
+
+fn write_u32(buf: &mut Vec<u8>, value: u32) {
+    buf.extend_from_slice(&value.to_le_bytes());
+}
+
+#[cfg(test)]
+pub(crate) fn zip_entry_names(bytes: &[u8]) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut index = 0;
+    while index + 30 <= bytes.len() && bytes[index..index + 4] == [0x50, 0x4b, 0x03, 0x04] {
+        let name_len = u16::from_le_bytes([bytes[index + 26], bytes[index + 27]]) as usize;
+        let extra_len = u16::from_le_bytes([bytes[index + 28], bytes[index + 29]]) as usize;
+        let size = u32::from_le_bytes([
+            bytes[index + 18],
+            bytes[index + 19],
+            bytes[index + 20],
+            bytes[index + 21],
+        ]) as usize;
+        let name_start = index + 30;
+        let name_end = name_start + name_len;
+        if name_end > bytes.len() {
+            break;
+        }
+        if let Ok(name) = std::str::from_utf8(&bytes[name_start..name_end]) {
+            names.push(name.to_string());
+        }
+        index = name_end + extra_len + size;
+    }
+    names.sort();
+    names
+}
+
+fn content_disposition_attachment(filename: &str) -> String {
+    let safe = !filename.is_empty()
+        && filename.len() <= 80
+        && filename
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'));
+    if safe {
+        return format!("attachment; filename=\"{filename}\"");
+    }
+    let mut encoded = String::new();
+    for byte in filename.as_bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_') {
+            encoded.push(*byte as char);
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    format!("attachment; filename=\"skill.zip\"; filename*=UTF-8''{encoded}")
+}
+
 /// `POST /api/user/skills` — any frozen BFF user; writes that caller's workspace.
 pub async fn handle_save_personal_skill(
     State(state): State<AppState>,
@@ -1166,6 +1456,44 @@ pub async fn handle_read_personal_skill_file(
     respond_skill_files(&dir, &query.path)
 }
 
+/// `GET /api/user/skills/{name}/export?agent=` — one importable skill zip.
+pub async fn handle_export_personal_skill(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+    Query(query): Query<PersonalSkillFileQuery>,
+) -> Response {
+    let attrs = match require_personal_user(&state, &headers) {
+        Ok(attrs) => attrs,
+        Err(resp) => return resp,
+    };
+    let name = match require_skill_name(&name) {
+        Ok(n) => n,
+        Err(resp) => return resp,
+    };
+    let agent = match require_agent(&query.agent) {
+        Ok(a) => a,
+        Err(resp) => return resp,
+    };
+    let config = state.config.read().clone();
+    let dir = personal_skills_dir(&config, &attrs.user_id, agent).join(&name);
+    if !dir.join("SKILL.md").is_file() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "skill not found"})),
+        )
+            .into_response();
+    }
+    let mut zip = SkillZipBuilder::one_skill();
+    if let Err(resp) = zip.add_tree(&dir, "") {
+        return resp;
+    }
+    match zip.finish() {
+        Ok(bytes) => zip_download(&format!("{name}.zip"), bytes),
+        Err(resp) => resp,
+    }
+}
+
 fn read_plaza_skill(
     config: &zeroclaw_config::schema::Config,
     dir: &std::path::Path,
@@ -1512,6 +1840,24 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use zeroclaw_runtime::skills::{ShadowedSkill, SkillOrigin};
+
+    #[test]
+    fn skill_zip_keeps_package_files_and_skips_dotfiles() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("sk0001");
+        std::fs::create_dir_all(root.join("scripts")).unwrap();
+        std::fs::write(root.join("SKILL.md"), b"hello").unwrap();
+        std::fs::write(root.join("scripts").join("compute.py"), b"print(1)\n").unwrap();
+        std::fs::write(root.join(".from-plaza"), b"1").unwrap();
+        std::fs::write(root.join(".disabled"), b"1").unwrap();
+        let mut zip = SkillZipBuilder::one_skill();
+        zip.add_tree(&root, "").unwrap();
+        let bytes = zip.finish().unwrap();
+        assert_eq!(
+            zip_entry_names(&bytes),
+            vec!["SKILL.md".to_string(), "scripts/compute.py".to_string()]
+        );
+    }
 
     // the write-guard error maps to 403, distinct from 404/400.
     #[test]
