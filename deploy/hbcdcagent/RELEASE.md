@@ -80,7 +80,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:42617/hbcdcagent/heal
 # 期望 200
 ```
 
-daemon 日志应出现 `Gateway listening on http://127.0.0.1:42617`；BFF 日志出现 `hbcdcagent-bff starting`（绑 `0.0.0.0:50001`）。
+daemon 日志应出现 `Gateway listening on http://127.0.0.1:42617`；BFF 日志出现 `hbcdcagent-bff starting`（绑 `0.0.0.0:50002`）。
 
 ## 打包产物结构
 

@@ -1,6 +1,6 @@
 # 交付包启动脚本
 
-两种接入共用同一套进程：daemon (127.0.0.1:42617) + hbcdcagent-bff (0.0.0.0:50001)。
+两种接入共用同一套进程：daemon (127.0.0.1:42617) + hbcdcagent-bff (0.0.0.0:50002)。
 前端永远是包内 web/dist，不需要 Vite / npm / web 源码。
 
 daemon 配置目录是 ~/.zeroclaw（可用 ZEROCLAW_CONFIG_DIR 覆盖），不是 ~/.config/zeroclaw。
@@ -8,8 +8,8 @@ daemon 配置目录是 ~/.zeroclaw（可用 ZEROCLAW_CONFIG_DIR 覆盖），不�
 
 ## start-local.sh —— 本地模拟用户
 - 设置 HBCDCAGENT_BFF_LOCAL_MOCK=true，不调用户中心
-- 入口：http://<主机>:50001/hbcdcagent/auth/mock?user=chenmin （chenmin|liuyang|zhoujing|ops）
-- 工作台：http://<主机>:50001/hbcdcagent/workbench （无 cookie 时出模拟登录页，不再 401）
+- 入口：http://<主机>:50002/hbcdcagent/auth/mock?user=chenmin （chenmin|liuyang|zhoujing|ops）
+- 工作台：http://<主机>:50002/hbcdcagent/workbench （无 cookie 时出模拟登录页，不再 401）
 - 可选：config/.env 里的 trusted_proxy_secret（没有则用 zeroclaw-local-bff-secret）
 
 ## start-user-center.sh —— 用户中心 SSO

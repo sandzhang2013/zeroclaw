@@ -6,11 +6,11 @@ import { sameOriginWebSocketUrl } from './wsUrl.ts';
 test('sameOriginWebSocketUrl follows the page host, not a baked-in origin', () => {
   const url = sameOriginWebSocketUrl(
     '/hbcdcagent/ws/chat?agent=deepseek',
-    'http://workbench.example:50001/hbcdcagent/workbench',
+    'http://workbench.example:50002/hbcdcagent/workbench',
   );
   const parsed = new URL(url);
   assert.equal(parsed.protocol, 'ws:');
-  assert.equal(parsed.host, 'workbench.example:50001');
+  assert.equal(parsed.host, 'workbench.example:50002');
   assert.equal(parsed.pathname, '/hbcdcagent/ws/chat');
   assert.equal(parsed.searchParams.get('agent'), 'deepseek');
 });

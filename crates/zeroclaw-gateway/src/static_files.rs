@@ -67,8 +67,8 @@ pub async fn handle_spa_fallback(State(state): State<AppState>, uri: Uri) -> Res
         let json_pfx = serde_json::to_string(pfx).unwrap_or_else(|_| "\"\"".to_string());
         let script = format!("<script>window.__ZEROCLAW_BASE__={json_pfx};</script>");
         // Rewrite absolute /_app/ references so the browser requests {prefix}/_app/...
-        html.replace("/_app/", &format!("{pfx}/_app/"))
-            .replace("<head>", &format!("<head>{script}"))
+        // A path that already starts with the prefix is left alone.
+        prefix_app_urls(&html, pfx).replace("<head>", &format!("<head>{script}"))
     };
 
     (
@@ -80,6 +80,26 @@ pub async fn handle_spa_fallback(State(state): State<AppState>, uri: Uri) -> Res
         html,
     )
         .into_response()
+}
+
+fn prefix_app_urls(html: &str, prefix: &str) -> String {
+    if prefix.is_empty() || prefix == "/" {
+        return html.to_string();
+    }
+    const MARK: &str = "/_app/";
+    let mut out = String::with_capacity(html.len() + prefix.len());
+    let mut rest = html;
+    while let Some(index) = rest.find(MARK) {
+        let already = rest[..index].ends_with(prefix);
+        out.push_str(&rest[..index]);
+        if !already {
+            out.push_str(prefix);
+        }
+        out.push_str(MARK);
+        rest = &rest[index + MARK.len()..];
+    }
+    out.push_str(rest);
+    out
 }
 
 fn api_fallback_path<'a>(path: &'a str, path_prefix: &str) -> Option<&'a str> {
@@ -252,6 +272,18 @@ mod tests {
             .await
             .expect("response body")
             .to_vec()
+    }
+
+    #[test]
+    fn prefix_app_urls_adds_the_gateway_prefix_once() {
+        let raw = r#"<link href="/_app/assets/index-abc.css">"#;
+        let once = prefix_app_urls(raw, "/hbcdcagent");
+        assert_eq!(
+            once,
+            r#"<link href="/hbcdcagent/_app/assets/index-abc.css">"#
+        );
+        assert_eq!(prefix_app_urls(&once, "/hbcdcagent"), once);
+        assert_eq!(prefix_app_urls(raw, ""), raw);
     }
 
     #[test]

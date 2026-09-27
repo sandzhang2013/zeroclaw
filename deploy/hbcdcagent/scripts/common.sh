@@ -81,7 +81,7 @@ hbcdcagent_export_runtime_env() {
   export ZEROCLAW_gateway__web_dist_dir="${ZEROCLAW_gateway__web_dist_dir:-$WEB_DIST}"
   export ZEROCLAW_gateway__require_pairing="${ZEROCLAW_gateway__require_pairing:-false}"
   export HBCDCAGENT_BFF_UPSTREAM="${HBCDCAGENT_BFF_UPSTREAM:-http://127.0.0.1:42617}"
-  export HBCDCAGENT_BFF_LISTEN="${HBCDCAGENT_BFF_LISTEN:-0.0.0.0:50001}"
+  export HBCDCAGENT_BFF_LISTEN="${HBCDCAGENT_BFF_LISTEN:-0.0.0.0:50002}"
 }
 
 hbcdcagent_daemon_up() {
@@ -119,7 +119,7 @@ hbcdcagent_start_daemon() {
 
 hbcdcagent_stop_pack_bff() {
   if pgrep -f '[h]bcdcagent-bff' >/dev/null 2>&1; then
-    echo "▶ 结束旧 hbcdcagent-bff（释放 50001）"
+    echo "▶ 结束旧 hbcdcagent-bff（释放 50002）"
     pkill -f '[h]bcdcagent-bff' || true
     sleep 0.4
   fi

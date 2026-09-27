@@ -37,7 +37,7 @@ pub struct Config {
 
 impl Config {
     pub fn from_env() -> Result<Self> {
-        let listen: SocketAddr = env_or("HBCDCAGENT_BFF_LISTEN", "0.0.0.0:50001")
+        let listen: SocketAddr = env_or("HBCDCAGENT_BFF_LISTEN", "0.0.0.0:50002")
             .parse()
             .context("HBCDCAGENT_BFF_LISTEN")?;
         let sign_type = env_or("USER_CENTER_SIGN_TYPE", "MD5").to_uppercase();
@@ -108,7 +108,7 @@ impl Config {
             listen: "127.0.0.1:0".parse().expect("addr"),
             upstream,
             upstream_host,
-            public_origin: "http://88.8.130.150:50001".into(),
+            public_origin: "http://30.8.130.150:50002".into(),
             cookie_secure: false,
             session_ttl: Duration::from_secs(60),
             trusted_proxy_secret: "bff-secret".into(),
@@ -295,7 +295,7 @@ mod tests {
         let cfg = Config {
             listen: "127.0.0.1:1".parse().expect("addr"),
             upstream: "http://127.0.0.1:42617".into(),
-            public_origin: "http://88.8.130.150:50001".into(),
+            public_origin: "http://30.8.130.150:50002".into(),
             cookie_secure: false,
             session_ttl: Duration::from_secs(60),
             trusted_proxy_secret: "s".into(),
@@ -317,7 +317,7 @@ mod tests {
         };
         let url = cfg.login_redirect().expect("url");
         assert!(url.contains(
-            "redirectUrl=http%3A%2F%2F88.8.130.150%3A50001%2Fhbcdcagent%2Fauth%2Fcallback"
+            "redirectUrl=http%3A%2F%2F30.8.130.150%3A50002%2Fhbcdcagent%2Fauth%2Fcallback"
         ));
         assert!(url.contains("clientId=cid"));
         assert!(parse_frame_ancestors("").unwrap().is_empty());
@@ -331,7 +331,7 @@ mod tests {
             .expect("url");
         assert!(with_state.contains("state=abc-state"));
         assert!(with_state.contains(
-            "redirectUrl=http%3A%2F%2F88.8.130.150%3A50001%2Fhbcdcagent%2Fauth%2Fcallback%3Fstate%3Dabc-state"
+            "redirectUrl=http%3A%2F%2F30.8.130.150%3A50002%2Fhbcdcagent%2Fauth%2Fcallback%3Fstate%3Dabc-state"
         ));
     }
 

@@ -121,7 +121,7 @@ cargo build -p hbcdcagent-bff
 |---|---|---|
 | `web/dist/` | `web/dist/` | 前端静态文件，运行时 `gateway.web_dist_dir` 读 |
 | `zeroclaw` | `target/ci/zeroclaw` | 主 daemon：agent/session/memory/MCP，绑 `127.0.0.1:42617` |
-| `hbcdcagent-bff` | `target/ci/hbcdcagent-bff` | 平台 BFF：用户中心换票 + 身份头转发，绑 `0.0.0.0:50001` |
+| `hbcdcagent-bff` | `target/ci/hbcdcagent-bff` | 平台 BFF：用户中心换票 + 身份头转发，绑 `0.0.0.0:50002` |
 | `zerocode` | `target/ci/zerocode` | TUI 配置管理器（运维辅助） |
 
 打交付 tar（编译完成后，Linux amd64）：

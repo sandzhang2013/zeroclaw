@@ -9,7 +9,7 @@ After=network.target
 
 [Service]
 Environment=HBCDCAGENT_BFF_UPSTREAM=http://127.0.0.1:42617
-Environment=HBCDCAGENT_BFF_PUBLIC_ORIGIN=http://<150地址>:50001
+Environment=HBCDCAGENT_BFF_PUBLIC_ORIGIN=http://<150地址>:50002
 Environment=HBCDCAGENT_BFF_COOKIE_SECURE=false
 Environment=ZEROCLAW_gateway__trusted_proxy_secret=<与daemon相同>
 Environment=USER_CENTER_BASE_URL=http://<用户中心地址>/openapi

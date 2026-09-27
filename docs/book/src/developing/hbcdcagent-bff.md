@@ -15,7 +15,7 @@ cookie. Do not treat that as production login.
 
 ```text
 Browser
-  → http://<workbench-host>:50001     hbcdcagent-bff
+  → http://<workbench-host>:50002     hbcdcagent-bff
        GET /hbcdcagent/auth/health
        GET /hbcdcagent/auth/callback?verifyCode=
        /hbcdcagent/*  (HTML, /api, /ws)
@@ -27,7 +27,7 @@ Browser
 ```
 
 Register the user-center `redirectUrl` as
-`http://<workbench-host>:50001/hbcdcagent/auth/callback`, not the daemon port and
+`http://<workbench-host>:50002/hbcdcagent/auth/callback`, not the daemon port and
 not a workbench URL that carries `userId`.
 
 Direct workbench visits redirect to the login URL with a random `state`
@@ -67,7 +67,7 @@ Required environment (secrets stay out of git and out of
 
 - `HBCDCAGENT_BFF_UPSTREAM=http://127.0.0.1:42617` (http origin only;
   https is rejected at startup: the proxy and WebSocket splice are TCP)
-- `HBCDCAGENT_BFF_PUBLIC_ORIGIN=http://<workbench-host>:50001`
+- `HBCDCAGENT_BFF_PUBLIC_ORIGIN=http://<workbench-host>:50002`
 - `ZEROCLAW_gateway__trusted_proxy_secret` (same string as the daemon)
 - `USER_CENTER_BASE_URL`, `USER_CENTER_APP_ID`, `USER_CENTER_APP_KEY`,
   `USER_CENTER_APP_SECRET`

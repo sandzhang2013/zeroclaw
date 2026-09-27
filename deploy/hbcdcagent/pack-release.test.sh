@@ -46,7 +46,7 @@ grep -q 'replace-with-long-random' "$tmp/out/smoke-pack/config/env.example"
 
 cat >"$tmp/secrets.env" <<'EOF'
 ZEROCLAW_gateway__trusted_proxy_secret=0123456789abcdef0123456789abcdef
-HBCDCAGENT_BFF_PUBLIC_ORIGIN=http://127.0.0.1:50001
+HBCDCAGENT_BFF_PUBLIC_ORIGIN=http://127.0.0.1:50002
 USER_CENTER_BASE_URL=http://uc.example
 USER_CENTER_APP_ID=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 USER_CENTER_APP_KEY=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb

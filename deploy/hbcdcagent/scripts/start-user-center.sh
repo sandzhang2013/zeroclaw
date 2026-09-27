@@ -3,9 +3,9 @@
 # 交付包 — 用户中心 SSO
 #
 #   进程: zeroclaw daemon 127.0.0.1:42617
-#         hbcdcagent-bff  0.0.0.0:50001  (真实 USER_CENTER_*)
+#         hbcdcagent-bff  0.0.0.0:50002  (真实 USER_CENTER_*)
 #
-#   用户 → :50001 → SSO verifyCode → BFF session → 127.0.0.1:42617
+#   用户 → :50002 → SSO verifyCode → BFF session → 127.0.0.1:42617
 # ============================================================
 set -euo pipefail
 

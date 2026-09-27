@@ -536,7 +536,7 @@ async fn workbench_without_cookie_redirects_to_sso() {
     assert!(loc.starts_with("http://sso/login?"));
     assert!(
         loc.contains(
-            "redirectUrl=http%3A%2F%2F88.8.130.150%3A50001%2Fhbcdcagent%2Fauth%2Fcallback"
+            "redirectUrl=http%3A%2F%2F30.8.130.150%3A50002%2Fhbcdcagent%2Fauth%2Fcallback"
         )
     );
     assert!(loc.contains("&state="));

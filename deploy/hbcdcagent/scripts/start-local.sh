@@ -3,9 +3,9 @@
 # 交付包 — 本地模拟用户（不接用户中心）
 #
 #   进程: zeroclaw daemon 127.0.0.1:42617
-#         hbcdcagent-bff  0.0.0.0:50001  (HBCDCAGENT_BFF_LOCAL_MOCK=true)
+#         hbcdcagent-bff  0.0.0.0:50002  (HBCDCAGENT_BFF_LOCAL_MOCK=true)
 #
-#   用户 → :50001 → BFF 按 cookie zeroclaw_mock_user 注入身份
+#   用户 → :50002 → BFF 按 cookie zeroclaw_mock_user 注入身份
 #        → 127.0.0.1:42617（path_prefix=/hbcdcagent，读包内 web/dist）
 #
 #   不需要 web 源码 / Vite / npm。白名单：chenmin / liuyang / zhoujing / ops
@@ -21,7 +21,7 @@ hbcdcagent_require_pack
 hbcdcagent_ensure_config
 
 # Command-line / already-exported origin wins over config/.env
-# (the pack .env often has an intranet IP like 88.8.x).
+# (the pack .env often has an intranet IP like 30.8.x).
 CLI_PUBLIC_ORIGIN="${HBCDCAGENT_BFF_PUBLIC_ORIGIN:-}"
 
 if [[ -f "$ENV_FILE" ]]; then
@@ -36,7 +36,7 @@ export ZEROCLAW_gateway__trusted_proxy_secret="${ZEROCLAW_gateway__trusted_proxy
 if [[ -n "$CLI_PUBLIC_ORIGIN" ]]; then
   export HBCDCAGENT_BFF_PUBLIC_ORIGIN="$CLI_PUBLIC_ORIGIN"
 else
-  export HBCDCAGENT_BFF_PUBLIC_ORIGIN="${HBCDCAGENT_BFF_PUBLIC_ORIGIN:-http://127.0.0.1:50001}"
+  export HBCDCAGENT_BFF_PUBLIC_ORIGIN="${HBCDCAGENT_BFF_PUBLIC_ORIGIN:-http://127.0.0.1:50002}"
 fi
 export USER_CENTER_BASE_URL="${USER_CENTER_BASE_URL:-http://127.0.0.1}"
 export USER_CENTER_APP_ID="${USER_CENTER_APP_ID:-local}"
@@ -55,6 +55,6 @@ echo "   点这个登录（会写 cookie 并跳转工作台）："
 echo "     ${HBCDCAGENT_BFF_PUBLIC_ORIGIN}/hbcdcagent/auth/mock?user=chenmin"
 echo "   工作台：${HBCDCAGENT_BFF_PUBLIC_ORIGIN}/hbcdcagent/workbench"
 echo "   可选 user=chenmin|liuyang|zhoujing|ops"
-echo "   从其他机器访问时设置 HBCDCAGENT_BFF_PUBLIC_ORIGIN=http://<公网主机>:50001"
+echo "   从其他机器访问时设置 HBCDCAGENT_BFF_PUBLIC_ORIGIN=http://<公网主机>:50002"
 
 hbcdcagent_wait
