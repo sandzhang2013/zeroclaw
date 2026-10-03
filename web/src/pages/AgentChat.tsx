@@ -23,6 +23,7 @@ import { SavePersonalSkillModal } from '@/components/SavePersonalSkillModal';
 import { ThinkingTranscript } from '@/components/ThinkingTranscript';
 import ApprovalBanner from '@/components/ApprovalBanner';
 import { AutonomySelect } from '@/components/AutonomySelect';
+import { resolveContextBarState } from '@/lib/contextBar';
 import { allocateSkillId, ApiError, savePersonalSkill, uploadAgentWorkspaceFile, uploadChatImage } from '@/lib/api';
 import {
   DEFAULT_WORKBENCH_AUTONOMY,
@@ -108,16 +109,23 @@ function compactTokens(n: number): string {
 /** Compact context meter for the composer toolbar, next to the model picker. */
 function ContextMeter({
   contextMaxTokens,
+  contextModelWindow,
   contextInputTokens,
 }: {
   contextMaxTokens: number | null;
+  contextModelWindow: number | null;
   contextInputTokens: number | null;
 }) {
-  if (!contextMaxTokens) return null;
+  const state = resolveContextBarState(
+    contextMaxTokens,
+    contextModelWindow,
+    contextInputTokens,
+  );
+  if (!state) return null;
 
-  const used = contextInputTokens ?? 0;
-  const max = contextMaxTokens;
-  const pct = max > 0 ? Math.min((used / max) * 100, 100) : 0;
+  const used = state.used;
+  const max = state.denominator;
+  const pct = state.percent;
   const full = `ctx: ${fmtTokens(used)} / ${fmtTokens(max)}  ${pct.toFixed(0)}%`;
 
   return (
@@ -227,6 +235,7 @@ export function AgentChatInner({
     pendingApproval,
     respondToApproval,
     contextMaxTokens,
+    contextModelWindow,
     contextInputTokens,
     sessionId,
   } = useAgent();
@@ -388,6 +397,13 @@ export function AgentChatInner({
         if (!startNewSession()) {
           addLocalMessage(t('agent.sessions_unavailable'));
         }
+        return true;
+
+      case 'upload':
+        // Same picker as the attach button — the input click is allowed here
+        // because runCommand fires from the user's Enter keypress, keeping
+        // the browser's user-activation requirement satisfied.
+        fileInputRef.current?.click();
         return true;
 
       case 'model': {
@@ -1265,7 +1281,7 @@ export function AgentChatInner({
                       </div>
                     )}
                   </div>
-                  <ContextMeter contextMaxTokens={contextMaxTokens} contextInputTokens={contextInputTokens} />
+                  <ContextMeter contextMaxTokens={contextMaxTokens} contextModelWindow={contextModelWindow} contextInputTokens={contextInputTokens} />
                 </div>
                 <button
                   type="button"

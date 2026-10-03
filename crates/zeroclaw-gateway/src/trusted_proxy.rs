@@ -6,7 +6,9 @@
 
 use axum::Json;
 use axum::http::{HeaderMap, StatusCode};
-use zeroclaw_api::principal::{AuthMethod, Principal};
+use zeroclaw_api::principal::{
+    AuthMethod, AuthenticatedIdentity, IdentitySubject, Principal,
+};
 use zeroclaw_api::{ROLE_OPS, UserAttrs, UserIdError, normalize_user_id};
 use zeroclaw_config::pairing::constant_time_eq;
 
@@ -101,8 +103,12 @@ pub fn require_trusted_proxy(
     if let Some(organization) = organization {
         attrs = attrs.with_organization(organization);
     }
-    let roles = attrs.role.clone().into_iter().collect::<Vec<_>>();
-    let principal = Principal::new(user_id.clone(), user_id, AuthMethod::Native).with_roles(roles);
+    let principal = Principal::from_identity(&AuthenticatedIdentity::new(
+        IdentitySubject::Roster {
+            principal_id: user_id,
+        },
+        AuthMethod::Native,
+    ));
     Ok((principal, attrs))
 }
 
@@ -132,8 +138,8 @@ pub fn has_bff_secret(headers: &HeaderMap) -> bool {
 /// Config / logs / org-skill writes. Pairing still works; BFF admin role also works.
 pub fn require_ops_auth(state: &AppState, headers: &HeaderMap) -> Result<(), AuthError> {
     if trusted_proxy_enabled(state) && has_bff_secret(headers) {
-        let (principal, _) = require_trusted_proxy(state, headers)?;
-        if principal.roles.iter().any(|r| r == ROLE_OPS) {
+        let (_, attrs) = require_trusted_proxy(state, headers)?;
+        if attrs.role.as_deref() == Some(ROLE_OPS) {
             return Ok(());
         }
         return Err(json_err(
@@ -231,7 +237,7 @@ mod tests {
             ]),
         )
         .unwrap();
-        assert_eq!(principal.user_id, "alice");
+        assert_eq!(principal.display_id, "alice");
         assert_eq!(attrs.user_id, "alice");
         assert_eq!(attrs.role.as_deref(), Some(ROLE_NORMAL));
         assert_eq!(attrs.region.as_deref(), Some("武汉"));

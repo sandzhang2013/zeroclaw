@@ -122,7 +122,7 @@ fn workspace_scope(state: &AppState, headers: &HeaderMap) -> Result<Option<Strin
     if trusted_proxy_enabled(state) && headers.get(HEADER_AUTH_SECRET).is_some() {
         let (principal, _) =
             require_trusted_proxy(state, headers).map_err(IntoResponse::into_response)?;
-        return Ok(Some(principal.user_id));
+        return Ok(Some(principal.display_id));
     }
     require_auth(state, headers).map_err(IntoResponse::into_response)?;
     Ok(None)

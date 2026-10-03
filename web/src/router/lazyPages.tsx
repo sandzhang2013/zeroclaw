@@ -11,6 +11,7 @@ export { default as AgentWorkspaceExplorer } from '../pages/AgentWorkspaceExplor
 export { default as Tools } from '../pages/Tools';
 export { default as Cron } from '../pages/Cron';
 export { default as Integrations } from '../pages/Integrations';
+export { default as Plugins } from '../pages/Plugins';
 export { default as Config } from '../pages/Config';
 export { default as Logs } from '../pages/Logs';
 export { default as Doctor } from '../pages/Doctor';

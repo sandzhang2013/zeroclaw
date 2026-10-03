@@ -16,6 +16,7 @@ use zeroclaw_config::workbench::{
 
 use super::AppState;
 use super::api_config::persist_and_swap;
+use crate::principal_gate::{ConfigWriteSet, RequestPrincipal, authorize_config_write};
 
 #[derive(Debug, Deserialize)]
 pub struct HomeQuery {
@@ -74,6 +75,7 @@ pub async fn handle_workbench_home_catalog_get(
 /// PUT /api/workbench/home/catalog — replace stored caps from the nested editor.
 pub async fn handle_workbench_home_catalog_put(
     State(state): State<AppState>,
+    principal: RequestPrincipal,
     headers: HeaderMap,
     Json(body): Json<HomeCatalogPut>,
 ) -> impl IntoResponse {
@@ -95,8 +97,17 @@ pub async fn handle_workbench_home_catalog_put(
     let mut working = state.config.read().clone();
     working.workbench.home.caps = caps.clone();
     working.mark_dirty("workbench.home.caps");
-    if let Err(e) = persist_and_swap(&state, working, &_cfg_guard).await {
-        return super::api_config::error_response(e);
+    let before = state.config.read().clone();
+    let authorization = match authorize_config_write(
+        &principal,
+        ConfigWriteSet::by_effect(&before, &working, ["workbench.home.caps"]),
+        &_cfg_guard,
+    ) {
+        Ok(authorization) => authorization,
+        Err(denied) => return denied.into_response(),
+    };
+    if let Err(response) = persist_and_swap(&state, authorization, working, _cfg_guard).await {
+        return response;
     }
     (StatusCode::OK, axum::Json(caps_to_edit_catalog(&caps))).into_response()
 }
