@@ -336,7 +336,7 @@ const translations: Record<Locale, Record<string, string>> = {
     'workbench.time_hours': '{n}小时前',
     'workbench.time_days': '{n}天前',
     'workbench.time_months': '{n}月前',
-    'workbench.home_title': '您好，我是AI疾控数智大脑-小卫。',
+    'workbench.home_title': '您好，我是数智疾控大脑-小卫。',
     'workbench.home_subtitle': '我能帮您更全面地查询、分析全省数据，及早发现异常、洞悉趋势，让决策更有依据~',
     'workbench.home_placeholder': '今天帮你做些什么？ @ 引用对话文件，/ 调用技能与指令',
     'workbench.home_workspace': '选择工作空间',
