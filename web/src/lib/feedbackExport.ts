@@ -70,3 +70,34 @@ export function feedbackReviewCsv(
   ];
   return `${lines.join('\n')}\n`;
 }
+
+export interface UsageExportLabels {
+  day: string;
+  user: string;
+  sessions: string;
+  asks: string;
+  replies: string;
+}
+
+export interface UsageExportRow {
+  day: string;
+  userId: string;
+  sessions: number;
+  asks: number;
+  replies: number;
+}
+
+/** One row per user per Beijing day. */
+export function usageDailyCsv(rows: UsageExportRow[], labels: UsageExportLabels): string {
+  const lines = [
+    csvLine([labels.day, labels.user, labels.sessions, labels.asks, labels.replies]),
+    ...rows.map((row) => csvLine([
+      row.day,
+      row.userId,
+      String(row.sessions),
+      String(row.asks),
+      String(row.replies),
+    ])),
+  ];
+  return `${lines.join('\n')}\n`;
+}

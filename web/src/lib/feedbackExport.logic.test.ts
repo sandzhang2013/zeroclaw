@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { feedbackReviewCsv, type FeedbackExportLabels } from './feedbackExport.ts';
+import { feedbackReviewCsv, usageDailyCsv, type FeedbackExportLabels } from './feedbackExport.ts';
 
 const labels: FeedbackExportLabels = {
   turns: '总轮数',
@@ -38,4 +38,12 @@ test('feedbackReviewCsv keeps the totals and escapes commas and quotes', () => {
   assert.match(csv, /"希望,只回答好"/);
   assert.match(csv, /"line\nnext"/);
   assert.match(csv, /sess-1/);
+});
+
+test('usageDailyCsv quotes a user id that contains a comma', () => {
+  const csv = usageDailyCsv(
+    [{ day: '2026-10-10', userId: 'chen,min', sessions: 2, asks: 4, replies: 3 }],
+    { day: '日期', user: '用户', sessions: '会话数', asks: '提问数', replies: '回复数' },
+  );
+  assert.equal(csv, '日期,用户,会话数,提问数,回复数\n2026-10-10,"chen,min",2,4,3\n');
 });

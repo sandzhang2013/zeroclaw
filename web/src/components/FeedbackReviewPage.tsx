@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ApiError, getSessionMessages, getSessions, getTurnFeedbackReview, type TurnFeedbackReview, type TurnFeedbackReviewEntry } from '@/lib/api';
+import { ApiError, getSessionMessages, getSessions, getTurnFeedbackReview, getTurnUsage, type TurnFeedbackReview, type TurnFeedbackReviewEntry, type TurnUsageReport } from '@/lib/api';
 import { t } from '@/lib/i18n';
 import { DISLIKE_REASONS, type DislikeReason } from '@/lib/turnFeedback';
 import type { SessionMessageRow } from '@/types/api';
 import { PageHeader } from '@/components/ui';
-import { feedbackReviewCsv, type FeedbackExportLabels, type FeedbackExportRow } from '@/lib/feedbackExport';
+import { feedbackReviewCsv, usageDailyCsv, type FeedbackExportLabels, type FeedbackExportRow } from '@/lib/feedbackExport';
+
+type ReviewTab = 'review' | 'usage';
 
 type Filter = 'all' | 'like' | 'dislike' | DislikeReason;
 
@@ -58,15 +60,43 @@ function exportRows(review: TurnFeedbackReview, names: Record<string, string>): 
   }));
 }
 
-function downloadReview(review: TurnFeedbackReview, names: Record<string, string>) {
-  const csv = `\uFEFF${feedbackReviewCsv(review, exportRows(review, names), exportLabels())}`;
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+function downloadCsv(filename: string, csv: string) {
+  const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = `feedback-${new Date().toISOString().slice(0, 10)}.csv`;
+  link.download = filename;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+function downloadReview(review: TurnFeedbackReview, names: Record<string, string>) {
+  downloadCsv(
+    `feedback-${new Date().toISOString().slice(0, 10)}.csv`,
+    feedbackReviewCsv(review, exportRows(review, names), exportLabels()),
+  );
+}
+
+function downloadUsage(report: TurnUsageReport) {
+  downloadCsv(
+    `usage-${new Date().toISOString().slice(0, 10)}.csv`,
+    usageDailyCsv(
+      report.rows.map((row) => ({
+        day: row.day,
+        userId: row.user_id,
+        sessions: row.sessions,
+        asks: row.asks,
+        replies: row.replies,
+      })),
+      {
+        day: t('workbench.usage_day'),
+        user: t('workbench.usage_user'),
+        sessions: t('workbench.usage_sessions'),
+        asks: t('workbench.usage_asks'),
+        replies: t('workbench.usage_replies'),
+      },
+    ),
+  );
 }
 
 function roleLabel(role: string): string {
@@ -76,7 +106,9 @@ function roleLabel(role: string): string {
 }
 
 export function FeedbackReviewPage() {
+  const [tab, setTab] = useState<ReviewTab>('review');
   const [review, setReview] = useState<TurnFeedbackReview | null>(null);
+  const [usage, setUsage] = useState<TurnUsageReport | null>(null);
   const [names, setNames] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>('dislike');
@@ -90,6 +122,14 @@ export function FeedbackReviewPage() {
     getTurnFeedbackReview()
       .then((body) => {
         if (live) setReview(body);
+      })
+      .catch((err: unknown) => {
+        if (!live) return;
+        setError(err instanceof ApiError ? err.message : t('workbench.feedback_review_load_failed'));
+      });
+    getTurnUsage()
+      .then((body) => {
+        if (live) setUsage(body);
       })
       .catch((err: unknown) => {
         if (!live) return;
@@ -154,18 +194,25 @@ export function FeedbackReviewPage() {
       <div className="border-b border-pc-border bg-pc-surface px-6 py-4">
         <PageHeader
           title={t('workbench.feedback_review')}
-          description={t('workbench.feedback_review_hint')}
-          actions={review ? (
+          description={tab === 'usage' ? t('workbench.usage_hint') : t('workbench.feedback_review_hint')}
+          actions={(tab === 'usage' ? usage : review) ? (
             <button
               type="button"
-              onClick={() => downloadReview(review, names)}
+              onClick={() => {
+                if (tab === 'usage' && usage) downloadUsage(usage);
+                else if (review) downloadReview(review, names);
+              }}
               className="h-8 rounded-[8px] border border-pc-border px-3 text-sm text-pc-text hover:bg-[var(--pc-hover)]"
             >
               {t('workbench.feedback_review_export')}
             </button>
           ) : null}
         />
-        {review ? (
+        <div className="mt-3 flex gap-2">
+          <FilterChip active={tab === 'review'} label={t('workbench.feedback_tab_review')} onClick={() => setTab('review')} />
+          <FilterChip active={tab === 'usage'} label={t('workbench.feedback_tab_usage')} onClick={() => setTab('usage')} />
+        </div>
+        {tab === 'review' && review ? (
           <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
             <CoverageStat label={t('workbench.feedback_review_turns')} value={review.coverage.turns} />
             <CoverageStat label={t('workbench.feedback_like')} value={review.coverage.like} />
@@ -176,7 +223,9 @@ export function FeedbackReviewPage() {
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
         {error ? <p className="mb-3 text-xs text-status-error">{error}</p> : null}
-        {review ? (
+        {tab === 'usage' ? (
+          <UsageTable report={usage} failed={error != null} />
+        ) : review ? (
           <>
             <div className="flex flex-wrap items-center gap-2">
               <FilterChip
@@ -280,6 +329,40 @@ export function FeedbackReviewPage() {
         )}
       </div>
     </div>
+  );
+}
+
+function UsageTable({ report, failed }: { report: TurnUsageReport | null; failed: boolean }) {
+  if (!report) {
+    if (failed) return null;
+    return <p className="text-sm text-pc-text-muted">{t('agent.session_loading')}</p>;
+  }
+  if (report.rows.length === 0) {
+    return <p className="text-sm text-pc-text-muted">{t('workbench.usage_empty')}</p>;
+  }
+  return (
+    <table className="w-full border-collapse text-sm">
+      <thead>
+        <tr className="text-left text-xs text-pc-text-muted">
+          <th className="py-2 pr-3 font-medium">{t('workbench.usage_day')}</th>
+          <th className="py-2 pr-3 font-medium">{t('workbench.usage_user')}</th>
+          <th className="py-2 pr-3 font-medium">{t('workbench.usage_sessions')}</th>
+          <th className="py-2 pr-3 font-medium">{t('workbench.usage_asks')}</th>
+          <th className="py-2 font-medium">{t('workbench.usage_replies')}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {report.rows.map((row) => (
+          <tr key={`${row.day}:${row.user_id}`} className="border-t border-pc-border">
+            <td className="py-2 pr-3 tabular-nums text-pc-text">{row.day}</td>
+            <td className="py-2 pr-3 text-pc-text">{row.user_id}</td>
+            <td className="py-2 pr-3 tabular-nums text-pc-text">{row.sessions}</td>
+            <td className="py-2 pr-3 tabular-nums text-pc-text">{row.asks}</td>
+            <td className="py-2 tabular-nums text-pc-text">{row.replies}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 

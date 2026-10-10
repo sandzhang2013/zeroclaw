@@ -2173,6 +2173,10 @@ pub async fn run_gateway_with_plugin_webhooks(
             "/api/turn-feedback/review",
             get(api_turn_feedback::handle_review_turn_feedback),
         )
+        .route(
+            "/api/turn-feedback/usage",
+            get(api_turn_feedback::handle_turn_usage),
+        )
         .route("/api/version/check", get(version::handle_version_check))
         .route("/api/version/upgrade", post(version::handle_version_upgrade))
         .route(

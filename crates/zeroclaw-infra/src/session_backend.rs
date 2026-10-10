@@ -86,6 +86,15 @@ pub struct TimestampedMessage {
     pub created_at: Option<DateTime<Utc>>,
 }
 
+/// One stored message reduced to the fields a daily usage rollup needs.
+/// The body stays in the transcript; this row does not copy it.
+#[derive(Debug, Clone)]
+pub struct MessageActivity {
+    pub session_key: String,
+    pub role: String,
+    pub created_at: Option<DateTime<Utc>>,
+}
+
 /// Trait for session persistence backends.
 /// Implementations must be `Send + Sync` for sharing across async tasks.
 pub trait SessionBackend: Send + Sync {
@@ -112,6 +121,25 @@ pub trait SessionBackend: Send + Sync {
             .map(|message| TimestampedMessage {
                 message,
                 created_at: None,
+            })
+            .collect()
+    }
+
+    /// Every stored message's session, role, and timestamp. The default
+    /// walks `load_with_timestamps` and drops the body. Backends with a
+    /// message table should override this so a usage report does not read
+    /// every transcript into memory.
+    fn list_message_activity(&self) -> Vec<MessageActivity> {
+        self.list_sessions()
+            .into_iter()
+            .flat_map(|session_key| {
+                self.load_with_timestamps(&session_key)
+                    .into_iter()
+                    .map(move |row| MessageActivity {
+                        session_key: session_key.clone(),
+                        role: row.message.role,
+                        created_at: row.created_at,
+                    })
             })
             .collect()
     }

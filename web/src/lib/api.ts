@@ -488,6 +488,23 @@ export function getTurnFeedbackReview(): Promise<TurnFeedbackReview> {
   return apiFetch<TurnFeedbackReview>("/api/turn-feedback/review");
 }
 
+export interface UsageDayRow {
+  day: string;
+  user_id: string;
+  sessions: number;
+  asks: number;
+  replies: number;
+}
+
+export interface TurnUsageReport {
+  timezone: string;
+  rows: UsageDayRow[];
+}
+
+export function getTurnUsage(): Promise<TurnUsageReport> {
+  return apiFetch<TurnUsageReport>("/api/turn-feedback/usage");
+}
+
 export function putTurnFeedback(body: {
   session_id: string;
   message_key: string;

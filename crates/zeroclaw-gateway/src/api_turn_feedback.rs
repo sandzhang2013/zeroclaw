@@ -11,7 +11,7 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
-use chrono::Utc;
+use chrono::{DateTime, FixedOffset, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::AppState;
@@ -110,6 +110,32 @@ pub async fn handle_review_turn_feedback(
         Ok(body) => (StatusCode::OK, Json(body)).into_response(),
         Err(error) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &error),
     }
+}
+
+/// `GET /api/turn-feedback/usage` — asks and replies per user per Beijing day.
+///
+/// There is no login log. A row counts messages still stored on a session
+/// that carries a workbench `user_id`.
+pub async fn handle_turn_usage(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(error) = crate::trusted_proxy::require_ops_auth(&state, &headers) {
+        return error.into_response();
+    }
+    let rows = state
+        .session_backend
+        .as_ref()
+        .map(|backend| usage_from_backend(backend.as_ref()))
+        .unwrap_or_default();
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "timezone": "+08:00",
+            "rows": rows,
+        })),
+    )
+        .into_response()
 }
 
 /// `PUT /api/turn-feedback`
@@ -411,7 +437,102 @@ fn coverage_for(
 
 fn normalize_turn_content(content: &str) -> String {
     let collapsed = content.split_whitespace().collect::<Vec<_>>().join(" ");
-    collapsed.chars().take(400).collect()
+    // Match `String.prototype.slice(0, 400)` in `normalizeTurnContent`.
+    // An emoji is two UTF-16 code units, so a character cut keeps one extra
+    // scalar and the saved rating key no longer matches the stored reply.
+    take_utf16_code_units(&collapsed, 400)
+}
+
+fn take_utf16_code_units(text: &str, max_units: usize) -> String {
+    let mut units = 0;
+    let mut end = 0;
+    for (index, ch) in text.char_indices() {
+        let width = ch.len_utf16();
+        if units + width > max_units {
+            break;
+        }
+        units += width;
+        end = index + ch.len_utf8();
+    }
+    text[..end].to_string()
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct UsageDayRow {
+    day: String,
+    user_id: String,
+    sessions: u32,
+    asks: u32,
+    replies: u32,
+}
+
+fn shanghai_offset() -> FixedOffset {
+    FixedOffset::east_opt(8 * 3600).expect("eight hours is a valid offset")
+}
+
+fn shanghai_day(instant: DateTime<Utc>) -> String {
+    instant
+        .with_timezone(&shanghai_offset())
+        .format("%Y-%m-%d")
+        .to_string()
+}
+
+fn usage_from_backend(
+    backend: &dyn zeroclaw_infra::session_backend::SessionBackend,
+) -> Vec<UsageDayRow> {
+    let users: HashMap<String, String> = backend
+        .list_sessions_with_metadata()
+        .into_iter()
+        .filter_map(|meta| {
+            let user_id = meta
+                .user_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|id| !id.is_empty())?;
+            Some((meta.key, user_id.to_string()))
+        })
+        .collect();
+    let events = backend
+        .list_message_activity()
+        .into_iter()
+        .filter_map(|row| {
+            let created_at = row.created_at?;
+            let user_id = users.get(&row.session_key)?.clone();
+            Some((user_id, row.session_key, row.role, created_at))
+        })
+        .collect();
+    fold_usage(events)
+}
+
+fn fold_usage(events: Vec<(String, String, String, DateTime<Utc>)>) -> Vec<UsageDayRow> {
+    let mut grouped: HashMap<(String, String), (HashSet<String>, u32, u32)> = HashMap::new();
+    for (user_id, session_key, role, created_at) in events {
+        let day = shanghai_day(created_at);
+        let entry = grouped.entry((day, user_id)).or_default();
+        entry.0.insert(session_key);
+        match role.as_str() {
+            "user" => entry.1 += 1,
+            "assistant" => entry.2 += 1,
+            _ => {}
+        }
+    }
+    let mut rows: Vec<UsageDayRow> = grouped
+        .into_iter()
+        .map(|((day, user_id), (sessions, asks, replies))| UsageDayRow {
+            day,
+            user_id,
+            sessions: sessions.len() as u32,
+            asks,
+            replies,
+        })
+        .collect();
+    rows.sort_by(|left, right| {
+        right
+            .day
+            .cmp(&left.day)
+            .then(left.user_id.cmp(&right.user_id))
+    });
+    rows
 }
 
 fn count_reason(entries: &[ReviewEntry], reason: DislikeReason) -> u32 {
@@ -674,6 +795,131 @@ mod tests {
         assert_eq!(review["coverage"]["like"], 0);
         assert_eq!(review["coverage"]["dislike"], 1);
         assert_eq!(review["coverage"]["unrated"], 2);
+    }
+
+    #[tokio::test]
+    async fn coverage_matches_a_rating_key_cut_on_utf16_units() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut state = state_in(&tmp);
+        let backend =
+            zeroclaw_infra::session_sqlite::SqliteSessionBackend::new(tmp.path()).unwrap();
+        let reply = format!("{}😀{}", "测".repeat(100), "测".repeat(400));
+        let cut = normalize_turn_content(&reply);
+        assert!(cut.contains('😀'));
+        assert_eq!(cut.chars().count(), 399);
+        assert_eq!(cut.encode_utf16().count(), 400);
+        let key = format!("sess-1:0:{cut}");
+        backend
+            .append(
+                "gw_sess-1",
+                &zeroclaw_api::model_provider::ChatMessage::assistant(reply),
+            )
+            .unwrap();
+        state.session_backend = Some(std::sync::Arc::new(backend));
+
+        let saved = handle_save_turn_feedback(
+            State(state.clone()),
+            headers("alice"),
+            Json(TurnFeedbackPut {
+                session_id: "sess-1".into(),
+                message_key: key,
+                verdict: Some(TurnVerdict::Like),
+                reason: None,
+                comment: String::new(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(saved.status(), StatusCode::OK);
+
+        let review = body_json(
+            handle_review_turn_feedback(State(state), ops_headers())
+                .await
+                .into_response(),
+        )
+        .await;
+        assert_eq!(review["coverage"]["turns"], 1);
+        assert_eq!(review["coverage"]["like"], 1);
+        assert_eq!(review["coverage"]["unrated"], 0);
+        assert_eq!(review["summary"]["like"], 1);
+    }
+
+    #[test]
+    fn usage_days_follow_shanghai_and_split_users() {
+        let evening = DateTime::parse_from_rfc3339("2026-10-10T15:30:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let after_midnight = DateTime::parse_from_rfc3339("2026-10-10T16:30:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let rows = fold_usage(vec![
+            ("alice".into(), "sess-1".into(), "user".into(), evening),
+            ("alice".into(), "sess-1".into(), "assistant".into(), evening),
+            ("alice".into(), "sess-2".into(), "user".into(), evening),
+            ("bob".into(), "sess-3".into(), "user".into(), after_midnight),
+            ("bob".into(), "sess-3".into(), "tool".into(), after_midnight),
+        ]);
+        assert_eq!(
+            rows,
+            vec![
+                UsageDayRow {
+                    day: "2026-10-11".into(),
+                    user_id: "bob".into(),
+                    sessions: 1,
+                    asks: 1,
+                    replies: 0,
+                },
+                UsageDayRow {
+                    day: "2026-10-10".into(),
+                    user_id: "alice".into(),
+                    sessions: 2,
+                    asks: 2,
+                    replies: 1,
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn usage_counts_a_stored_user_message_for_ops_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut state = state_in(&tmp);
+        let backend =
+            zeroclaw_infra::session_sqlite::SqliteSessionBackend::new(tmp.path()).unwrap();
+        backend
+            .append(
+                "gw_sess-1",
+                &zeroclaw_api::model_provider::ChatMessage::user("你好"),
+            )
+            .unwrap();
+        backend.set_session_user_id("gw_sess-1", "chenmin").unwrap();
+        backend
+            .append(
+                "gw_sess-2",
+                &zeroclaw_api::model_provider::ChatMessage::user("匿名"),
+            )
+            .unwrap();
+        state.session_backend = Some(std::sync::Arc::new(backend));
+
+        let denied = handle_turn_usage(State(state.clone()), headers("alice"))
+            .await
+            .into_response();
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+
+        let body = body_json(
+            handle_turn_usage(State(state), ops_headers())
+                .await
+                .into_response(),
+        )
+        .await;
+        assert_eq!(body["timezone"], "+08:00");
+        let rows = body["rows"].as_array().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["user_id"], "chenmin");
+        assert_eq!(rows[0]["asks"], 1);
+        assert_eq!(rows[0]["replies"], 0);
+        assert_eq!(rows[0]["sessions"], 1);
+        assert_eq!(rows[0]["day"], shanghai_day(Utc::now()));
     }
 
     #[test]

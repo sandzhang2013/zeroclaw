@@ -904,6 +904,33 @@ impl SessionBackend for SqliteSessionBackend {
         rows.filter_map(|r| r.ok()).collect()
     }
 
+    fn list_message_activity(&self) -> Vec<crate::session_backend::MessageActivity> {
+        use crate::session_backend::MessageActivity;
+        let conn = self.conn.lock();
+        let mut stmt = match conn
+            .prepare("SELECT session_key, role, created_at FROM sessions ORDER BY id ASC")
+        {
+            Ok(stmt) => stmt,
+            Err(_) => return Vec::new(),
+        };
+        let rows = match stmt.query_map([], |row| {
+            let created_at_raw: Option<String> = row.get(2).ok();
+            let created_at = created_at_raw
+                .as_deref()
+                .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                .map(|value| value.with_timezone(&Utc));
+            Ok(MessageActivity {
+                session_key: row.get(0)?,
+                role: row.get(1)?,
+                created_at,
+            })
+        }) {
+            Ok(rows) => rows,
+            Err(_) => return Vec::new(),
+        };
+        rows.filter_map(|row| row.ok()).collect()
+    }
+
     fn append(&self, session_key: &str, message: &ChatMessage) -> std::io::Result<()> {
         let conn = self.conn.lock();
         let now = Utc::now().to_rfc3339();
@@ -3289,9 +3316,7 @@ mod tests {
     fn stored_principal_wins_over_a_different_user_id() {
         let tmp = TempDir::new().unwrap();
         let backend = SqliteSessionBackend::new(tmp.path()).unwrap();
-        backend
-            .append("gw_mix", &ChatMessage::user("hi"))
-            .unwrap();
+        backend.append("gw_mix", &ChatMessage::user("hi")).unwrap();
         backend.set_session_user_id("gw_mix", "alice").unwrap();
         backend
             .set_session_principal(
