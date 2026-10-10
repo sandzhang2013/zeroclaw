@@ -582,12 +582,14 @@ async fn workbench_without_sso_config_shows_login_error_page() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert!(content_type.starts_with("text/html"));
     assert!(html.contains("无法进入工作台"));
+    assert!(html.contains("省统筹平台带票据进入"));
+    assert!(html.contains("省统筹平台门户点「数智疾控」"));
     assert!(html.contains("/hbcdcagent/auth/callback"));
-    assert!(html.contains("USER_CENTER_LOGIN_URL"));
-    assert!(html.contains("查租户区域代码 /console/tenant/detail"));
+    assert!(html.contains("HBCDCAGENT_SSO_CLIENT_ID"));
     assert!(html.contains("未配置"));
     assert!(html.contains("未执行"));
-    assert!(html.contains("重新登录"));
+    assert!(!html.contains("USER_CENTER_LOGIN_URL"));
+    assert!(!html.contains("重新登录"));
     uc_h.abort();
     up_h.abort();
 }

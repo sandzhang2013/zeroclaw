@@ -33,7 +33,7 @@ test('parsePlatformPayload maps BFF roles and skips login identity into session_
   });
   assert.ok(user);
   assert.equal(user.source, 'platform');
-  assert.equal(user.role, '高级用户');
+  assert.equal(user.role, '普通用户');
   assert.equal(user.userId.includes(':'), false);
   const mock = switchableWorkbenchUser(user);
   assert.equal(mock.source, 'mock');
@@ -44,7 +44,7 @@ test('normalizeRole and storage id stay UI-only', () => {
   assert.equal(normalizeRole('管理员'), '管理员');
   assert.equal(normalizeRole('运维'), '普通用户');
   assert.equal(normalizeRole('ops'), '管理员');
-  assert.equal(roleI18nKey('高级用户'), 'workbench.role_advanced');
+  assert.equal(roleI18nKey('高级用户'), 'workbench.role_user');
   assert.equal(workspaceStorageId('liu/yang'), 'liu_yang');
 });
 
@@ -63,7 +63,7 @@ test('parseMockUserCookie only accepts catalog users', () => {
   const user = parseMockUserCookie('zeroclaw_mock_user=liuyang; Path=/');
   assert.ok(user);
   assert.equal(user.userId, 'liuyang');
-  assert.equal(user.role, '高级用户');
+  assert.equal(user.role, '普通用户');
   assert.equal(user.region, '武汉市');
 });
 
@@ -86,7 +86,7 @@ test('parsePlatformPayload keeps colon in userId and does not mint session keys'
 
 test('normalizeRole maps aliases and unknown values to 普通用户', () => {
   assert.equal(normalizeRole('普通用户'), '普通用户');
-  assert.equal(normalizeRole('advanced'), '高级用户');
+  assert.equal(normalizeRole('advanced'), '普通用户');
   assert.equal(normalizeRole('  ops  '), '管理员');
   assert.equal(normalizeRole('admin'), '普通用户');
   assert.equal(normalizeRole(undefined), '普通用户');

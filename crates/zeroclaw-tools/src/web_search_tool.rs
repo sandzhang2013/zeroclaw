@@ -4144,11 +4144,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_serply_connection_refused_error_is_query_free() {
-        // Reserve the port without listening so parallel tests cannot reuse it
-        // before the request and turn connection refusal into a different error.
+        // Pick a free port, then release it. Holding a bound socket that is
+        // not listening blackholes SYNs on macOS (the client times out)
+        // instead of returning connection refused.
         let socket = tokio::net::TcpSocket::new_v4().unwrap();
         socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
         let addr = socket.local_addr().unwrap();
+        drop(socket);
 
         let (_tmp, tool) = serply_tool_with_key("serply-test-key");
         let client = reqwest::Client::builder()

@@ -13,12 +13,14 @@ import {
   ListChecks,
   MessageSquare,
   Monitor,
+  Plug,
   Puzzle,
   Settings,
   Smartphone,
   Sparkles,
   Stethoscope,
   Terminal,
+  ThumbsUp,
   Workflow,
   Wrench,
 } from 'lucide-react';
@@ -42,8 +44,8 @@ interface NavGroup {
 }
 
 // Grouped navigation. Every existing route/link is preserved — the flat list
-// is just organized under four clusters so the rail reads top-down by task:
-// Home → Chat → Configure → Operations. On the desktop rail the cluster
+// is just organized under three clusters so the rail reads top-down by task:
+// Home → Configure → Operations. On the desktop rail the cluster
 // boundaries become thin divider rules (no text headings); the mobile drawer
 // still renders the headings as full labels.
 const navGroups: NavGroup[] = [
@@ -55,15 +57,12 @@ const navGroups: NavGroup[] = [
     ],
   },
   {
-    headingKey: 'nav.group.chat',
-    items: [{ to: '/agents', icon: MessageSquare, labelKey: 'nav.agents' }],
-  },
-  {
     headingKey: 'nav.group.configure',
     items: [
       { to: '/config', icon: Settings, labelKey: 'nav.config' },
       { to: '/config/agents', icon: Bot, labelKey: 'nav.agent' },
       { to: '/tools', icon: Wrench, labelKey: 'nav.tools' },
+      { to: '/mcp-config', icon: Plug, labelKey: 'nav.mcp_tools' },
       { to: '/skills', icon: Sparkles, labelKey: 'nav.skills' },
       { to: '/sops', icon: Workflow, labelKey: 'nav.sops' },
       { to: '/runs', icon: ListChecks, labelKey: 'nav.runs' },
@@ -76,6 +75,7 @@ const navGroups: NavGroup[] = [
     headingKey: 'nav.group.operations',
     items: [
       { to: '/logs', icon: Activity, labelKey: 'nav.logs' },
+      { to: '/feedback', icon: ThumbsUp, labelKey: 'nav.feedback' },
       { to: '/pairing', icon: Smartphone, labelKey: 'nav.pairing' },
       { to: '/doctor', icon: Stethoscope, labelKey: 'nav.doctor' },
       { to: '/canvas', icon: Monitor, labelKey: 'nav.canvas' },

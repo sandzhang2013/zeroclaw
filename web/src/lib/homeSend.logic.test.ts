@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   canSubmitHomeMessage,
   composeHomeCapMessage,
+  resolveHomeCapSkill,
   composeHomeMessage,
   composeInstalledSkillMessage,
   homeSessionTitle,
@@ -19,6 +20,22 @@ const weekly = {
   kind: 'outline',
   prompts: [{ text: '帮我起草本周传染病监测周报提纲。' }],
 };
+
+test('resolveHomeCapSkill keeps an installed chip id and follows a renamed personal skill', () => {
+  const skills = [
+    { name: 'sk0001', title: '疫情概况', fromPlaza: true },
+    { name: 'ps0002', title: '疫苗覆盖' },
+  ];
+  assert.deepEqual(resolveHomeCapSkill({ id: 'sk0001', label: '疫情概况' }, skills), {
+    id: 'sk0001',
+    label: '疫情概况',
+  });
+  assert.deepEqual(resolveHomeCapSkill({ id: 'sk0002', label: '疫苗覆盖' }, skills), {
+    id: 'ps0002',
+    label: '疫苗覆盖',
+  });
+  assert.equal(resolveHomeCapSkill({ id: 'sk0003', label: '病例检索' }, skills), null);
+});
 
 test('composeHomeCapMessage invokes an installed skill by directory id', () => {
   const text = composeHomeCapMessage({

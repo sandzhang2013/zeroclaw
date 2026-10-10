@@ -938,7 +938,7 @@ pub async fn handle_save_personal_skill(
     let dir = personal_skills_dir(&config, &attrs.user_id, &agent).join(&name);
     let reimport = !body.files.is_empty()
         && dir.join("SKILL.md").is_file()
-        && !crate::api_skill_center::is_plaza_copy(&config, &dir, &name, &attrs.user_id);
+        && !crate::api_skill_center::is_plaza_copy(&dir);
     if !reimport
         && (crate::api_skill_center::user_has_skill(&config, &attrs.user_id, &name)
             || crate::api_skill_center::platform_skill_id_occupied(&config, &name)
@@ -1030,12 +1030,7 @@ pub async fn handle_list_personal_skills(
                 "version": version,
                 "enabled": zeroclaw_runtime::skills::skill_directory_enabled(&path),
                 "blocked_reason": blocked_reason,
-                "from_plaza": crate::api_skill_center::is_plaza_copy(
-                    &config,
-                    &path,
-                    name,
-                    &attrs.user_id,
-                ),
+                "from_plaza": crate::api_skill_center::is_plaza_copy(&path),
                 "review_status": crate::api_skill_center::review_status_for_submitter(
                     &config,
                     &attrs.user_id,
@@ -1089,12 +1084,7 @@ pub async fn handle_read_personal_skill(
             "description": doc.frontmatter.description,
             "body": doc.body,
             "enabled": zeroclaw_runtime::skills::skill_directory_enabled(&dir),
-            "from_plaza": crate::api_skill_center::is_plaza_copy(
-                &config,
-                &dir,
-                &name,
-                &attrs.user_id,
-            ),
+            "from_plaza": crate::api_skill_center::is_plaza_copy(&dir),
             "review_status": crate::api_skill_center::review_status_for_submitter(
                 &config,
                 &attrs.user_id,
@@ -1138,7 +1128,7 @@ pub async fn handle_write_personal_skill(
         )
             .into_response();
     }
-    if crate::api_skill_center::is_plaza_copy(&config, &dir, &name, &attrs.user_id) {
+    if crate::api_skill_center::is_plaza_copy(&dir) {
         return (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({
@@ -1737,9 +1727,7 @@ pub async fn handle_install_plaza_skill(
         Err(resp) => return resp,
     };
     let dest = personal_skills_dir(&config, &attrs.user_id, agent).join(&name);
-    if dest.join("SKILL.md").is_file()
-        && !crate::api_skill_center::is_plaza_copy(&config, &dest, &name, &attrs.user_id)
-    {
+    if dest.join("SKILL.md").is_file() && !crate::api_skill_center::is_plaza_copy(&dest) {
         return (
             StatusCode::CONFLICT,
             Json(serde_json::json!({
@@ -1994,7 +1982,7 @@ mod tests {
             }),
         )
         .await;
-        assert_eq!(response.status(), StatusCode::CREATED);
+        assert_eq!(response.status(), StatusCode::CONFLICT);
         let expected = state
             .config
             .read()

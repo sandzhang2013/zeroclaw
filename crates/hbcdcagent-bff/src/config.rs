@@ -33,6 +33,10 @@ pub struct Config {
     pub ticket_sso: Option<crate::ticket::TicketSso>,
     /// Origins allowed to iframe the workbench. Empty keeps `frame-ancestors 'none'`.
     pub frame_ancestors: Vec<String>,
+    /// Loopback origin of the MCP tool admin page. The BFF strips
+    /// [`Self::MCP_TOOLS_PREFIX`] and forwards there. Not the public URL.
+    pub mcp_tools_upstream: String,
+    pub mcp_tools_host: String,
 }
 
 impl Config {
@@ -48,6 +52,11 @@ impl Config {
             .parse()
             .context("HBCDCAGENT_BFF_SESSION_TTL_SECS")?;
         let (upstream, upstream_host) = parse_upstream(&required("HBCDCAGENT_BFF_UPSTREAM")?)?;
+        let (mcp_tools_upstream, mcp_tools_host) = parse_upstream(&env_or(
+            "HBCDCAGENT_BFF_MCP_TOOLS_UPSTREAM",
+            "http://127.0.0.1:9100",
+        ))
+        .context("HBCDCAGENT_BFF_MCP_TOOLS_UPSTREAM")?;
         Ok(Self {
             listen,
             upstream,
@@ -81,6 +90,8 @@ impl Config {
             frame_ancestors: parse_frame_ancestors(
                 &env::var("HBCDCAGENT_BFF_FRAME_ANCESTORS").unwrap_or_default(),
             )?,
+            mcp_tools_upstream,
+            mcp_tools_host,
         })
     }
 
@@ -92,6 +103,9 @@ impl Config {
     pub const LOGOUT_PATH: &'static str = "/hbcdcagent/auth/logout";
     /// 智能预警票据验票。文档里的 `/sso/auth/verify` 在路由上另挂一份。
     pub const TICKET_VERIFY_PATH: &'static str = "/hbcdcagent/sso/auth/verify";
+    /// Public path of the MCP tool admin page. The browser page lives here;
+    /// the Dashboard shell is a different route so a refresh stays in the SPA.
+    pub const MCP_TOOLS_PREFIX: &'static str = "/hbcdcagent/mcp-tools";
 
     pub fn workbench_path() -> &'static str {
         "/hbcdcagent/workbench"
@@ -126,6 +140,8 @@ impl Config {
             logout_url: None,
             ticket_sso: None,
             frame_ancestors: Vec::new(),
+            mcp_tools_upstream: "http://127.0.0.1:9100".into(),
+            mcp_tools_host: "127.0.0.1:9100".into(),
         }
     }
 
@@ -314,6 +330,8 @@ mod tests {
             logout_url: None,
             ticket_sso: None,
             frame_ancestors: Vec::new(),
+            mcp_tools_upstream: "http://127.0.0.1:9100".into(),
+            mcp_tools_host: "127.0.0.1:9100".into(),
         };
         let url = cfg.login_redirect().expect("url");
         assert!(url.contains(

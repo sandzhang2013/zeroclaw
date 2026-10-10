@@ -132,6 +132,9 @@ impl SqliteMemory {
         zeroclaw_config::schema::v2::migrate_sqlite_memory_to_v3(db_path, &conn)?;
         Self::init_schema(&conn)?;
         zeroclaw_config::schema::v2::migrate_sqlite_memory_tenant_unique(db_path, &conn)?;
+        // The tenant-unique rebuild creates `memories` without `principal_id`.
+        // Re-apply the additive columns after it, the same way v3 does.
+        Self::init_schema(&conn)?;
         Ok(conn)
     }
 
@@ -1497,8 +1500,8 @@ impl SqliteMemory {
 
 impl SqliteMemory {
     /// The physical-key prefix of a private-plane row: the owner, namespace
-    /// and tenant of its scope. The composite `UNIQUE (agent_id, key)` table
-    /// constraint predates the principal dimension, so private rows encode
+    /// and tenant of its scope. Uniqueness is `(agent_id, tenant_id, key)`,
+    /// which predates the principal dimension, so private rows encode
     /// every non-agent scope dimension in their physical key; that is what
     /// makes a conflict mean "this scope's own row" and nothing else. The
     /// `principal_id`, `namespace` and `tenant_id` COLUMNS remain the
@@ -1944,7 +1947,7 @@ impl Memory for SqliteMemory {
                     (SELECT id FROM agents WHERE alias = ?9 LIMIT 1),
                     ?10, ?11
                  )
-                 ON CONFLICT(agent_id, key) DO UPDATE SET
+                 ON CONFLICT(agent_id, ifnull(tenant_id, ''), key) DO UPDATE SET
                     content = excluded.content,
                     category = excluded.category,
                     updated_at = excluded.updated_at,

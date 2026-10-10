@@ -6,7 +6,6 @@ import { findActiveNavPath } from "./sidebarNav.ts";
 const navPaths = [
   "/workbench",
   "/dashboard",
-  "/agents",
   "/config",
   "/config/agents",
   "/tools",
@@ -16,6 +15,7 @@ const navPaths = [
   "/integrations",
   "/cron",
   "/logs",
+  "/feedback",
   "/pairing",
   "/doctor",
   "/canvas",
@@ -49,7 +49,6 @@ test("nested route families keep their owning sidebar destination active", () =>
   assert.equal(findActiveNavPath("/dashboard", navPaths), "/dashboard");
   assert.equal(findActiveNavPath("/workbench", navPaths), "/workbench");
   assert.equal(findActiveNavPath("/workbench/deepseek", navPaths), "/workbench");
-  assert.equal(findActiveNavPath("/agents", navPaths), "/agents");
   assert.equal(findActiveNavPath("/sops/new", navPaths), "/sops");
   assert.equal(findActiveNavPath("/sops/example/edit", navPaths), "/sops");
   assert.equal(findActiveNavPath("/runs/example/123", navPaths), "/runs");

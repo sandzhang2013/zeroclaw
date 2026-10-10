@@ -40,6 +40,20 @@ pub struct SessionMetadata {
     pub principal_id: Option<String>,
 }
 
+/// A platform user owns a session when its roster principal matches, or when
+/// the row predates that key and still carries only `user_id`.
+///
+/// A stored `principal_id` wins. A row that says `user_id = alice` but
+/// `principal_id = user:bob` is Bob's.
+#[must_use]
+pub fn session_belongs_to_platform_user(meta: &SessionMetadata, user_id: &str) -> bool {
+    let roster = zeroclaw_api::principal::PrincipalId::for_roster(user_id);
+    match meta.principal_id.as_deref() {
+        Some(principal) => principal == roster.as_str(),
+        None => meta.user_id.as_deref() == Some(user_id),
+    }
+}
+
 /// Structured routing context recorded alongside a session. Mirrors the
 /// `ChannelMessage` fields the orchestrator uses to compose
 /// `conversation_history_key` so the session row can be queried by
@@ -241,7 +255,7 @@ pub trait SessionBackend: Send + Sync {
     fn list_sessions_for_user(&self, user_id: &str) -> Vec<SessionMetadata> {
         self.list_sessions_with_metadata()
             .into_iter()
-            .filter(|m| m.user_id.as_deref() == Some(user_id))
+            .filter(|m| session_belongs_to_platform_user(m, user_id))
             .collect()
     }
 

@@ -42,14 +42,14 @@ export interface ThemeContextValue {
 }
 
 export const ThemeContext = createContext<ThemeContextValue>({
-  theme: 'dark',
+  theme: 'light',
   accent: 'cyan',
-  colorTheme: 'operator-dark',
+  colorTheme: 'operator-light',
   uiFont: 'system',
   monoFont: 'jetbrains',
   uiFontSize: 15,
   monoFontSize: 14,
-  resolvedTheme: 'dark',
+  resolvedTheme: 'light',
   setTheme: () => {},
   setAccent: () => {},
   setColorTheme: () => {},
@@ -113,9 +113,9 @@ interface StoredTheme {
 }
 
 const DEFAULTS: StoredTheme = {
-  theme: 'dark',
+  theme: 'light',
   accent: 'cyan',
-  colorTheme: 'operator-dark',
+  colorTheme: 'operator-light',
   uiFont: 'system',
   monoFont: 'jetbrains',
   uiFontSize: 15,
@@ -217,7 +217,7 @@ function resolveThemeScheme(mode: ThemeMode, colorTheme: ColorThemeId): 'dark' |
   if (mode === 'oled') return 'oled';
   const resolved = resolveColorTheme(mode, colorTheme);
   const ct = colorThemeMap[resolved];
-  return ct?.scheme ?? 'dark';
+  return ct?.scheme ?? 'light';
 }
 
 function fontVars(uiFont: UiFont, monoFont: MonoFont, uiFontSize: number, monoFontSize: number) {
@@ -240,7 +240,7 @@ function persistThemeBoot(scheme: 'light' | 'dark', bg: string) {
 function applyStoredTheme(s: StoredTheme) {
   const resolvedId = resolveColorTheme(s.theme, s.colorTheme);
   const ct = colorThemeMap[resolvedId];
-  const themeVars = ct?.vars ?? colorThemeMap[DEFAULT_DARK_THEME].vars;
+  const themeVars = ct?.vars ?? colorThemeMap[DEFAULT_LIGHT_THEME].vars;
   applyVars({
     ...themeVars,
     ...accents[s.accent],

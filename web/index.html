@@ -20,6 +20,7 @@
             } catch (e2) {}
             var mode = stored && stored.theme;
             var light =
+              !mode ||
               mode === "light" ||
               (mode === "system" &&
                 window.matchMedia &&

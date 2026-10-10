@@ -1,6 +1,6 @@
 import { memo, useState, useEffect, useRef, useCallback } from 'react';
 import { Link, Navigate, useParams } from 'react-router-dom';
-import { ArrowUp, Square, User, AlertCircle, Copy, Check, X, Trash2, Minimize2, Maximize2, ChevronDown, Wrench, PanelRightClose, PanelRightOpen, Plus, Mic, Loader2, Pencil, FolderOpen, ImagePlus, Sparkles } from 'lucide-react';
+import { ArrowUp, Square, User, AlertCircle, Copy, Check, X, Trash2, Minimize2, Maximize2, ChevronDown, Wrench, PanelRightClose, PanelRightOpen, Plus, Mic, Loader2, Pencil, FolderOpen, ImagePlus } from 'lucide-react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { AgentProvider, useAgent, type ChatMessage } from '@/contexts/AgentContext';
@@ -19,12 +19,17 @@ import {
 import ToolCallCard from '@/components/ToolCallCard';
 import { ArtifactCard } from '@/components/ArtifactCard';
 import { OutlineEditModal } from '@/components/OutlineEditModal';
-import { SavePersonalSkillModal } from '@/components/SavePersonalSkillModal';
 import { ThinkingTranscript } from '@/components/ThinkingTranscript';
 import ApprovalBanner from '@/components/ApprovalBanner';
 import { AutonomySelect } from '@/components/AutonomySelect';
+import { QuickPromptButton, QuickPromptSendHint } from '@/components/QuickPromptButton';
+import { DislikeFeedbackDialog, TurnFeedbackButtons } from '@/components/TurnFeedback';
+import { turnKeyAt, type DislikeReason, type TurnVerdict } from '@/lib/turnFeedback';
+import { saveTurnFeedback, useTurnFeedback } from '@/lib/useTurnFeedback';
+import { loadQuickPrompts, resolveQuickPromptSend } from '@/lib/quickPrompts';
+import { useQuickPrompts } from '@/lib/useQuickPrompts';
 import { resolveContextBarState } from '@/lib/contextBar';
-import { allocateSkillId, ApiError, savePersonalSkill, uploadAgentWorkspaceFile, uploadChatImage } from '@/lib/api';
+import { ApiError, uploadAgentWorkspaceFile, uploadChatImage } from '@/lib/api';
 import {
   DEFAULT_WORKBENCH_AUTONOMY,
   loadWorkbenchAutonomy,
@@ -51,13 +56,9 @@ import { sanitizeSessionTitle, stripSessionTitleTimestamp } from '@/lib/workbenc
 import { composeOutlineContinuePrompt, shouldShowOutlineEditButton } from '@/lib/outlineDraft';
 import { composeInstalledSkillMessage, parseHomeSkillDisplay, titleFromUserMessage, type HomeSkillRef } from '@/lib/homeSend';
 import { stripProvideData } from '@/lib/iframeAsk';
+import { canOpenDashboard } from '@/lib/platformUser';
 import { HomeSkillChip } from '@/components/HomeSkillChip';
 import { InstalledSkillButton, type InstalledSkillPick } from '@/components/InstalledSkillButton';
-import {
-  draftPersonalSkill,
-  shouldShowSaveSkillButton,
-  type PersonalSkillDraft,
-} from '@/lib/personalSkill';
 import { basePath } from '@/lib/basePath';
 
 const DRAFT_KEY_PREFIX = 'agent-chat';
@@ -197,6 +198,7 @@ export function AgentChatInner({
   initialFiles,
   autonomyScope,
   userRole,
+  userId,
   sessionSkill,
 }: {
   agentAlias: string;
@@ -211,6 +213,7 @@ export function AgentChatInner({
   initialFiles?: File[];
   autonomyScope?: string;
   userRole?: string;
+  userId?: string;
   sessionSkill?: HomeSkillRef;
 }) {
   const {
@@ -257,12 +260,20 @@ export function AgentChatInner({
     writeInput(value);
     saveDraftRef.current(value);
   }, [writeInput]);
+  const quickPrompts = useQuickPrompts(userId);
   const isWorkbench = Boolean(onRenameSession || onToggleRightPanel || autonomyScope);
   const [outlineDraft, setOutlineDraft] = useState<string | null>(null);
-  const [skillDraft, setSkillDraft] = useState<PersonalSkillDraft | null>(null);
-  const [skillSaving, setSkillSaving] = useState(false);
-  const [skillError, setSkillError] = useState<string | null>(null);
-  const [skillNotice, setSkillNotice] = useState<string | null>(null);
+  const feedbackEntries = useTurnFeedback();
+  const [dislikeKey, setDislikeKey] = useState<string | null>(null);
+  const [feedbackSaving, setFeedbackSaving] = useState(false);
+  const [feedbackError, setFeedbackError] = useState<string | null>(null);
+  const likeTurn = useCallback((key: string, verdict?: TurnVerdict) => {
+    void saveTurnFeedback({
+      sessionId,
+      messageKey: key,
+      verdict: verdict === 'like' ? null : 'like',
+    });
+  }, [sessionId]);
   const persistAutonomyScope = autonomyScope ?? sessionId;
   const maxAutonomy = maxAutonomyForRole(userRole);
   const [autonomy, setAutonomy] = useState<WorkbenchAutonomy>(() =>
@@ -278,7 +289,9 @@ export function AgentChatInner({
   // with a single '/' and the token still matches at least one command.
   const [showCommandHint, setShowCommandHint] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const allowSessionTools = userRole === undefined || canOpenDashboard(userRole);
   const [compact, setCompact] = useState(() => {
+    if (!allowSessionTools) return false;
     try { return localStorage.getItem('zeroclaw_chat_compact') === '1'; } catch { return false; }
   });
   // Tool execution is plumbing, not chat. Default off so tool_call /
@@ -288,6 +301,7 @@ export function AgentChatInner({
   // filters them at render time so toggling on retroactively reveals prior
   // tool activity.
   const [showToolActivity, setShowToolActivity] = useState(() => {
+    if (!allowSessionTools) return false;
     try { return localStorage.getItem('zeroclaw_show_tool_activity') === '1'; } catch { return false; }
   });
 
@@ -478,7 +492,10 @@ export function AgentChatInner({
     if (!connected) return;
     if (!trimmed && ready.length === 0 && !installedSkill) return;
 
-    const typed = trimmed.startsWith('//') ? trimmed.slice(1) : trimmed;
+    const literal = trimmed.startsWith('//');
+    const typed = literal
+      ? trimmed.slice(1)
+      : resolveQuickPromptSend(trimmed, loadQuickPrompts(userId)).text;
     const text = composeInstalledSkillMessage({
       userText: typed,
       skill: installedSkill ? { id: installedSkill.id, title: installedSkill.title } : null,
@@ -620,6 +637,22 @@ export function AgentChatInner({
       setShowCommandHint(false);
       return;
     }
+    if (e.key === 'Tab' && !e.shiftKey && !e.nativeEvent.isComposing && !isComposingRef.current) {
+      const expanded = resolveQuickPromptSend(input, loadQuickPrompts(userId));
+      if (expanded.text !== input.trim()) {
+        e.preventDefault();
+        applyInput(expanded.text);
+        requestAnimationFrame(() => {
+          const el = inputRef.current;
+          if (!el) return;
+          el.style.height = 'auto';
+          el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+          el.focus();
+          el.setSelectionRange(expanded.text.length, expanded.text.length);
+        });
+      }
+      return;
+    }
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && !isComposingRef.current) {
       e.preventDefault();
       handleSend();
@@ -685,40 +718,6 @@ export function AgentChatInner({
     if (!text) return;
     setOutlineDraft(text);
   }, []);
-
-  const handleOpenSaveSkill = useCallback((assistantText: string, userText: string) => {
-    const draft = draftPersonalSkill({ userText, assistantText });
-    setSkillError(null);
-    setSkillDraft(draft);
-    void allocateSkillId()
-      .then(({ id }) => {
-        setSkillDraft((current) => (current ? { ...current, name: id } : current));
-      })
-      .catch((err: unknown) => {
-        setSkillError(err instanceof ApiError ? err.message : t('workbench.save_skill_failed'));
-      });
-  }, []);
-
-  const handleSaveSkill = useCallback(async () => {
-    if (!skillDraft?.name.trim() || !skillDraft.title.trim()) return;
-    setSkillSaving(true);
-    setSkillError(null);
-    try {
-      await savePersonalSkill({
-        agent: agentAlias,
-        name: skillDraft.name.trim(),
-        title: skillDraft.title.trim(),
-        description: skillDraft.description,
-        body: skillDraft.body,
-      });
-      setSkillDraft(null);
-      setSkillNotice(t('workbench.save_skill_done'));
-    } catch (err) {
-      setSkillError(err instanceof ApiError ? err.message : t('workbench.save_skill_failed'));
-    } finally {
-      setSkillSaving(false);
-    }
-  }, [agentAlias, skillDraft]);
 
   const handleCopy = useCallback((msgId: string, content: string) => {
     const onSuccess = () => {
@@ -836,6 +835,36 @@ export function AgentChatInner({
         void addFiles([...e.dataTransfer.files]);
       }}
     >
+      {dislikeKey && (
+        <DislikeFeedbackDialog
+          reason={feedbackEntries.find((entry) => entry.message_key === dislikeKey)?.reason}
+          comment={feedbackEntries.find((entry) => entry.message_key === dislikeKey)?.comment ?? ''}
+          saving={feedbackSaving}
+          error={feedbackError}
+          onClose={() => {
+            if (feedbackSaving) return;
+            setDislikeKey(null);
+            setFeedbackError(null);
+          }}
+          onSubmit={(reason: DislikeReason | null, comment: string) => {
+            setFeedbackSaving(true);
+            setFeedbackError(null);
+            void saveTurnFeedback({
+              sessionId,
+              messageKey: dislikeKey,
+              verdict: 'dislike',
+              reason,
+              comment,
+            }).then(() => {
+              setDislikeKey(null);
+            }).catch(() => {
+              setFeedbackError(t('workbench.feedback_save_failed'));
+            }).finally(() => {
+              setFeedbackSaving(false);
+            });
+          }}
+        />
+      )}
       <OutlineEditModal
         open={outlineDraft != null}
         value={outlineDraft ?? ''}
@@ -847,18 +876,6 @@ export function AgentChatInner({
           setOutlineDraft(null);
         }}
         busy={!connected || typing}
-      />
-      <SavePersonalSkillModal
-        open={skillDraft != null}
-        draft={skillDraft ?? { name: '', title: '', description: '', body: '' }}
-        onChange={(next) => setSkillDraft(next)}
-        onClose={() => {
-          setSkillDraft(null);
-          setSkillError(null);
-        }}
-        onSave={() => { void handleSaveSkill(); }}
-        busy={skillSaving}
-        error={skillError}
       />
       {dragOver && (
         <div className="pointer-events-none absolute inset-3 z-40 flex items-center justify-center rounded-xl border-2 border-dashed border-pc-accent bg-pc-accent/10">
@@ -926,25 +943,29 @@ export function AgentChatInner({
               </Link>
             </>
           )}
-          <button
-            type="button"
-            onClick={toggleCompact}
-            aria-label={t('agent.compact_mode')}
-            title={t('agent.compact_mode')}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-pc-text-muted hover:bg-[var(--pc-hover)] hover:text-pc-text"
-          >
-            {compact ? <Maximize2 className="h-4 w-4" /> : <Minimize2 className="h-4 w-4" />}
-          </button>
-          <button
-            type="button"
-            onClick={toggleToolActivity}
-            aria-label={showToolActivity ? t('agent.tool_activity_hide') : t('agent.tool_activity_show')}
-            aria-pressed={showToolActivity}
-            title={showToolActivity ? t('agent.tool_activity_hide') : t('agent.tool_activity_show')}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-pc-text-muted hover:bg-[var(--pc-hover)] hover:text-pc-text"
-          >
-            <Wrench className="h-4 w-4" />
-          </button>
+          {allowSessionTools && (
+            <>
+              <button
+                type="button"
+                onClick={toggleCompact}
+                aria-label={t('agent.compact_mode')}
+                title={t('agent.compact_mode')}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-pc-text-muted hover:bg-[var(--pc-hover)] hover:text-pc-text"
+              >
+                {compact ? <Maximize2 className="h-4 w-4" /> : <Minimize2 className="h-4 w-4" />}
+              </button>
+              <button
+                type="button"
+                onClick={toggleToolActivity}
+                aria-label={showToolActivity ? t('agent.tool_activity_hide') : t('agent.tool_activity_show')}
+                aria-pressed={showToolActivity}
+                title={showToolActivity ? t('agent.tool_activity_hide') : t('agent.tool_activity_show')}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-pc-text-muted hover:bg-[var(--pc-hover)] hover:text-pc-text"
+              >
+                <Wrench className="h-4 w-4" />
+              </button>
+            </>
+          )}
           <button
             type="button"
             onClick={handleClearAll}
@@ -975,19 +996,6 @@ export function AgentChatInner({
           {error}
         </div>
       )}
-      {skillNotice && (
-        <div className="px-4 py-2 border-b border-pc-border bg-pc-elevated text-pc-text-secondary flex items-center justify-between gap-2 text-sm animate-fade-in">
-          <span>{skillNotice}</span>
-          <button
-            type="button"
-            onClick={() => setSkillNotice(null)}
-            className="text-xs text-pc-text-muted hover:text-pc-text"
-          >
-            {t('common.close')}
-          </button>
-        </div>
-      )}
-
       {/* Messages area. */}
       <div
         className={`flex-1 overflow-y-auto p-4 pb-8 ${compact ? 'space-y-1.5' : 'space-y-2'}`}
@@ -1010,8 +1018,11 @@ export function AgentChatInner({
           const bubbles = groupIllustratedBubbles(messages, showToolActivity);
           const last = bubbles.at(-1);
           const streamInLast = Boolean(typing && shouldAttachStreamingToGroup(last));
-          const lastUser = [...messages].reverse().find((m) => m.role === 'user');
-          const lastUserText = lastUser ? messageModelText(lastUser) : '';
+          const prose = messages.filter((row) => (
+            row.role === 'agent' && !row.toolCall && !row.notice && !row.ephemeral && row.content.trim()
+          ));
+          const proseTexts = prose.map((row) => row.content);
+          const proseIndex = new Map(prose.map((row, index) => [row.id, index]));
           return (
             <>
               {bubbles.map((items, idx) => {
@@ -1019,6 +1030,15 @@ export function AgentChatInner({
                 const previousUserText = prev?.[0]?.role === 'user'
                   ? messageModelText(prev[0])
                   : '';
+                const streamingHere = streamInLast && idx === bubbles.length - 1;
+                const anchor = [...items].reverse().find((row) => proseIndex.has(row.id));
+                const anchorIndex = anchor ? proseIndex.get(anchor.id) : undefined;
+                const feedbackKey = streamingHere || anchorIndex == null
+                  ? null
+                  : turnKeyAt(sessionId, proseTexts, anchorIndex);
+                const feedback = feedbackKey
+                  ? feedbackEntries.find((entry) => entry.session_id === sessionId && entry.message_key === feedbackKey)
+                  : undefined;
                 return (
                 <MessageItem
                   key={items.map((m) => m.id).join(':')}
@@ -1028,12 +1048,14 @@ export function AgentChatInner({
                   showToolActivity={showToolActivity}
                   isCopied={items.some((m) => copiedId === m.id)}
                   previousUserText={previousUserText}
-                  lastUserText={lastUserText}
                   onCopy={handleCopy}
                   onEditOutline={handleEditOutline}
-                  onSaveSkill={handleOpenSaveSkill}
                   onDelete={handleDeleteMessage}
-                  streaming={streamInLast && idx === bubbles.length - 1
+                  feedbackKey={feedbackKey}
+                  feedbackVerdict={feedback?.verdict}
+                  onLike={likeTurn}
+                  onDislike={setDislikeKey}
+                  streaming={streamingHere
                     ? { content: streamingContent, thinking: streamingThinking }
                     : null}
                 />
@@ -1127,7 +1149,7 @@ export function AgentChatInner({
               e.target.value = '';
             }}
           />
-          <div className="relative flex w-full min-w-0 flex-col rounded-2xl border border-pc-border bg-pc-elevated px-3 pt-3 pb-2">
+          <div data-composer="" className="relative flex w-full min-w-0 flex-col rounded-2xl border border-pc-border bg-pc-elevated px-3 pt-3 pb-2">
             {installedSkill ? (
               <div className="mb-2">
                 <HomeSkillChip label={installedSkill.title} onClear={() => setInstalledSkill(null)} />
@@ -1187,6 +1209,7 @@ export function AgentChatInner({
               className="min-w-0 w-full bg-transparent text-sm resize-none text-pc-text placeholder:text-pc-text-muted outline-none focus:outline-none focus-visible:outline-none disabled:opacity-40"
               style={{ minHeight: '2.5rem', maxHeight: '10rem', paddingTop: '2px', paddingBottom: '8px' }}
             />
+            <QuickPromptSendHint text={input} prompts={quickPrompts} />
             <div className="flex w-full min-w-0 items-center justify-between gap-2">
               <div className="flex min-w-0 items-center gap-0.5">
                 <button
@@ -1224,6 +1247,21 @@ export function AgentChatInner({
                     const next = clampWorkbenchAutonomy(level, maxAutonomy);
                     setAutonomy(next);
                     saveWorkbenchAutonomy(persistAutonomyScope, next);
+                  }}
+                />
+                <QuickPromptButton
+                  userId={userId}
+                  disabled={!connected || !hydrated}
+                  onInsert={(body) => {
+                    applyInput(body);
+                    requestAnimationFrame(() => {
+                      const el = inputRef.current;
+                      if (!el) return;
+                      el.style.height = 'auto';
+                      el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+                      el.focus();
+                      el.setSelectionRange(body.length, body.length);
+                    });
                   }}
                 />
               </div>
@@ -1350,11 +1388,13 @@ interface MessageItemProps {
   showToolActivity: boolean;
   isCopied: boolean;
   previousUserText?: string;
-  lastUserText?: string;
   onCopy: (id: string, content: string) => void;
   onEditOutline: (content: string) => void;
-  onSaveSkill: (assistantText: string, userText: string) => void;
   onDelete: (id: string) => void;
+  feedbackKey?: string | null;
+  feedbackVerdict?: TurnVerdict;
+  onLike?: (key: string, verdict?: TurnVerdict) => void;
+  onDislike?: (key: string) => void;
   streaming?: { content: string; thinking: string } | null;
 }
 
@@ -1450,11 +1490,13 @@ const MessageItem = memo(function MessageItem({
   showToolActivity,
   isCopied,
   previousUserText,
-  lastUserText,
   onCopy,
   onEditOutline,
-  onSaveSkill,
   onDelete,
+  feedbackKey,
+  feedbackVerdict,
+  onLike,
+  onDislike,
   streaming,
 }: MessageItemProps) {
   const rows = items ?? [];
@@ -1538,18 +1580,9 @@ const MessageItem = memo(function MessageItem({
                 content: shownContent,
                 previousUserText: previousUserText ?? '',
               });
-              const showSave = shouldShowSaveSkillButton({
-                isAssistant: !isUser,
-                streaming: Boolean(streaming),
-                hasProse: groupHasProse,
-                content: shownContent,
-                isError: rows.some((row) => row.notice)
-                  || shownContent.startsWith(t('agent.error_prefix')),
-              });
-              if (!showOutline && !showSave) return null;
+              if (!showOutline) return null;
               return (
             <div className="mt-3 flex flex-wrap gap-2">
-            {showOutline ? (
               <button
                 type="button"
                 onClick={() => onEditOutline(shownContent)}
@@ -1558,22 +1591,18 @@ const MessageItem = memo(function MessageItem({
                 <Pencil className="size-3.5" />
                 {t('workbench.edit_outline')}
               </button>
-            ) : null}
-            {showSave ? (
-              <button
-                type="button"
-                onClick={() => onSaveSkill(shownContent, lastUserText ?? previousUserText ?? '')}
-                className="inline-flex h-8 items-center gap-1.5 rounded-[8px] border border-pc-border px-2.5 text-xs font-medium text-pc-text-secondary hover:bg-[var(--pc-hover)] hover:text-pc-text"
-              >
-                <Sparkles className="size-3.5" />
-                {t('workbench.save_skill')}
-              </button>
-            ) : null}
             </div>
               );
             })()}
           </div>
         </div>
+        {feedbackKey && onLike && onDislike && (
+          <TurnFeedbackButtons
+            verdict={feedbackVerdict}
+            onLike={() => onLike(feedbackKey, feedbackVerdict)}
+            onDislike={() => onDislike(feedbackKey)}
+          />
+        )}
         <div
           className={[
             'absolute top-full z-20 mt-0.5 flex items-center gap-1 rounded-md bg-pc-surface/95 px-1 py-0.5',

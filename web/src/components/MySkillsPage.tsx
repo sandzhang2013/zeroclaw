@@ -3,7 +3,7 @@ import { BookOpen, ChevronDown, ChevronRight, File, FileArchive, Folder, FolderI
 import { ConfirmDialog } from '@/components/ui';
 import { skillCreatorLabel, skillVersionLine, WorkbenchSkillCard } from '@/components/WorkbenchSkillCard';
 import {
-  allocateSkillId,
+  allocatePersonalSkillId,
   ApiError,
   deletePersonalSkill,
   downloadSkillZip,
@@ -24,7 +24,7 @@ import {
   type PersonalSkillSummary,
 } from '@/lib/api';
 import { t } from '@/lib/i18n';
-import { filterPersonalSkills, isIssuedSkillId, isPersonalSkillEnabled, skillIdTakenKey } from '@/lib/personalSkill';
+import { filterPersonalSkills, isPersonalSkillEnabled, isPersonalSkillId, skillIdTakenKey } from '@/lib/personalSkill';
 import { skillDirPaths, skillFileTree, type SkillDirNode } from '@/lib/skillFileTree';
 import { bytesToBase64, readSkillFromFiles, readSkillFromZip, skillImportErrorKey, type PackageFile } from '@/lib/skillPackage';
 import {
@@ -284,7 +284,7 @@ export function MySkillsPage({
     setAddOpen(false);
     setError(null);
     try {
-      const { id } = await allocateSkillId();
+      const { id } = await allocatePersonalSkillId();
       setView({ kind: 'create', draft: { ...emptyDraft(), name: id } });
     } catch (err) {
       setError(skillWriteError(err, 'workbench.save_skill_failed'));
@@ -296,7 +296,7 @@ export function MySkillsPage({
     const draft = view.draft;
     const name = draft.name.trim();
     if (!name || !draft.body.trim()) return;
-    if (view.kind === 'create' && !isIssuedSkillId(name)) return;
+    if (view.kind === 'create' && !isPersonalSkillId(name)) return;
     setSaving(true);
     setError(null);
     try {
@@ -366,7 +366,7 @@ export function MySkillsPage({
     setSaving(true);
     setError(null);
     try {
-      const { id } = await allocateSkillId();
+      const { id } = await allocatePersonalSkillId();
       const saved = await forkPersonalSkill({ agent, name: draft.name, newName: id });
       const detail = await readPersonalSkill(agent, saved.name);
       setSkills((prev) =>
@@ -434,10 +434,9 @@ export function MySkillsPage({
       }
       const skill = parsed.skill;
       const owned = skills.filter((row) => !row.from_plaza && row.title === skill.title);
-      const name = owned.length === 1 && owned[0] ? owned[0].name : (await allocateSkillId()).id;
-      await savePersonalSkill({
+      let name = owned.length === 1 && owned[0] ? owned[0].name : (await allocatePersonalSkillId()).id;
+      const payload = {
         agent,
-        name,
         title: skill.title,
         description: skill.description,
         body: skill.body,
@@ -445,7 +444,15 @@ export function MySkillsPage({
           path: file.path,
           data_base64: bytesToBase64(file.bytes),
         })),
-      });
+      };
+      try {
+        await savePersonalSkill({ ...payload, name });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : '';
+        if (!skillIdTakenKey(message)) throw err;
+        name = (await allocatePersonalSkillId()).id;
+        await savePersonalSkill({ ...payload, name });
+      }
       setSkills((prev) => {
         const kept = prev.find((row) => row.name === name);
         const row = {
@@ -626,7 +633,7 @@ export function MySkillsPage({
                     readOnly
                     className="mt-1 h-9 w-full rounded-[10px] border border-pc-border bg-pc-input px-3 font-mono text-sm text-pc-text read-only:opacity-70"
                   />
-                  <p className="mt-1 font-normal text-pc-text-muted">{t('workbench.skill_id_rule')}</p>
+                  <p className="mt-1 font-normal text-pc-text-muted">{t('workbench.personal_skill_id_rule')}</p>
                 </label>
                 <label className="block text-xs font-medium text-pc-text-secondary">
                   {t('workbench.save_skill_name')}

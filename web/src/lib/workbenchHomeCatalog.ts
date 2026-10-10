@@ -100,8 +100,8 @@ export function fallbackHomeCatalog(locale: Locale = getLocale()): WorkbenchHome
     source: 'builtin',
     tabs: [
       {
-        id: 'query',
-        label: zh ? '数据查询' : 'Query',
+        id: 'monitor',
+        label: zh ? '监测分析' : 'Surveillance',
         caps: [
           skill('outbreak', 'activity', 'chat', zh ? '疫情概况' : 'Outbreak overview', zh
             ? '帮我查询并概述近期全省传染病疫情情况。'
@@ -118,8 +118,8 @@ export function fallbackHomeCatalog(locale: Locale = getLocale()): WorkbenchHome
         ],
       },
       {
-        id: 'monitor',
-        label: zh ? '监测分析' : 'Surveillance',
+        id: 'forecast',
+        label: zh ? '预警预测' : 'Forecast',
         caps: [
           skill('trend', 'bar-chart-3', 'chat', zh ? '趋势分析' : 'Trend analysis', zh
             ? '根据监测数据帮我分析近期疫情趋势并解读关键变化。'
@@ -136,8 +136,8 @@ export function fallbackHomeCatalog(locale: Locale = getLocale()): WorkbenchHome
         ],
       },
       {
-        id: 'report',
-        label: zh ? '报告撰写' : 'Reports',
+        id: 'assess',
+        label: zh ? '综合研判' : 'Assessment',
         caps: [
           skill('brief', 'file-text', 'outline', zh ? '工作简报' : 'Work brief', zh
             ? '帮我起草一份疾控工作简报提纲，结构清晰、重点突出。'

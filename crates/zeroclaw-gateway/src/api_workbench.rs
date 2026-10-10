@@ -130,7 +130,11 @@ mod tests {
         config.gateway.trusted_proxy = true;
         config.gateway.trusted_proxy_secret = Some("s3cret".into());
         let mut state = test_state(config);
-        state.pairing = std::sync::Arc::new(PairingGuard::new(true, &[]));
+        state.pairing = std::sync::Arc::new(PairingGuard::new(
+            true,
+            &[],
+            zeroclaw_config::pairing::PairingCodePolicy::default(),
+        ));
         state
     }
 
@@ -165,7 +169,7 @@ mod tests {
         .into_response();
         assert_eq!(response.status(), StatusCode::OK);
         let json = body_json(response).await;
-        assert_eq!(json["tabs"][0]["label"], "数据查询");
+        assert_eq!(json["tabs"][0]["label"], "监测分析");
         assert_eq!(json["tabs"].as_array().unwrap().len(), 3);
     }
 
@@ -253,7 +257,7 @@ mod tests {
             .into_response();
         assert_eq!(ok.status(), StatusCode::OK);
         let json = body_json(ok).await;
-        assert_eq!(json["tabs"][0]["label_zh"], "数据查询");
+        assert_eq!(json["tabs"][0]["label_zh"], "监测分析");
         assert_eq!(json["tabs"][0]["caps"][0]["label_zh"], "疫情概况");
     }
 
@@ -282,6 +286,7 @@ mod tests {
         };
         let response = handle_workbench_home_catalog_put(
             State(state.clone()),
+            None,
             bff_headers("ops", "管理员"),
             Json(body),
         )
@@ -312,6 +317,7 @@ mod tests {
         }];
         let response = handle_workbench_home_catalog_put(
             State(state.clone()),
+            None,
             bff_headers("ops", "管理员"),
             Json(HomeCatalogPut { tabs: vec![] }),
         )

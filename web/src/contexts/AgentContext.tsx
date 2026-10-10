@@ -318,7 +318,7 @@ export function AgentProvider({
   // Prime the model-provider catalog once so error formatting can resolve
   // display names from the backend registry rather than a local shadow list.
   // `/api/config/catalog` is ops-only under trusted_proxy; skip it on the
-  // workbench for 普通用户 / 高级用户 (browser would log 403).
+  // workbench for 普通用户 (browser would log 403).
   useEffect(() => {
     if (userRole !== undefined && !canOpenDashboard(userRole)) return;
     void primeModelProviderCatalog();

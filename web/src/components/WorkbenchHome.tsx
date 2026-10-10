@@ -10,9 +10,12 @@ import {
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { t, getLocale } from '@/lib/i18n';
-import { getStatus, getWorkbenchHome, listPersonalSkills } from '@/lib/api';
+import { getStatus, getWorkbenchHome, listPersonalSkills, type PersonalSkillSummary } from '@/lib/api';
 import { DEFAULT_FOLDER_ID, type WorkbenchFolder } from '@/pages/ChatWorkspace';
 import { AutonomySelect } from '@/components/AutonomySelect';
+import { QuickPromptButton, QuickPromptSendHint } from '@/components/QuickPromptButton';
+import { loadQuickPrompts, resolveQuickPromptSend } from '@/lib/quickPrompts';
+import { useQuickPrompts } from '@/lib/useQuickPrompts';
 import { HomeSkillChip } from '@/components/HomeSkillChip';
 import { InstalledSkillButton, type InstalledSkillPick } from '@/components/InstalledSkillButton';
 import {
@@ -33,7 +36,7 @@ import {
   homeCapIcon,
   type WorkbenchHomeCatalog,
 } from '@/lib/workbenchHomeCatalog';
-import { composeHomeCapMessage, composeInstalledSkillMessage, homeSessionTitle, type HomeSkillRef } from '@/lib/homeSend';
+import { composeHomeCapMessage, composeInstalledSkillMessage, homeSessionTitle, resolveHomeCapSkill, type HomeSkillRef } from '@/lib/homeSend';
 
 type HomeAttach = {
   id: string;
@@ -49,6 +52,7 @@ export function WorkbenchHome({
   onSelectFolder,
   agentAlias,
   userRole,
+  userId,
 }: {
   onSend: (text: string, autonomy: WorkbenchAutonomy, files: File[], titleHint?: string, skill?: HomeSkillRef) => void;
   folders: WorkbenchFolder[];
@@ -56,18 +60,20 @@ export function WorkbenchHome({
   onSelectFolder: (folderId: string) => void;
   agentAlias: string;
   userRole?: string;
+  userId?: string;
 }) {
   const [input, setInput] = useState('');
   const [catalog, setCatalog] = useState<WorkbenchHomeCatalog>(() => fallbackHomeCatalog());
-  const [tab, setTab] = useState<string>(() => fallbackHomeCatalog().tabs[0]?.id ?? 'query');
+  const [tab, setTab] = useState<string>(() => fallbackHomeCatalog().tabs[0]?.id ?? 'monitor');
   const [skillId, setSkillId] = useState<string>('');
   const [installedSkill, setInstalledSkill] = useState<InstalledSkillPick | null>(null);
-  const [installedIds, setInstalledIds] = useState<Set<string>>(() => new Set());
+  const [installedSkills, setInstalledSkills] = useState<PersonalSkillSummary[]>([]);
   const [model, setModel] = useState<string>('');
   const maxAutonomy = maxAutonomyForRole(userRole);
+  const homeScope = userId ? `home:${userId}` : 'home';
   const [autonomy, setAutonomy] = useState<WorkbenchAutonomy>(() =>
     clampWorkbenchAutonomy(
-      loadWorkbenchAutonomy('home') || DEFAULT_WORKBENCH_AUTONOMY,
+      loadWorkbenchAutonomy(homeScope) || DEFAULT_WORKBENCH_AUTONOMY,
       maxAutonomy,
     ),
   );
@@ -79,6 +85,7 @@ export function WorkbenchHome({
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const composingRef = useRef(false);
+  const quickPrompts = useQuickPrompts(userId);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -126,16 +133,12 @@ export function WorkbenchHome({
     listPersonalSkills(agentAlias)
       .then((data) => {
         if (cancelled) return;
-        setInstalledIds(
-          new Set(
-            (data.skills ?? [])
-              .filter((skill) => skill.enabled !== false && !skill.blocked_reason)
-              .map((skill) => skill.name),
-          ),
+        setInstalledSkills(
+          (data.skills ?? []).filter((skill) => skill.enabled !== false && !skill.blocked_reason),
         );
       })
       .catch(() => {
-        if (!cancelled) setInstalledIds(new Set());
+        if (!cancelled) setInstalledSkills([]);
       });
     return () => {
       cancelled = true;
@@ -154,7 +157,17 @@ export function WorkbenchHome({
   const skills = currentTab?.caps ?? [];
   const selectedSkill = installedSkill ? undefined : skills.find((cap) => cap.id === skillId);
   const SelectedSkillIcon = selectedSkill ? homeCapIcon(selectedSkill.icon) : null;
-  const capInstalled = Boolean(selectedSkill && installedIds.has(selectedSkill.id));
+  const resolvedCap = selectedSkill
+    ? resolveHomeCapSkill(selectedSkill, installedSkills.map((skill) => ({
+        name: skill.name,
+        title: skill.title,
+        fromPlaza: skill.from_plaza === true,
+        enabled: skill.enabled,
+      })))
+    : null;
+  const capForSend = selectedSkill && resolvedCap
+    ? { ...selectedSkill, id: resolvedCap.id, label: resolvedCap.label }
+    : selectedSkill;
   function draftMessage(userText: string) {
     if (installedSkill) {
       return composeInstalledSkillMessage({
@@ -165,23 +178,23 @@ export function WorkbenchHome({
     }
     return composeHomeCapMessage({
       userText,
-      cap: selectedSkill,
-      installed: capInstalled,
+      cap: capForSend,
+      installed: Boolean(resolvedCap),
       locale: getLocale(),
     });
   }
   const canSend = Boolean(draftMessage(input) || attachments.length > 0);
 
   function submit() {
-    const trimmed = input.trim();
-    const message = draftMessage(trimmed);
+    const resolved = resolveQuickPromptSend(input, loadQuickPrompts(userId));
+    const message = draftMessage(resolved.text);
     if (!message && attachments.length === 0) return;
     const skillRef: HomeSkillRef | undefined = installedSkill
       ? { id: installedSkill.id, label: installedSkill.title }
-      : capInstalled && selectedSkill
+      : resolvedCap && selectedSkill
         ? {
-            id: selectedSkill.id,
-            label: selectedSkill.label,
+            id: resolvedCap.id,
+            label: resolvedCap.label,
             kind: selectedSkill.kind,
             icon: selectedSkill.icon,
           }
@@ -190,7 +203,7 @@ export function WorkbenchHome({
       message,
       autonomy,
       attachments.map((a) => a.file),
-      homeSessionTitle({ userText: trimmed, skillLabel: skillRef?.label }),
+      homeSessionTitle({ userText: resolved.title, skillLabel: skillRef?.label }),
       skillRef,
     );
     for (const a of attachments) {
@@ -323,6 +336,7 @@ export function WorkbenchHome({
         ) : null}
 
         <div
+          data-composer=""
           className="relative z-20 mb-3 rounded-2xl border border-pc-border-strong bg-pc-elevated shadow-[var(--pc-shadow-sm)]"
           onDragEnter={(e) => {
             e.preventDefault();
@@ -402,6 +416,14 @@ export function WorkbenchHome({
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => {
+                  if (e.key === 'Tab' && !e.shiftKey && !e.nativeEvent.isComposing && !composingRef.current) {
+                    const expanded = resolveQuickPromptSend(input, loadQuickPrompts(userId));
+                    if (expanded.text !== input.trim()) {
+                      e.preventDefault();
+                      applyPrompt(expanded.text);
+                    }
+                    return;
+                  }
                   if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && !composingRef.current) {
                     e.preventDefault();
                     submit();
@@ -419,6 +441,7 @@ export function WorkbenchHome({
                 className="min-h-[72px] min-w-0 flex-1 resize-none bg-transparent text-[15px] leading-[1.7] text-pc-text placeholder:text-pc-text-faint outline-none focus:outline-none focus-visible:outline-none"
               />
             </div>
+            <QuickPromptSendHint text={input} prompts={quickPrompts} />
             <div className="flex items-center justify-between gap-2 pt-1">
               <div className="flex min-w-0 items-center gap-1">
                 <button
@@ -454,8 +477,13 @@ export function WorkbenchHome({
                   onChange={(level) => {
                     const next = clampWorkbenchAutonomy(level, maxAutonomy);
                     setAutonomy(next);
-                    saveWorkbenchAutonomy('home', next);
+                    saveWorkbenchAutonomy(homeScope, next);
                   }}
+                />
+                <QuickPromptButton
+                  userId={userId}
+                  dropUp={false}
+                  onInsert={applyPrompt}
                 />
               </div>
               <div className="flex shrink-0 items-center gap-2">

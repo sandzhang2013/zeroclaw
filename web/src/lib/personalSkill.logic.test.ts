@@ -2,14 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  draftPersonalSkill,
   filterPersonalSkills,
   isIssuedSkillId,
+  isPersonalSkillId,
   isPersonalSkillEnabled,
-  shouldShowSaveSkillButton,
   skillIdTakenKey,
   skillSlug,
-  skillTitleFromAsk,
 } from './personalSkill.ts';
 
 test('skillSlug strips paths and empty input', () => {
@@ -20,24 +18,13 @@ test('skillSlug strips paths and empty input', () => {
   assert.equal(skillSlug('   '), 'my-skill');
 });
 
-test('skillTitleFromAsk uses the first line', () => {
-  assert.equal(skillTitleFromAsk('按近8周做武汉流感图\n附带CSV'), '按近8周做武汉流感图');
-  assert.equal(skillTitleFromAsk('   '), '我的技能');
-});
-
-test('draftPersonalSkill keeps ask and reply in the body', () => {
-  const draft = draftPersonalSkill({
-    userText: '预测下周武汉流感',
-    assistantText: '先查监测再出图。',
-  });
-  assert.equal(draft.name, '');
-  assert.equal(draft.title, '预测下周武汉流感');
+test('issued and personal skill ids stay distinct', () => {
   assert.equal(isIssuedSkillId('sk0009'), true);
   assert.equal(isIssuedSkillId('sk10000'), true);
   assert.equal(isIssuedSkillId('sk-flu-trend'), false);
-  assert.match(draft.description, /武汉流感/);
-  assert.match(draft.body, /预测下周武汉流感/);
-  assert.match(draft.body, /先查监测再出图/);
+  assert.equal(isPersonalSkillId('ps0001'), true);
+  assert.equal(isPersonalSkillId('ps10000'), true);
+  assert.equal(isPersonalSkillId('sk0001'), false);
 });
 
 test('filterPersonalSkills matches name title and description', () => {
@@ -54,46 +41,6 @@ test('isPersonalSkillEnabled defaults to on', () => {
   assert.equal(isPersonalSkillEnabled({}), true);
   assert.equal(isPersonalSkillEnabled({ enabled: true }), true);
   assert.equal(isPersonalSkillEnabled({ enabled: false }), false);
-});
-
-test('shouldShowSaveSkillButton only on finished assistant prose', () => {
-  assert.equal(
-    shouldShowSaveSkillButton({
-      isAssistant: true,
-      streaming: false,
-      hasProse: true,
-      content: 'done',
-    }),
-    true,
-  );
-  assert.equal(
-    shouldShowSaveSkillButton({
-      isAssistant: true,
-      streaming: true,
-      hasProse: true,
-      content: 'partial',
-    }),
-    false,
-  );
-  assert.equal(
-    shouldShowSaveSkillButton({
-      isAssistant: false,
-      streaming: false,
-      hasProse: true,
-      content: 'ask',
-    }),
-    false,
-  );
-  assert.equal(
-    shouldShowSaveSkillButton({
-      isAssistant: true,
-      streaming: false,
-      hasProse: true,
-      content: '[错误] credentials',
-      isError: true,
-    }),
-    false,
-  );
 });
 
 test('skillIdTakenKey maps duplicate skill ids', () => {

@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>智算疾控 → 智能预警 · 跨域免登接入包</title>
+<style>
+  :root{
+    --primary:#0d9488; --primary-dark:#115e59; --primary-light:#f0fdfa;
+    --navy:#1e3a8a; --text:#1f2937; --muted:#6b7280; --border:#e5e7eb;
+    --bg:#f8fafc; --code-bg:#0f172a; --code-text:#e2e8f0;
+    --warn:#d97706; --danger:#dc2626; --ok:#16a34a;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{font-family:"PingFang SC","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;color:var(--text);background:var(--bg);line-height:1.75;font-size:15px;}
+  .header{background:linear-gradient(135deg,#115e59 0%,#0d9488 55%,#1e3a8a 100%);color:#fff;padding:48px 0 40px;margin-bottom:28px;}
+  .header-inner,.container{max-width:980px;margin:0 auto;padding:0 24px;}
+  .container{padding-bottom:72px;}
+  .tag{display:inline-block;background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.35);border-radius:20px;padding:2px 14px;font-size:13px;letter-spacing:1px;margin-bottom:12px;}
+  h1{font-size:26px;font-weight:700;margin-bottom:8px;}
+  .sub{opacity:.92;font-size:15px;}
+  .meta{display:flex;flex-wrap:wrap;gap:8px 20px;margin-top:20px;font-size:13px;}
+  .meta span{background:rgba(255,255,255,.12);padding:4px 12px;border-radius:6px;}
+  section{background:#fff;border:1px solid var(--border);border-radius:12px;padding:28px 32px;margin-bottom:22px;box-shadow:0 1px 3px rgba(0,0,0,.04);}
+  h2{font-size:19px;color:var(--primary-dark);padding-bottom:10px;margin-bottom:16px;border-bottom:2px solid var(--primary-light);}
+  h3{font-size:16px;margin:20px 0 10px;color:#0f172a;}
+  p,ul,ol{margin-bottom:12px;}
+  ul,ol{padding-left:22px;}
+  li{margin-bottom:6px;}
+  table{width:100%;border-collapse:collapse;margin:12px 0 16px;font-size:14px;}
+  th{background:#0f766e;color:#fff;padding:9px 12px;text-align:left;font-weight:600;white-space:nowrap;}
+  td{padding:8px 12px;border-bottom:1px solid var(--border);vertical-align:top;}
+  tr:nth-child(even) td{background:#f9fafb;}
+  code,kbd{font-family:"SF Mono",Consolas,Menlo,monospace;font-size:13px;}
+  code.inline{background:#ecfdf5;color:#115e59;border-radius:4px;padding:1px 6px;}
+  pre{background:var(--code-bg);color:var(--code-text);border-radius:10px;padding:16px 18px;overflow-x:auto;font-size:13px;line-height:1.55;margin:10px 0 16px;}
+  .callout{border-radius:8px;padding:14px 16px;margin:12px 0;border-left:5px solid;font-size:14px;}
+  .callout.warn{background:#fffbeb;border-color:var(--warn);}
+  .callout.danger{background:#fef2f2;border-color:var(--danger);}
+  .callout.ok{background:#f0fdf4;border-color:var(--ok);}
+  .callout.info{background:var(--primary-light);border-color:var(--primary);}
+  .callout .t{font-weight:700;display:block;margin-bottom:4px;}
+  .fill{background:#fff7ed;outline:2px dashed #fdba74;padding:2px 6px;border-radius:4px;font-weight:700;color:#9a3412;}
+  .footer{text-align:center;color:var(--muted);font-size:13px;margin-top:8px;}
+  .kbd{display:inline-block;background:#e2e8f0;border-radius:4px;padding:0 6px;font-size:12px;}
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="header-inner">
+    <span class="tag">交付给智能预警（系统 A）· 接入包 V1.0</span>
+    <h1>智算疾控跨域免登 · 接入参数与实现约定</h1>
+    <div class="sub">A 用本包签发一次性票据并跳转；B 验票建会话。双方运行时不互调。</div>
+    <div class="meta">
+      <span>签发方：智算疾控（B）</span>
+      <span>接收方：智能预警（A）</span>
+      <span>日期：2026-09-20</span>
+      <span>依据：跨域免登集成方案 V1.0</span>
+    </div>
+  </div>
+</div>
+
+<div class="container">
+
+<section>
+  <h2>0. 怎么用这份材料</h2>
+  <ol>
+    <li>把第 1 节的 <code class="inline">clientId</code>、联调密钥、<code class="inline">keyVersion</code> 配进 A 后端（仅服务端，禁止进前端与 Git）。</li>
+    <li>A 实现内部接口 <code class="inline">POST /api/sso/ticket</code>（必须带 A 登录态），按第 3、4 节加密。</li>
+    <li>A 前端拿到 <code class="inline">{clientId, verifyData}</code> 后，按第 2 节拼接 URL，整页跳转（首期不做 iframe）。</li>
+    <li>票据即取即用，不要缓存；失败时提示用户从预警重新进入。</li>
+  </ol>
+  <div class="callout warn">
+    <span class="t">发送前由智算疾控填写</span>
+    生产域名、生产密钥不写在本文档。联调密钥仅用于联调，与生产必须不同。生产密钥走密码管家 / 加密包+电话口令，禁止 IM 明文。
+  </div>
+</section>
+
+<section>
+  <h2>1. 接入参数（请配置到 A 后端）</h2>
+  <table>
+    <tr><th style="width:180px">项</th><th>联调</th><th>生产</th></tr>
+    <tr>
+      <td><code class="inline">clientId</code></td>
+      <td><code class="inline">CDSS-B-ZJJK-001</code></td>
+      <td>同左（一个接入方一个 ID）</td>
+    </tr>
+    <tr>
+      <td><code class="inline">keyVersion</code></td>
+      <td><code class="inline">1</code></td>
+      <td>轮换时由 B 通知递增；过渡期 48 小时新旧并行</td>
+    </tr>
+    <tr>
+      <td>AES-256 密钥</td>
+      <td>标准 Base64（32 字节）：<br><code class="inline">luueY71IMszzt4bL8PocbEvkk1hXVpkY8Rpt2RxggUw=</code></td>
+      <td><span class="fill">线下另交，勿写入本文</span></td>
+    </tr>
+    <tr>
+      <td>算法</td>
+      <td colspan="2">AES-256-GCM，IV=12 字节随机，Tag=128 bit，AAD=<code class="inline">clientId</code> 的 UTF-8 字节</td>
+    </tr>
+    <tr>
+      <td><code class="inline">verifyData</code> 编码</td>
+      <td colspan="2">Base64URL，无 padding（字符集 <code class="inline">A-Za-z0-9-_</code>）。无需再 <code class="inline">encodeURIComponent</code></td>
+    </tr>
+    <tr>
+      <td>时效</td>
+      <td colspan="2"><code class="inline">expireAt = timestamp + 300000</code>（毫秒，UTC）。B 额外容忍时钟偏差 ±60 秒</td>
+    </tr>
+    <tr>
+      <td>B 入口域名</td>
+      <td><span class="fill">填写联调 Origin，如 https://b-staging.example</span></td>
+      <td><span class="fill">填写生产 Origin</span></td>
+    </tr>
+  </table>
+  <div class="callout danger">
+    <span class="t">密钥纪律</span>
+    密钥只存在 A/B 服务端。禁止出现在前端 JS、仓库、日志、聊天记录。IV 每次加密必须重新随机，严禁复用。
+  </div>
+</section>
+
+<section>
+  <h2>2. 跳转 URL（A 前端拼这一条）</h2>
+  <p>首期仅支持<strong>整页跳转</strong>。iframe 嵌入待双方确认后再开。</p>
+<pre>https://&lt;B域名&gt;/hbcdcagent/workbench/deepseek?clientId=CDSS-B-ZJJK-001&amp;verifyData=&lt;票据&gt;</pre>
+  <ul>
+    <li>无 <code class="inline">deepseek</code> 路径时，改用 <code class="inline">/hbcdcagent/workbench</code>，query 不变。</li>
+    <li><code class="inline">verifyData</code> 已是 Base64URL，不要二次 URL 编码（若误用标准 Base64 含 <code class="inline">+/=</code>，则必须编码，联调首日对齐）。</li>
+    <li>不要把票据放到 hash（<code class="inline">#</code>）里；必须走 query，B 前端才能拦截。</li>
+    <li>A <strong>不需要</strong>调用 B 的验票接口。打开上面的 URL 即可，B 自己拦参数、验票、建会话、清洗地址栏。</li>
+  </ul>
+<pre>// 跳转示例
+const { clientId, verifyData } = await fetch('/api/sso/ticket', { credentials: 'include' }).then(r => r.json()).then(r => r.data);
+window.location.href =
+  `https://&lt;B域名&gt;/hbcdcagent/workbench/deepseek?clientId=${clientId}&verifyData=${verifyData}`;
+</pre>
+</section>
+
+<section>
+  <h2>3. 明文 payload（A 加密前的 JSON）</h2>
+  <p>字段名、类型按下表；JSON 用 UTF-8。不要放密码、Token、身份证号。</p>
+  <table>
+    <tr><th>字段</th><th>类型</th><th>必填</th><th>说明</th></tr>
+    <tr><td><code class="inline">userId</code></td><td>String</td><td>是</td><td>A 侧用户唯一 ID，将作为 B 的登录身份</td></tr>
+    <tr><td><code class="inline">userName</code></td><td>String</td><td>是</td><td>姓名 / 登录名</td></tr>
+    <tr><td><code class="inline">nickName</code></td><td>String</td><td>是</td><td>界面展示名，可与 userName 相同</td></tr>
+    <tr><td><code class="inline">tenantId</code></td><td>String</td><td>是</td><td>租户 ID</td></tr>
+    <tr><td><code class="inline">tenantCode</code></td><td>String</td><td>是</td><td>租户编码</td></tr>
+    <tr><td><code class="inline">tenantName</code></td><td>String</td><td>是</td><td>租户名称，B 用作机构名</td></tr>
+    <tr><td><code class="inline">regionCode</code></td><td>String</td><td>是</td><td>行政区划代码，如 <code class="inline">420000</code> / <code class="inline">420100</code></td></tr>
+    <tr><td><code class="inline">regionName</code></td><td>String</td><td>建议</td><td>如「湖北省」「武汉市」。有则优先用于 B 侧地区隔离</td></tr>
+    <tr><td><code class="inline">timestamp</code></td><td>long</td><td>是</td><td>签发时间，毫秒 UTC</td></tr>
+    <tr><td><code class="inline">expireAt</code></td><td>long</td><td>是</td><td><code class="inline">timestamp + 300000</code></td></tr>
+    <tr><td><code class="inline">nonce</code></td><td>String</td><td>是</td><td>UUID v4，每次签发新值；同一票据只能用一次</td></tr>
+    <tr><td><code class="inline">remark</code></td><td>String</td><td>否</td><td>扩展备注，如 <code class="inline">from-alert</code></td></tr>
+  </table>
+  <div class="callout info">
+    <span class="t">角色（请知悉）</span>
+    本包首期<strong>不传 role</strong>。B 将用户映射为「普通用户」，运维账号仅认 B 侧白名单。若预警侧有管理员需要「高级用户 / 运维」，联调时另约定字段，不要塞进 remark 当正式协议。
+  </div>
+<pre>{
+  "userId": "U10001",
+  "userName": "张三",
+  "nickName": "预警小张",
+  "tenantId": "T001",
+  "tenantCode": "HUBEI_CDC",
+  "tenantName": "湖北省疾控中心",
+  "regionCode": "420000",
+  "regionName": "湖北省",
+  "timestamp": 1756641000000,
+  "expireAt": 1756641300000,
+  "nonce": "9f8b7c6d-1e2f-4a3b-8c7d-5e6f7a8b9c0d",
+  "remark": "from-alert"
+}</pre>
+</section>
+
+<section>
+  <h2>4. verifyData 二进制结构</h2>
+<pre>keyVersion(1 字节)  ‖  IV(12 字节随机)  ‖  AES-GCM 密文  ‖  Tag(16 字节)
+        └──────────────── 整体做 Base64URL（无 padding） ────────────────┘
+AAD = clientId 的 UTF-8 字节（必须传，与 B 验票一致）</pre>
+  <p>A 后端示意（JDK 8+，无需第三方加密库）：</p>
+<pre>import javax.crypto.Cipher;
+import javax.crypto.spec.GCMParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
+import java.nio.ByteBuffer;
+import java.security.SecureRandom;
+import java.util.Base64;
+
+public final class SsoCipherUtil {
+    private static final int IV_LEN = 12;
+    private static final int TAG_BITS = 128;
+    private static final SecureRandom RANDOM = new SecureRandom();
+
+    /** payload = UTF-8 JSON；aad = clientId.getBytes("UTF-8") */
+    public static String encrypt(byte[] keyBytes, int keyVersion, String payload, byte[] aad) {
+        try {
+            byte[] iv = new byte[IV_LEN];
+            RANDOM.nextBytes(iv);
+            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+            cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(keyBytes, "AES"),
+                    new GCMParameterSpec(TAG_BITS, iv));
+            if (aad != null) cipher.updateAAD(aad);
+            byte[] cipherText = cipher.doFinal(payload.getBytes("UTF-8")); // 含 Tag
+            ByteBuffer buf = ByteBuffer.allocate(1 + IV_LEN + cipherText.length);
+            buf.put((byte) keyVersion).put(iv).put(cipherText);
+            return Base64.getUrlEncoder().withoutPadding().encodeToString(buf.array());
+        } catch (Exception e) {
+            throw new IllegalStateException("SSO encrypt failed", e);
+        }
+    }
+}
+
+// 密钥：标准 Base64 解码得到 32 字节
+byte[] keyBytes = Base64.getDecoder().decode("luueY71IMszzt4bL8PocbEvkk1hXVpkY8Rpt2RxggUw=");
+String verifyData = SsoCipherUtil.encrypt(
+        keyBytes, 1, json, "CDSS-B-ZJJK-001".getBytes("UTF-8"));
+</pre>
+  <p>A 内部票据接口建议响应：</p>
+<pre>{
+  "code": 0,
+  "msg": "ok",
+  "data": {
+    "clientId": "CDSS-B-ZJJK-001",
+    "verifyData": "……Base64URL……",
+    "expireAt": 1756641300000
+  }
+}</pre>
+  <ul>
+    <li>该接口必须鉴权 + 按用户限流（如 10 次/分钟），禁止匿名刷票。</li>
+    <li>异常时给前端「跳转服务暂不可用」，不要白屏、不要把密钥或明文 payload 回给浏览器。</li>
+  </ul>
+</section>
+
+<section>
+  <h2>5. A 会看到的结果（无需对接 B 错误码接口）</h2>
+  <p>验票在 B 浏览器内完成。成功：进入工作台，地址栏去掉 <code class="inline">clientId</code> / <code class="inline">verifyData</code>。失败时 B 展示下列文案，并提供返回预警的链接（A 请把预警首页地址回传给 B）。</p>
+  <table>
+    <tr><th>码</th><th>原因</th><th>用户提示</th></tr>
+    <tr><td>40001</td><td>clientId 未登记或停用</td><td>接入未授权，请联系管理员</td></tr>
+    <tr><td>40002</td><td>超过 5 分钟，或时钟差过大</td><td>链接已过期，请从智能预警系统重新进入</td></tr>
+    <tr><td>40003</td><td>密文被改 / 密钥或 AAD 不一致</td><td>凭证无效，请从智能预警系统重新进入</td></tr>
+    <tr><td>40004</td><td>同一票据用第二次（含刷新）</td><td>链接已失效，请重新进入</td></tr>
+    <tr><td>40005</td><td>格式非法</td><td>参数错误</td></tr>
+    <tr><td>40006</td><td>验票被限流</td><td>操作过于频繁，请稍后再试</td></tr>
+  </table>
+  <div class="callout warn">
+    <span class="t">刷新</span>
+    票据一次性。用户在跳转后刷新，只要 B 会话还在就会直接进入，不应再带旧 verifyData。请不要把带票据的 URL 做成可收藏链接。
+  </div>
+</section>
+
+<section>
+  <h2>6. 联调自检（A 侧）</h2>
+  <table>
+    <tr><th style="width:70px">编号</th><th>A 负责</th><th>预期</th></tr>
+    <tr><td>A01</td><td>未登录调 <code class="inline">/api/sso/ticket</code></td><td>401，出不了票据</td></tr>
+    <tr><td>A02</td><td>已登录取票，立刻跳转 B</td><td>进入工作台，URL 被清洗</td></tr>
+    <tr><td>A03</td><td>同一 verifyData 再打开一次</td><td>B 报 40004</td></tr>
+    <tr><td>A04</td><td>把 verifyData 改一个字符再打开</td><td>B 报 40003</td></tr>
+    <tr><td>A05</td><td>故意把 expireAt 设为 6 分钟前</td><td>B 报 40002</td></tr>
+    <tr><td>A06</td><td>密钥、IV 复用、标准 Base64 混用</td><td>联调首日必须排除；以本包第 4 节为准</td></tr>
+  </table>
+  <p>双方服务器需 NTP 校时，偏差大于 30 秒先修时间再联调。</p>
+</section>
+
+<section>
+  <h2>7. 请 A 回传给智算疾控</h2>
+  <table>
+    <tr><th style="width:220px">项</th><th>用途</th></tr>
+    <tr><td>预警联调 / 生产域名</td><td>后续若做 iframe，B 的 CSP 只放行该域名</td></tr>
+    <tr><td>预警首页 URL</td><td>B 失败页「返回智能预警」链接</td></tr>
+    <tr><td>一份真实脱敏的 payload 样例</td><td>核对 userId、regionCode、租户字段是否与生产一致</td></tr>
+    <tr><td>密钥接收人 + 安全渠道</td><td>生产密钥交付</td></tr>
+    <tr><td>联调窗口与联系人</td><td>排期</td></tr>
+  </table>
+</section>
+
+<section>
+  <h2>8. 不在本包内的内容</h2>
+  <ul>
+    <li>B 的验票接口、解密、会话 Cookie、工作台 API —— A 不用对接。</li>
+    <li>用户中心 <code class="inline">verifyCode</code> / SM4 —— 那是另一条登录，与本免登无关。</li>
+    <li>生产 AES 密钥 —— 线下交付。</li>
+    <li>登出联动、iframe、国密 SM4-GCM —— 二期。</li>
+  </ul>
+</section>
+
+<p class="footer">智算疾控（B）签发 · 仅供智能预警（A）接入使用 · 联调密钥禁止用于生产 · 2026-09-20</p>
+
+</div>
+</body>
+</html>

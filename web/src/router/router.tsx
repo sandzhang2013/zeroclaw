@@ -13,6 +13,7 @@ import {
   Doctor,
   Integrations,
   Logs,
+  FeedbackReviewPage,
   Pairing,
   Plugins,
   Quickstart,
@@ -22,6 +23,7 @@ import {
   SopEditor,
   SopView,
   SopsList,
+  McpToolsPage,
   Tools,
   WorkbenchPage,
 } from './lazyPages';
@@ -60,6 +62,7 @@ export const Router = () => (
           <Route path="/agent/:alias" element={<AgentChat />} />
           <Route path="/agent/:alias/workspace" element={<AgentWorkspaceExplorer />} />
           <Route path="/tools" element={<Tools />} />
+          <Route path="/mcp-config" element={<McpToolsPage />} />
           <Route path="/cron" element={<Cron />} />
           <Route path="/skills" element={<Skills />} />
           <Route path="/sops" element={<SopsList />} />
@@ -77,6 +80,7 @@ export const Router = () => (
           <Route path="/config/:section/:type/:alias" element={<Config />} />
           <Route path="/setup/:section" element={<Config />} />
           <Route path="/logs" element={<Logs />} />
+          <Route path="/feedback" element={<FeedbackReviewPage />} />
           <Route path="/doctor" element={<Doctor />} />
           <Route path="/pairing" element={<Pairing />} />
           <Route path="/canvas" element={<Canvas />} />

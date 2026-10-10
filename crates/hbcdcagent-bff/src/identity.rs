@@ -15,7 +15,6 @@ pub const IDENTITY_HEADERS: &[&str] = &[
 ];
 
 pub const ROLE_NORMAL: &str = "普通用户";
-pub const ROLE_ADVANCED: &str = "高级用户";
 pub const ROLE_OPS: &str = "管理员";
 
 /// Local demo mode: cookie carrying an impersonated user id.
@@ -41,7 +40,7 @@ pub const MOCK_USERS: &[MockUser] = &[
     MockUser {
         user_id: "liuyang",
         display_name: "刘洋",
-        role: ROLE_ADVANCED,
+        role: ROLE_NORMAL,
         region: "武汉市",
         org: "武汉市疾病预防控制中心",
     },
@@ -161,7 +160,7 @@ mod tests {
         }
         assert!(mock_user("evil").is_none());
         assert_eq!(mock_user("ops").expect("ops").role, ROLE_OPS);
-        assert_eq!(mock_user("liuyang").expect("adv").role, ROLE_ADVANCED);
+        assert_eq!(mock_user("liuyang").expect("adv").role, ROLE_NORMAL);
         assert_eq!(
             mock_user_cookie_header("chenmin"),
             "zeroclaw_mock_user=chenmin; Path=/hbcdcagent; SameSite=Lax"

@@ -59,3 +59,10 @@ max_context_tokens = 128000
 # 每轮只注入技能名称、说明和目录。正文在点选后由 read_skill 读取。
 [skills]
 prompt_injection_mode = "compact"
+
+# 疾控问题走监测数据和已安装技能，不把公网检索和任意 HTTP 放进工具列表。
+[web_search]
+enabled = false
+
+[http_request]
+enabled = false

@@ -39,12 +39,13 @@ test('autonomyStorageKey strips unsafe scope characters', () => {
   );
 });
 
-test('ordinary users cannot pick full; advanced and ops can', () => {
-  assert.equal(maxAutonomyForRole('普通用户'), 'supervised');
+test('every role can pick full; the default stays supervised', () => {
+  assert.equal(maxAutonomyForRole('普通用户'), 'full');
   assert.equal(maxAutonomyForRole(undefined), 'full');
   assert.equal(maxAutonomyForRole(''), 'full');
-  assert.equal(maxAutonomyForRole('高级用户'), 'full');
+  assert.equal(maxAutonomyForRole('管理员'), 'full');
   assert.equal(maxAutonomyForRole('ops'), 'full');
+  assert.equal(DEFAULT_WORKBENCH_AUTONOMY, 'supervised');
   assert.equal(clampWorkbenchAutonomy('full', 'supervised'), 'supervised');
   assert.equal(clampWorkbenchAutonomy('readonly', 'supervised'), 'readonly');
   assert.deepEqual(autonomyLevelsUpTo('supervised'), ['readonly', 'supervised']);
@@ -62,9 +63,9 @@ test('clampWorkbenchAutonomy never raises and keeps equal levels', () => {
   }
 });
 
-test('unknown roles follow the ordinary-user cap; advanced aliases do not', () => {
-  assert.equal(maxAutonomyForRole('admin'), 'supervised');
-  assert.equal(maxAutonomyForRole('user'), 'supervised');
+test('unknown roles are not capped below full', () => {
+  assert.equal(maxAutonomyForRole('admin'), 'full');
+  assert.equal(maxAutonomyForRole('user'), 'full');
   assert.equal(maxAutonomyForRole('advanced'), 'full');
   assert.equal(maxAutonomyForRole('管理员'), 'full');
   assert.deepEqual(autonomyLevelsUpTo('readonly'), ['readonly']);

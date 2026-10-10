@@ -111,18 +111,48 @@ fn catalog_dir(config: &zeroclaw_config::schema::Config, id: &str) -> PathBuf {
     catalog_root(config).join(id)
 }
 
-fn skill_seq_path(config: &zeroclaw_config::schema::Config) -> PathBuf {
-    config.install_root_dir().join("shared").join("skill-seq")
+#[derive(Clone, Copy)]
+enum SkillIdScope {
+    /// Plaza and skill-center ids. Counter file: `shared/skill-seq`.
+    Platform,
+    /// Personal skills created in chat or My Skills. Counter file: `shared/personal-skill-seq`.
+    Personal,
 }
 
-/// `sk0001` … `sk9999`, then `sk10000` without a fixed width.
-fn format_skill_id(n: u64) -> String {
-    format!("sk{n:04}")
+impl SkillIdScope {
+    fn prefix(self) -> &'static str {
+        match self {
+            Self::Platform => "sk",
+            Self::Personal => "ps",
+        }
+    }
+
+    fn file_name(self) -> &'static str {
+        match self {
+            Self::Platform => "skill-seq",
+            Self::Personal => "personal-skill-seq",
+        }
+    }
 }
 
-/// Next skill id. The counter advances even if the caller never saves.
-fn allocate_skill_id(config: &zeroclaw_config::schema::Config) -> Result<String, Response> {
-    let path = skill_seq_path(config);
+fn skill_seq_path(config: &zeroclaw_config::schema::Config, scope: SkillIdScope) -> PathBuf {
+    config
+        .install_root_dir()
+        .join("shared")
+        .join(scope.file_name())
+}
+
+/// `sk0001` / `ps0001` through `9999`, then one more digit without a fixed width.
+fn format_skill_id(scope: SkillIdScope, n: u64) -> String {
+    format!("{}{n:04}", scope.prefix())
+}
+
+/// Next skill id in `scope`. The counter advances even if the caller never saves.
+fn allocate_skill_id(
+    config: &zeroclaw_config::schema::Config,
+    scope: SkillIdScope,
+) -> Result<String, Response> {
+    let path = skill_seq_path(config, scope);
     if let Some(parent) = path.parent() {
         if let Err(err) = std::fs::create_dir_all(parent) {
             return Err(json_error(
@@ -174,12 +204,29 @@ fn allocate_skill_id(config: &zeroclaw_config::schema::Config) -> Result<String,
             }
         }
     };
-    let Some(next) = current.checked_add(1) else {
+    let Some(mut next) = current.checked_add(1) else {
         return Err(json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "skill id counter is exhausted",
         ));
     };
+    let mut skipped = 0u32;
+    while skill_id_is_taken(config, &format_skill_id(scope, next)) {
+        skipped += 1;
+        if skipped > 10_000 {
+            return Err(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "skill id counter is exhausted",
+            ));
+        }
+        let Some(advanced) = next.checked_add(1) else {
+            return Err(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "skill id counter is exhausted",
+            ));
+        };
+        next = advanced;
+    }
     if let Err(err) = (|| -> std::io::Result<()> {
         use std::io::{Seek, Write};
         file.seek(std::io::SeekFrom::Start(0))?;
@@ -193,7 +240,7 @@ fn allocate_skill_id(config: &zeroclaw_config::schema::Config) -> Result<String,
             &format!("failed to allocate skill id: {err}"),
         ));
     }
-    Ok(format_skill_id(next))
+    Ok(format_skill_id(scope, next))
 }
 
 struct SkillSeqUnlock(std::os::unix::io::RawFd);
@@ -216,16 +263,35 @@ fn lock_skill_seq(file: &std::fs::File) -> std::io::Result<()> {
     }
 }
 
-/// `POST /api/skill-ids` — one new id. Cancelled forms do not return the number.
+#[derive(Debug, Default, Deserialize)]
+pub struct AllocateSkillIdQuery {
+    #[serde(default)]
+    pub scope: String,
+}
+
+/// `POST /api/skill-ids` — one new id. `scope=personal` draws `ps0001` from
+/// `personal-skill-seq`. Anything else draws `sk0001` from `skill-seq`.
+/// Cancelled forms do not return the number.
 pub async fn handle_allocate_skill_id(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<AllocateSkillIdQuery>,
 ) -> Response {
     if let Err(resp) = require_personal_user(&state, &headers) {
         return resp;
     }
+    let scope = match query.scope.trim() {
+        "" | "platform" => SkillIdScope::Platform,
+        "personal" => SkillIdScope::Personal,
+        _ => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "skill id scope must be platform or personal",
+            );
+        }
+    };
     let config = state.config.read().clone();
-    match allocate_skill_id(&config) {
+    match allocate_skill_id(&config, scope) {
         Ok(id) => Json(serde_json::json!({ "id": id })).into_response(),
         Err(resp) => resp,
     }
@@ -431,30 +497,303 @@ fn write_skill_version(path: &Path, version: u32) -> Result<(), Response> {
 
 /// Personal directory was installed from the plaza.
 ///
-/// A `.from-plaza` marker always counts. The same id on the plaza without that
-/// marker also counts, except for the catalog creator: that directory is the
-/// working copy they submitted, and publishing it must not lock them out.
+/// Only the `.from-plaza` marker counts. The same id on the plaza without that
+/// file is the user's own skill and stays editable. Adding from the plaza
+/// still copies the plaza id and writes the marker.
 #[must_use]
-pub(crate) fn is_plaza_copy(
-    config: &zeroclaw_config::schema::Config,
-    dir: &Path,
-    name: &str,
-    user_id: &str,
-) -> bool {
-    if dir.join(".from-plaza").is_file() {
-        return true;
+pub(crate) fn is_plaza_copy(dir: &Path) -> bool {
+    dir.join(".from-plaza").is_file()
+}
+
+/// Files that make up a skill package. Dotfiles (`.from-plaza`, `.disabled`) are ignored.
+fn skill_package_snapshot(root: &Path) -> Option<Vec<(String, Vec<u8>)>> {
+    let mut files = Vec::new();
+    if !walk_skill_package(root, root, &mut files) {
+        return None;
     }
-    if !skill_plaza_dir(config)
-        .join(name)
-        .join("SKILL.md")
-        .is_file()
-    {
+    files.sort_by(|left, right| left.0.cmp(&right.0));
+    Some(files)
+}
+
+fn walk_skill_package(root: &Path, current: &Path, files: &mut Vec<(String, Vec<u8>)>) -> bool {
+    let Ok(entries) = std::fs::read_dir(current) else {
+        return false;
+    };
+    for entry in entries {
+        let Ok(entry) = entry else {
+            return false;
+        };
+        let file_name = entry.file_name();
+        let Some(name) = file_name.to_str() else {
+            continue;
+        };
+        if name.starts_with('.') || name == "__MACOSX" {
+            continue;
+        }
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            return false;
+        };
+        if file_type.is_symlink() {
+            return false;
+        }
+        if file_type.is_dir() {
+            if !walk_skill_package(root, &path, files) {
+                return false;
+            }
+            continue;
+        }
+        if !file_type.is_file() {
+            continue;
+        }
+        let Ok(rel) = path.strip_prefix(root) else {
+            return false;
+        };
+        let key = rel
+            .components()
+            .map(|component| component.as_os_str().to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("/");
+        let Ok(bytes) = std::fs::read(&path) else {
+            return false;
+        };
+        files.push((key, bytes));
+    }
+    true
+}
+
+pub(crate) struct PersonalSkillReconcile {
+    pub marked: u32,
+    pub renamed: u32,
+}
+
+/// Personal dirs that reuse a plaza id: identical packages get `.from-plaza`;
+/// packages that differ are renamed onto the personal `ps` counter.
+/// The catalog creator's working copy is left on its `sk` id.
+pub(crate) fn reconcile_colliding_personal_skills(
+    config: &zeroclaw_config::schema::Config,
+) -> PersonalSkillReconcile {
+    let mut marked = 0u32;
+    let mut renamed = 0u32;
+    let Ok(users) = std::fs::read_dir(config.install_root_dir().join("users")) else {
+        return PersonalSkillReconcile { marked, renamed };
+    };
+    for user in users.flatten() {
+        if !user.path().is_dir() {
+            continue;
+        }
+        let Some(user_id) = user.file_name().to_str().map(str::to_string) else {
+            continue;
+        };
+        let Ok(agents) = std::fs::read_dir(user.path().join("agents")) else {
+            continue;
+        };
+        for agent in agents.flatten() {
+            let skills = agent.path().join("workspace").join("skills");
+            let Ok(entries) = std::fs::read_dir(&skills) else {
+                continue;
+            };
+            let dirs: Vec<PathBuf> = entries
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|path| path.is_dir())
+                .collect();
+            for dir in dirs {
+                match reconcile_one_personal_skill(config, &user_id, &dir) {
+                    ReconcileOne::Marked => marked += 1,
+                    ReconcileOne::Renamed => renamed += 1,
+                    ReconcileOne::Skip => {}
+                }
+            }
+        }
+    }
+    renamed += retarget_personal_skill_numbers(config);
+    if marked > 0 || renamed > 0 {
+        zeroclaw_runtime::skills::cache::invalidate();
+    }
+    PersonalSkillReconcile { marked, renamed }
+}
+
+/// `sk0007` → `ps0007`. An already issued `ps` id moves when its title matches
+/// a homepage chip or plaza skill with a different number.
+fn retarget_personal_skill_numbers(config: &zeroclaw_config::schema::Config) -> u32 {
+    let mut renamed = 0u32;
+    let Ok(users) = std::fs::read_dir(config.install_root_dir().join("users")) else {
+        return 0;
+    };
+    for user in users.flatten() {
+        if !user.path().is_dir() {
+            continue;
+        }
+        let Some(user_id) = user.file_name().to_str().map(str::to_string) else {
+            continue;
+        };
+        let Ok(agents) = std::fs::read_dir(user.path().join("agents")) else {
+            continue;
+        };
+        for agent in agents.flatten() {
+            let skills = agent.path().join("workspace").join("skills");
+            let Ok(entries) = std::fs::read_dir(&skills) else {
+                continue;
+            };
+            let dirs: Vec<PathBuf> = entries
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|path| path.is_dir())
+                .collect();
+            for dir in dirs {
+                if retarget_one_personal_skill(config, &user_id, &dir) {
+                    renamed += 1;
+                }
+            }
+        }
+    }
+    renamed
+}
+
+fn retarget_one_personal_skill(
+    config: &zeroclaw_config::schema::Config,
+    user_id: &str,
+    dir: &Path,
+) -> bool {
+    let Some(name) = dir.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    let Some(desired) = corresponding_personal_id(config, user_id, dir, name) else {
+        return false;
+    };
+    let Some(parent) = dir.parent() else {
+        return false;
+    };
+    let dest = parent.join(&desired);
+    if dest.exists() {
         return false;
     }
-    match load_review(config, name) {
-        Some(review) if !review.creator_id.is_empty() && review.creator_id == user_id => false,
-        _ => true,
+    std::fs::rename(dir, &dest).is_ok()
+}
+
+fn corresponding_personal_id(
+    config: &zeroclaw_config::schema::Config,
+    user_id: &str,
+    dir: &Path,
+    name: &str,
+) -> Option<String> {
+    if dir.join(".from-plaza").is_file() || !dir.join("SKILL.md").is_file() {
+        return None;
     }
+    if let Some(number) = issued_skill_number(name, "sk") {
+        if load_review(config, name)
+            .is_some_and(|review| !review.creator_id.is_empty() && review.creator_id == user_id)
+        {
+            return None;
+        }
+        return Some(format_skill_id(SkillIdScope::Personal, number));
+    }
+    if issued_skill_number(name, "ps").is_none() {
+        return None;
+    }
+    let title = skill_frontmatter_name(dir);
+    let number = platform_number_for_title(config, &title)?;
+    let desired = format_skill_id(SkillIdScope::Personal, number);
+    if desired == name { None } else { Some(desired) }
+}
+
+fn issued_skill_number(name: &str, prefix: &str) -> Option<u64> {
+    let rest = name.strip_prefix(prefix)?;
+    if rest.is_empty() || !rest.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    rest.parse().ok()
+}
+
+fn skill_frontmatter_name(dir: &Path) -> String {
+    let Ok(text) = std::fs::read_to_string(dir.join("SKILL.md")) else {
+        return String::new();
+    };
+    zeroclaw_runtime::skills::document::SkillDocument::parse(&text)
+        .map(|doc| doc.frontmatter.name.trim().to_string())
+        .unwrap_or_default()
+}
+
+fn platform_number_for_title(config: &zeroclaw_config::schema::Config, title: &str) -> Option<u64> {
+    let title = title.trim();
+    if title.is_empty() {
+        return None;
+    }
+    for cap in &config.workbench.home.caps {
+        if cap.label_zh.trim() == title || cap.label_en.trim() == title {
+            if let Some(number) = issued_skill_number(&cap.id, "sk") {
+                return Some(number);
+            }
+        }
+    }
+    let Ok(entries) = std::fs::read_dir(skill_plaza_dir(config)) else {
+        return None;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let Some(number) = issued_skill_number(name, "sk") else {
+            continue;
+        };
+        if skill_frontmatter_name(&path) == title {
+            return Some(number);
+        }
+    }
+    None
+}
+
+enum ReconcileOne {
+    Marked,
+    Renamed,
+    Skip,
+}
+
+fn reconcile_one_personal_skill(
+    config: &zeroclaw_config::schema::Config,
+    user_id: &str,
+    dir: &Path,
+) -> ReconcileOne {
+    let Some(name) = dir.file_name().and_then(|name| name.to_str()) else {
+        return ReconcileOne::Skip;
+    };
+    if !dir.join("SKILL.md").is_file() || dir.join(".from-plaza").is_file() {
+        return ReconcileOne::Skip;
+    }
+    let plaza = skill_plaza_dir(config).join(name);
+    if !plaza.join("SKILL.md").is_file() {
+        return ReconcileOne::Skip;
+    }
+    if load_review(config, name)
+        .is_some_and(|review| !review.creator_id.is_empty() && review.creator_id == user_id)
+    {
+        return ReconcileOne::Skip;
+    }
+    let (Some(personal), Some(shared)) =
+        (skill_package_snapshot(dir), skill_package_snapshot(&plaza))
+    else {
+        return ReconcileOne::Skip;
+    };
+    if personal == shared {
+        return if std::fs::write(dir.join(".from-plaza"), "").is_ok() {
+            ReconcileOne::Marked
+        } else {
+            ReconcileOne::Skip
+        };
+    }
+    let Ok(new_id) = allocate_skill_id(config, SkillIdScope::Personal) else {
+        return ReconcileOne::Skip;
+    };
+    let Some(parent) = dir.parent() else {
+        return ReconcileOne::Skip;
+    };
+    let dest = parent.join(&new_id);
+    if dest.exists() || std::fs::rename(dir, &dest).is_err() {
+        return ReconcileOne::Skip;
+    }
+    ReconcileOne::Renamed
 }
 
 /// Creator recorded the first time this id entered the catalog. Empty for plaza-only skills.
@@ -566,6 +905,30 @@ fn review_exists_ci(config: &zeroclaw_config::schema::Config, id: &str) -> bool 
     })
 }
 
+/// True when this id is already a plaza, catalog, review, or anyone's personal skill.
+fn skill_id_is_taken(config: &zeroclaw_config::schema::Config, id: &str) -> bool {
+    if platform_skill_id_occupied(config, id) {
+        return true;
+    }
+    let Ok(users) = std::fs::read_dir(config.install_root_dir().join("users")) else {
+        return false;
+    };
+    for user in users.flatten() {
+        if !user.path().is_dir() {
+            continue;
+        }
+        let Ok(agents) = std::fs::read_dir(user.path().join("agents")) else {
+            continue;
+        };
+        for agent in agents.flatten() {
+            if skill_dir_ci(&agent.path().join("workspace").join("skills"), id).is_some() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Plaza, catalog, or a review sidecar already uses this id. Comparison ignores ASCII case.
 pub(crate) fn platform_skill_id_occupied(
     config: &zeroclaw_config::schema::Config,
@@ -597,10 +960,7 @@ pub(crate) fn personal_original_owner(
             let Some(dir) = skill_dir_ci(&agent.path().join("workspace").join("skills"), id) else {
                 continue;
             };
-            let Some(dir_name) = dir.file_name().and_then(|name| name.to_str()) else {
-                continue;
-            };
-            if !is_plaza_copy(config, &dir, dir_name, &user_id) {
+            if !is_plaza_copy(&dir) {
                 return Some(user_id);
             }
         }
@@ -1052,7 +1412,7 @@ pub async fn handle_export_skill_center_bundle(
             }
         }
     }
-    let seq = skill_seq_path(&config);
+    let seq = skill_seq_path(&config, SkillIdScope::Platform);
     if seq.is_file() {
         match std::fs::read(&seq) {
             Ok(bytes) => {
@@ -1457,7 +1817,7 @@ pub async fn handle_submit_personal_skill(
     if !src.join("SKILL.md").is_file() {
         return json_error(StatusCode::NOT_FOUND, "skill not found");
     }
-    if is_plaza_copy(&config, &src, &id, &attrs.user_id) {
+    if is_plaza_copy(&src) {
         return json_error(
             StatusCode::FORBIDDEN,
             "plaza copies cannot be submitted; fork the skill first",
@@ -1750,14 +2110,186 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let state = state_in(&tmp);
         let headers = headers("ops", ROLE_OPS);
-        let first = handle_allocate_skill_id(State(state.clone()), headers.clone()).await;
+        let first = handle_allocate_skill_id(
+            State(state.clone()),
+            headers.clone(),
+            Query(AllocateSkillIdQuery::default()),
+        )
+        .await;
         assert_eq!(first.status(), StatusCode::OK);
         assert_eq!(json_body(first).await["id"], "sk0001");
-        let second = handle_allocate_skill_id(State(state.clone()), headers).await;
+        let second = handle_allocate_skill_id(
+            State(state.clone()),
+            headers,
+            Query(AllocateSkillIdQuery::default()),
+        )
+        .await;
         assert_eq!(second.status(), StatusCode::OK);
         assert_eq!(json_body(second).await["id"], "sk0002");
         let stored = std::fs::read_to_string(tmp.path().join("shared").join("skill-seq")).unwrap();
         assert_eq!(stored.trim(), "2");
+    }
+
+    #[tokio::test]
+    async fn allocate_skips_an_id_already_on_the_plaza() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let plaza = tmp.path().join("shared").join("skill-plaza").join("sk0001");
+        std::fs::create_dir_all(&plaza).unwrap();
+        std::fs::write(
+            plaza.join("SKILL.md"),
+            "---\nname: 疫情概况\ndescription: 用户询问这项内容时使用。\n---\n\n# 正文\n",
+        )
+        .unwrap();
+        let state = state_in(&tmp);
+        let response = handle_allocate_skill_id(
+            State(state),
+            headers("ops", ROLE_OPS),
+            Query(AllocateSkillIdQuery::default()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(json_body(response).await["id"], "sk0002");
+        let stored = std::fs::read_to_string(tmp.path().join("shared").join("skill-seq")).unwrap();
+        assert_eq!(stored.trim(), "2");
+    }
+
+    #[tokio::test]
+    async fn personal_skill_ids_use_a_separate_counter() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let state = state_in(&tmp);
+        let headers = headers("chenmin", "普通用户");
+        let personal = handle_allocate_skill_id(
+            State(state.clone()),
+            headers.clone(),
+            Query(AllocateSkillIdQuery {
+                scope: "personal".into(),
+            }),
+        )
+        .await;
+        assert_eq!(personal.status(), StatusCode::OK);
+        assert_eq!(json_body(personal).await["id"], "ps0001");
+        let platform = handle_allocate_skill_id(
+            State(state),
+            headers,
+            Query(AllocateSkillIdQuery::default()),
+        )
+        .await;
+        assert_eq!(json_body(platform).await["id"], "sk0001");
+        let personal_seq =
+            std::fs::read_to_string(tmp.path().join("shared").join("personal-skill-seq")).unwrap();
+        let platform_seq =
+            std::fs::read_to_string(tmp.path().join("shared").join("skill-seq")).unwrap();
+        assert_eq!(personal_seq.trim(), "1");
+        assert_eq!(platform_seq.trim(), "1");
+    }
+
+    #[test]
+    fn reconcile_marks_identical_copies_and_renames_different_ones() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let state = state_in(&tmp);
+        let config = state.config.read().clone();
+        let same_body = "---\nname: 甲\ndescription: 用户询问这项内容时使用。\n---\n\n# 相同\n";
+        let plaza_same = skill_plaza_dir(&config).join("sk0001");
+        let plaza_diff = skill_plaza_dir(&config).join("sk0002");
+        std::fs::create_dir_all(&plaza_same).unwrap();
+        std::fs::create_dir_all(&plaza_diff).unwrap();
+        std::fs::write(plaza_same.join("SKILL.md"), same_body).unwrap();
+        std::fs::write(plaza_diff.join("SKILL.md"), same_body).unwrap();
+        let review = tmp
+            .path()
+            .join("shared")
+            .join("skill-catalog")
+            .join("sk0001.review.json");
+        std::fs::create_dir_all(review.parent().unwrap()).unwrap();
+        std::fs::write(
+            review,
+            r#"{"status":"published","creator_id":"alice","creator_name":"爱丽丝"}"#,
+        )
+        .unwrap();
+
+        let alice = personal_skills_dir(&config, "alice", "deepseek").join("sk0001");
+        std::fs::create_dir_all(&alice).unwrap();
+        std::fs::write(alice.join("SKILL.md"), same_body).unwrap();
+        let chen_same = personal_skills_dir(&config, "chenmin", "deepseek").join("sk0001");
+        std::fs::create_dir_all(&chen_same).unwrap();
+        std::fs::write(chen_same.join("SKILL.md"), same_body).unwrap();
+        let chen_diff = personal_skills_dir(&config, "chenmin", "deepseek").join("sk0002");
+        std::fs::create_dir_all(&chen_diff).unwrap();
+        std::fs::write(
+            chen_diff.join("SKILL.md"),
+            "---\nname: 乙\ndescription: 用户询问这项内容时使用。\n---\n\n# 不同\n",
+        )
+        .unwrap();
+
+        let once = reconcile_colliding_personal_skills(&config);
+        assert_eq!(once.marked, 1);
+        assert_eq!(once.renamed, 1);
+        assert!(chen_same.join(".from-plaza").is_file());
+        assert!(!alice.join(".from-plaza").is_file());
+        assert!(alice.join("SKILL.md").is_file());
+        assert!(!chen_diff.exists());
+        let renamed = personal_skills_dir(&config, "chenmin", "deepseek").join("ps0001");
+        assert!(
+            std::fs::read_to_string(renamed.join("SKILL.md"))
+                .unwrap()
+                .contains("# 不同")
+        );
+        let again = reconcile_colliding_personal_skills(&config);
+        assert_eq!(again.marked, 0);
+        assert_eq!(again.renamed, 0);
+    }
+
+    #[test]
+    fn reconcile_keeps_the_original_number_when_moving_to_the_personal_prefix() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let state = state_in(&tmp);
+        let mut config = state.config.read().clone();
+        config.workbench.home.caps = vec![zeroclaw_config::workbench::WorkbenchHomeCap {
+            id: "sk0002".into(),
+            label_zh: "疫苗覆盖".into(),
+            ..zeroclaw_config::workbench::WorkbenchHomeCap::default()
+        }];
+        let root = personal_skills_dir(&config, "chenmin", "deepseek");
+        let own = root.join("sk0028");
+        std::fs::create_dir_all(&own).unwrap();
+        std::fs::write(
+            own.join("SKILL.md"),
+            "---\nname: 自建\ndescription: 用户询问这项内容时使用。\n---\n\n# 自建\n",
+        )
+        .unwrap();
+        let renamed = root.join("ps0010");
+        std::fs::create_dir_all(&renamed).unwrap();
+        std::fs::write(
+            renamed.join("SKILL.md"),
+            "---\nname: 疫苗覆盖\ndescription: 用户询问这项内容时使用。\n---\n\n# 已改\n",
+        )
+        .unwrap();
+        let copied = root.join("sk0001");
+        std::fs::create_dir_all(&copied).unwrap();
+        std::fs::write(
+            copied.join("SKILL.md"),
+            "---\nname: 疫情概况\ndescription: 用户询问这项内容时使用。\n---\n\n# 广场\n",
+        )
+        .unwrap();
+        std::fs::write(copied.join(".from-plaza"), "").unwrap();
+
+        let once = reconcile_colliding_personal_skills(&config);
+        assert_eq!(once.renamed, 2);
+        assert!(root.join("ps0028").join("SKILL.md").is_file());
+        assert!(!own.exists());
+        assert!(
+            std::fs::read_to_string(root.join("ps0002").join("SKILL.md"))
+                .unwrap()
+                .contains("# 已改")
+        );
+        assert!(!renamed.exists());
+        assert!(copied.join(".from-plaza").is_file());
+        assert!(
+            !tmp.path()
+                .join("shared")
+                .join("personal-skill-seq")
+                .exists()
+        );
     }
 
     #[tokio::test]
@@ -2322,11 +2854,12 @@ mod tests {
                     description: "说明".into(),
                     ..SkillFrontmatter::default()
                 },
-                body: "# 同名也不行".into(),
+                body: "# 同名也可以".into(),
             }),
         )
         .await;
-        assert_eq!(same_id.status(), StatusCode::FORBIDDEN);
+        assert_eq!(same_id.status(), StatusCode::OK);
+        std::fs::write(personal_live.join(".from-plaza"), "").unwrap();
         let locked = handle_write_personal_skill(
             State(state.clone()),
             user.clone(),

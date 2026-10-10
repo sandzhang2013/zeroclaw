@@ -7,7 +7,7 @@
 use axum::Json;
 use axum::http::{HeaderMap, StatusCode};
 use zeroclaw_api::principal::{
-    AuthMethod, AuthenticatedIdentity, IdentitySubject, Principal,
+    AuthMethod, AuthenticatedIdentity, IdentitySubject, Principal, PrincipalId,
 };
 use zeroclaw_api::{ROLE_OPS, UserAttrs, UserIdError, normalize_user_id};
 use zeroclaw_config::pairing::constant_time_eq;
@@ -110,6 +110,22 @@ pub fn require_trusted_proxy(
         AuthMethod::Native,
     ));
     Ok((principal, attrs))
+}
+
+/// Roster principal for a BFF platform user. `chenmin` becomes `user:chenmin`.
+#[must_use]
+pub fn roster_principal_id(user_id: &str) -> String {
+    PrincipalId::for_roster(user_id).as_str().to_string()
+}
+
+/// Write both the legacy platform user id and the roster principal.
+pub fn stamp_platform_session_owner(
+    backend: &dyn zeroclaw_infra::session_backend::SessionBackend,
+    session_key: &str,
+    user_id: &str,
+) {
+    let _ = backend.set_session_user_id(session_key, user_id);
+    let _ = backend.set_session_principal(session_key, &roster_principal_id(user_id));
 }
 
 /// User-facing session / chat APIs.
@@ -238,6 +254,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(principal.display_id, "alice");
+        assert_eq!(principal.id.as_str(), "user:alice");
         assert_eq!(attrs.user_id, "alice");
         assert_eq!(attrs.role.as_deref(), Some(ROLE_NORMAL));
         assert_eq!(attrs.region.as_deref(), Some("武汉"));

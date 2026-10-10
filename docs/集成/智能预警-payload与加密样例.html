@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>智能预警接入 · payload 字段与 Java 加密样例</title>
+<style>
+  :root{ --teal:#0d9488; --teal-dark:#115e59; --text:#1f2937; --muted:#6b7280; --border:#e5e7eb; --bg:#f8fafc; --code:#0f172a; }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{font-family:"PingFang SC","Microsoft YaHei",Arial,sans-serif;color:var(--text);background:var(--bg);line-height:1.75;font-size:15px;}
+  .header{background:linear-gradient(135deg,#115e59,#0d9488);color:#fff;padding:40px 0 32px;margin-bottom:24px;}
+  .wrap{max-width:980px;margin:0 auto;padding:0 24px 64px;}
+  h1{font-size:24px;margin-bottom:6px;}
+  .sub{opacity:.92;}
+  section{background:#fff;border:1px solid var(--border);border-radius:12px;padding:26px 30px;margin-bottom:20px;}
+  h2{font-size:18px;color:var(--teal-dark);border-bottom:2px solid #ccfbf1;padding-bottom:8px;margin-bottom:14px;}
+  h3{font-size:15px;margin:16px 0 8px;}
+  p,ul{margin-bottom:10px;}
+  ul{padding-left:22px;}
+  table{width:100%;border-collapse:collapse;font-size:14px;margin:10px 0 14px;}
+  th{background:#0f766e;color:#fff;text-align:left;padding:8px 10px;}
+  td{padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:top;}
+  tr:nth-child(even) td{background:#f9fafb;}
+  code{font-family:Consolas,Menlo,monospace;font-size:13px;background:#ecfdf5;color:#115e59;padding:1px 5px;border-radius:4px;}
+  pre{background:var(--code);color:#e2e8f0;border-radius:10px;padding:16px 18px;overflow-x:auto;font:13px/1.55 Consolas,Menlo,monospace;margin:8px 0 14px;white-space:pre;}
+  .note{background:#fffbeb;border-left:5px solid #d97706;padding:12px 14px;border-radius:8px;font-size:14px;margin:12px 0;}
+  .ok{background:#f0fdf4;border-left:5px solid #16a34a;padding:12px 14px;border-radius:8px;font-size:14px;margin:12px 0;}
+</style>
+</head>
+<body>
+<div class="header"><div class="wrap" style="padding-bottom:0">
+  <h1>payload 字段 · JSON 样例 · Java 加密代码</h1>
+  <div class="sub">给智能预警（A）后端粘贴使用 · AES-256-GCM · JDK 8+ 无第三方依赖 · 2026-09-20</div>
+</div></div>
+<div class="wrap">
+
+<section>
+  <h2>1. 明文 payload 字段</h2>
+  <p>加密前是一份 UTF-8 JSON。字段名必须与下表一致。<code>timestamp</code> / <code>expireAt</code> 是数字不是字符串。</p>
+  <table>
+    <tr><th>字段</th><th>类型</th><th>必填</th><th>说明</th></tr>
+    <tr><td><code>userId</code></td><td>String</td><td>是</td><td>A 侧用户唯一 ID</td></tr>
+    <tr><td><code>userName</code></td><td>String</td><td>是</td><td>姓名 / 登录名</td></tr>
+    <tr><td><code>nickName</code></td><td>String</td><td>是</td><td>界面展示名，可与 userName 相同</td></tr>
+    <tr><td><code>tenantId</code></td><td>String</td><td>是</td><td>租户 ID</td></tr>
+    <tr><td><code>tenantCode</code></td><td>String</td><td>是</td><td>租户编码</td></tr>
+    <tr><td><code>tenantName</code></td><td>String</td><td>是</td><td>单位全称</td></tr>
+    <tr><td><code>regionCode</code></td><td>String</td><td>是</td><td>行政区划代码，如 420000 / 420100 / 420500</td></tr>
+    <tr><td><code>regionName</code></td><td>String</td><td>建议</td><td>湖北省 / 武汉市 / 宜昌市</td></tr>
+    <tr><td><code>timestamp</code></td><td>long</td><td>是</td><td>签发时间，毫秒 UTC</td></tr>
+    <tr><td><code>expireAt</code></td><td>long</td><td>是</td><td>timestamp + 300000（5 分钟）</td></tr>
+    <tr><td><code>nonce</code></td><td>String</td><td>是</td><td>UUID v4，每次新值，一次性</td></tr>
+    <tr><td><code>remark</code></td><td>String</td><td>否</td><td>如 from-alert。不要放密码、Token、身份证</td></tr>
+  </table>
+  <div class="note">首期没有 <code>role</code>。不要把密钥写进前端。IV 每次随机，verifyData 用 Base64URL（无 padding），AAD = clientId 的 UTF-8 字节。</div>
+</section>
+
+<section>
+  <h2>2. JSON 样例（加密前）</h2>
+  <p>下面三份仅作字段对照。真实签发时必须现算 <code>timestamp</code> / <code>expireAt</code> / <code>nonce</code>，不要原样重放。</p>
+  <h3>省级</h3>
+<pre>{
+  "userId": "U10001",
+  "userName": "张三",
+  "nickName": "预警小张",
+  "tenantId": "T001",
+  "tenantCode": "HUBEI_CDC",
+  "tenantName": "湖北省疾控中心",
+  "regionCode": "420000",
+  "regionName": "湖北省",
+  "timestamp": 1756641000000,
+  "expireAt": 1756641300000,
+  "nonce": "9f8b7c6d-1e2f-4a3b-8c7d-5e6f7a8b9c0d",
+  "remark": "from-alert"
+}</pre>
+  <h3>武汉市</h3>
+<pre>{
+  "userId": "WH-CDC-088",
+  "userName": "陈敏",
+  "nickName": "陈敏",
+  "tenantId": "T-WH",
+  "tenantCode": "WUHAN_CDC",
+  "tenantName": "武汉市疾病预防控制中心",
+  "regionCode": "420100",
+  "regionName": "武汉市",
+  "timestamp": 1756641000000,
+  "expireAt": 1756641300000,
+  "nonce": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+}</pre>
+  <h3>宜昌市</h3>
+<pre>{
+  "userId": "YC-CDC-021",
+  "userName": "周静",
+  "nickName": "周静",
+  "tenantId": "T-YC",
+  "tenantCode": "YICHANG_CDC",
+  "tenantName": "宜昌市疾病预防控制中心",
+  "regionCode": "420500",
+  "regionName": "宜昌市",
+  "timestamp": 1756641000000,
+  "expireAt": 1756641300000,
+  "nonce": "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+}</pre>
+</section>
+
+<section>
+  <h2>3. 联调参数</h2>
+<pre>clientId    = CDSS-B-ZJJK-001
+keyVersion  = 1
+密钥(标准Base64, 32字节) = luueY71IMszzt4bL8PocbEvkk1hXVpkY8Rpt2RxggUw=
+算法        = AES-256-GCM
+IV          = 12 字节随机（每次新生成）
+Tag         = 128 bit
+AAD         = "CDSS-B-ZJJK-001".getBytes("UTF-8")
+verifyData  = Base64URL( keyVersion(1B) || IV(12B) || ciphertext||tag )
+跳转        = https://&lt;B域名&gt;/hbcdcagent/workbench/deepseek?clientId={clientId}&amp;verifyData={verifyData}</pre>
+  <div class="ok">生产密钥线下另交，禁止把联调密钥带上生产。verifyData 已是 URL 安全编码，无需再 encodeURIComponent。</div>
+</section>
+
+<section>
+  <h2>4. 可粘贴 Java（整类复制到 A 后端）</h2>
+  <p>JDK 8+，只用 <code>javax.crypto</code>。调用 <code>SsoTicketIssuer.issue(...)</code> 后把 <code>clientId</code> + <code>verifyData</code> 给前端跳转。若项目已有 Fastjson / Jackson，可用其序列化 Map，但字段名必须与第 1 节一致。</p>
+<pre>import javax.crypto.Cipher;
+import javax.crypto.spec.GCMParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.security.SecureRandom;
+import java.util.Base64;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.UUID;
+
+public final class SsoTicketIssuer {
+
+    public static final String CLIENT_ID = "CDSS-B-ZJJK-001";
+    public static final int KEY_VERSION = 1;
+    public static final String KEY_BASE64 = "luueY71IMszzt4bL8PocbEvkk1hXVpkY8Rpt2RxggUw=";
+    public static final long TTL_MS = 300_000L;
+
+    private static final int IV_LEN = 12;
+    private static final int TAG_BITS = 128;
+    private static final SecureRandom RANDOM = new SecureRandom();
+
+    private SsoTicketIssuer() {}
+
+    public static final class Ticket {
+        public final String clientId;
+        public final String verifyData;
+        public final long expireAt;
+        public Ticket(String clientId, String verifyData, long expireAt) {
+            this.clientId = clientId;
+            this.verifyData = verifyData;
+            this.expireAt = expireAt;
+        }
+    }
+
+    public static Ticket issue(
+            String userId, String userName, String nickName,
+            String tenantId, String tenantCode, String tenantName,
+            String regionCode, String regionName, String remark) {
+        long now = System.currentTimeMillis();
+        long expireAt = now + TTL_MS;
+        Map&lt;String, Object&gt; payload = new LinkedHashMap&lt;String, Object&gt;();
+        payload.put("userId", required(userId, "userId"));
+        payload.put("userName", required(userName, "userName"));
+        payload.put("nickName", required(nickName, "nickName"));
+        payload.put("tenantId", required(tenantId, "tenantId"));
+        payload.put("tenantCode", required(tenantCode, "tenantCode"));
+        payload.put("tenantName", required(tenantName, "tenantName"));
+        payload.put("regionCode", required(regionCode, "regionCode"));
+        if (regionName != null &amp;&amp; !regionName.trim().isEmpty()) {
+            payload.put("regionName", regionName.trim());
+        }
+        payload.put("timestamp", Long.valueOf(now));
+        payload.put("expireAt", Long.valueOf(expireAt));
+        payload.put("nonce", UUID.randomUUID().toString());
+        if (remark != null &amp;&amp; !remark.trim().isEmpty()) {
+            payload.put("remark", remark.trim());
+        }
+        byte[] key = Base64.getDecoder().decode(KEY_BASE64);
+        String json = toJson(payload);
+        String verifyData = encrypt(key, KEY_VERSION, json,
+                CLIENT_ID.getBytes(StandardCharsets.UTF_8));
+        return new Ticket(CLIENT_ID, verifyData, expireAt);
+    }
+
+    public static String encrypt(byte[] keyBytes, int keyVersion, String payload, byte[] aad) {
+        try {
+            byte[] iv = new byte[IV_LEN];
+            RANDOM.nextBytes(iv);
+            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+            cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(keyBytes, "AES"),
+                    new GCMParameterSpec(TAG_BITS, iv));
+            if (aad != null) cipher.updateAAD(aad);
+            byte[] cipherText = cipher.doFinal(payload.getBytes(StandardCharsets.UTF_8));
+            ByteBuffer buf = ByteBuffer.allocate(1 + IV_LEN + cipherText.length);
+            buf.put((byte) keyVersion).put(iv).put(cipherText);
+            return Base64.getUrlEncoder().withoutPadding().encodeToString(buf.array());
+        } catch (Exception e) {
+            throw new IllegalStateException("SSO encrypt failed", e);
+        }
+    }
+
+    public static String jumpUrl(String bOrigin, Ticket ticket) {
+        String origin = bOrigin.endsWith("/") ? bOrigin.substring(0, bOrigin.length() - 1) : bOrigin;
+        return origin + "/hbcdcagent/workbench/deepseek?clientId=" + ticket.clientId
+                + "&amp;verifyData=" + ticket.verifyData;
+    }
+
+    static String toJson(Map&lt;String, Object&gt; map) {
+        StringBuilder sb = new StringBuilder(256);
+        sb.append('{');
+        boolean first = true;
+        for (Map.Entry&lt;String, Object&gt; e : map.entrySet()) {
+            if (!first) sb.append(',');
+            first = false;
+            sb.append('"').append(escape(e.getKey())).append('"').append(':');
+            Object v = e.getValue();
+            if (v instanceof Number) sb.append(v.toString());
+            else sb.append('"').append(escape(String.valueOf(v))).append('"');
+        }
+        return sb.append('}').toString();
+    }
+
+    private static String required(String value, String field) {
+        if (value == null || value.trim().isEmpty()) {
+            throw new IllegalArgumentException("payload missing " + field);
+        }
+        return value.trim();
+    }
+
+    private static String escape(String s) {
+        StringBuilder sb = new StringBuilder(s.length() + 8);
+        for (int i = 0; i &lt; s.length(); i++) {
+            char c = s.charAt(i);
+            switch (c) {
+                case '"':  sb.append("\\\""); break;
+                case '\\': sb.append("\\\\"); break;
+                case '\n': sb.append("\\n"); break;
+                case '\r': sb.append("\\r"); break;
+                case '\t': sb.append("\\t"); break;
+                default:
+                    if (c &lt; 0x20) sb.append(String.format("\\u%04x", Integer.valueOf(c)));
+                    else sb.append(c);
+            }
+        }
+        return sb.toString();
+    }
+}</pre>
+  <h3>A 后端调用示例</h3>
+<pre>SsoTicketIssuer.Ticket ticket = SsoTicketIssuer.issue(
+        currentUser.getUserId(),
+        currentUser.getUserName(),
+        currentUser.getNickName(),
+        currentUser.getTenantId(),
+        currentUser.getTenantCode(),
+        currentUser.getTenantName(),
+        currentUser.getRegionCode(),
+        currentUser.getRegionName(),
+        "from-alert");
+
+// 返回给 A 前端
+// { "clientId": ticket.clientId, "verifyData": ticket.verifyData, "expireAt": ticket.expireAt }
+
+String url = SsoTicketIssuer.jumpUrl("https://&lt;B域名&gt;", ticket);
+// window.location.href = url;
+</pre>
+</section>
+
+<p style="text-align:center;color:var(--muted);font-size:13px">智算疾控签发 · 仅供智能预警接入 · 联调密钥禁止用于生产</p>
+</div>
+</body>
+</html>

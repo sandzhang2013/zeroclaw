@@ -3,7 +3,9 @@
 //! Reads [`zeroclaw_api::TOOL_LOOP_USER_ATTRS`] on every call. Do not bake a
 //! tenant id into the wrapper: one agent handle serves many BFF users.
 
-use super::traits::{ExportFilter, Memory, MemoryCategory, MemoryEntry, StoreOptions};
+use super::traits::{
+    ExportFilter, Memory, MemoryCategory, MemoryEntry, PrincipalScope, StoreOptions,
+};
 use anyhow::{Result, bail};
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -28,6 +30,29 @@ impl TenantScopedMemory {
             None => true,
             Some(None) => false,
             Some(Some(ref attrs)) => entry.tenant_id.as_deref() == Some(attrs.user_id.as_str()),
+        }
+    }
+
+    /// Private-plane scope for the frozen user. Ops keep the session owner's
+    /// tenant; a normal user can only touch their own.
+    fn principal_scope(&self, scope: &PrincipalScope) -> Result<PrincipalScope> {
+        match self.attrs() {
+            None => Ok(scope.clone()),
+            Some(None) => bail!("memory operation refused: missing frozen user identity"),
+            Some(Some(ref attrs)) if attrs.is_ops() => Ok(scope.clone()),
+            Some(Some(ref attrs)) => {
+                if let Some(existing) = scope.tenant_id.as_deref()
+                    && existing != attrs.user_id
+                {
+                    bail!(
+                        "TenantScopedMemory refuses principal scope for foreign tenant_id; bound user is {}",
+                        attrs.user_id
+                    );
+                }
+                let mut bound = scope.clone();
+                bound.tenant_id = Some(attrs.user_id.clone());
+                Ok(bound)
+            }
         }
     }
 
@@ -279,6 +304,97 @@ impl Memory for TenantScopedMemory {
     async fn ensure_agent_uuid(&self, alias: &str) -> Result<String> {
         self.inner.ensure_agent_uuid(alias).await
     }
+
+    async fn store_for_principal(
+        &self,
+        scope: &PrincipalScope,
+        key: &str,
+        content: &str,
+        category: MemoryCategory,
+        session_id: Option<&str>,
+    ) -> Result<()> {
+        let scope = self.principal_scope(scope)?;
+        self.inner
+            .store_for_principal(&scope, key, content, category, session_id)
+            .await
+    }
+
+    async fn recall_for_principal(
+        &self,
+        scope: &PrincipalScope,
+        query: &str,
+        limit: usize,
+        session_id: Option<&str>,
+        since: Option<&str>,
+        until: Option<&str>,
+    ) -> Result<Vec<MemoryEntry>> {
+        let scope = self.principal_scope(scope)?;
+        self.inner
+            .recall_for_principal(&scope, query, limit, session_id, since, until)
+            .await
+    }
+
+    async fn list_for_principal(
+        &self,
+        scope: &PrincipalScope,
+        category: Option<&MemoryCategory>,
+        session_id: Option<&str>,
+    ) -> Result<Vec<MemoryEntry>> {
+        let scope = self.principal_scope(scope)?;
+        self.inner
+            .list_for_principal(&scope, category, session_id)
+            .await
+    }
+
+    async fn get_for_principal(
+        &self,
+        scope: &PrincipalScope,
+        key: &str,
+    ) -> Result<Option<MemoryEntry>> {
+        let scope = self.principal_scope(scope)?;
+        self.inner.get_for_principal(&scope, key).await
+    }
+
+    async fn forget_for_principal(&self, scope: &PrincipalScope, key: &str) -> Result<bool> {
+        let scope = self.principal_scope(scope)?;
+        self.inner.forget_for_principal(&scope, key).await
+    }
+
+    async fn count_for_principal(&self, scope: &PrincipalScope) -> Result<usize> {
+        let scope = self.principal_scope(scope)?;
+        self.inner.count_for_principal(&scope).await
+    }
+
+    async fn export_for_principal(
+        &self,
+        scope: &PrincipalScope,
+        filter: &ExportFilter,
+    ) -> Result<Vec<MemoryEntry>> {
+        let scope = self.principal_scope(scope)?;
+        self.inner.export_for_principal(&scope, filter).await
+    }
+
+    async fn purge_namespace_for_principal(
+        &self,
+        scope: &PrincipalScope,
+        namespace: &str,
+    ) -> Result<usize> {
+        let scope = self.principal_scope(scope)?;
+        self.inner
+            .purge_namespace_for_principal(&scope, namespace)
+            .await
+    }
+
+    async fn purge_session_for_principal(
+        &self,
+        scope: &PrincipalScope,
+        session_id: &str,
+    ) -> Result<usize> {
+        let scope = self.principal_scope(scope)?;
+        self.inner
+            .purge_session_for_principal(&scope, session_id)
+            .await
+    }
 }
 
 #[cfg(test)]
@@ -414,6 +530,35 @@ mod tests {
                         None,
                         StoreOptions::default().with_tenant_id("bob"),
                     )
+                    .await
+                    .unwrap_err();
+                assert!(err.to_string().contains("foreign tenant_id"));
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn private_plane_is_per_user_and_invisible_on_the_shared_plane() {
+        let (_tmp, mem) = fresh();
+        let alice = crate::PrincipalPlaneMemory::new(
+            Arc::new(mem),
+            PrincipalScope::new("user:alice").with_tenant(Some("alice".to_string())),
+        );
+        TOOL_LOOP_USER_ATTRS
+            .scope(Some(UserAttrs::new("alice")), async {
+                alice
+                    .store("note", "alice-private", MemoryCategory::Core, None)
+                    .await
+                    .unwrap();
+                let hits = alice.recall("alice-private", 10, None, None, None).await.unwrap();
+                assert_eq!(hits.len(), 1);
+                assert_eq!(hits[0].key, "note");
+            })
+            .await;
+        TOOL_LOOP_USER_ATTRS
+            .scope(Some(UserAttrs::new("bob")), async {
+                let err = alice
+                    .store("note", "bob-overwrite", MemoryCategory::Core, None)
                     .await
                     .unwrap_err();
                 assert!(err.to_string().contains("foreign tenant_id"));

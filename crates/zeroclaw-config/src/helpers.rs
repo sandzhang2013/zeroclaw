@@ -333,7 +333,19 @@ fn toml_value_to_display_for_kind(
     display_secret_terminals: &[&str],
 ) -> String {
     match kind {
-        PropKind::Object | PropKind::ObjectArray => match value {
+        // Object arrays are displayed as JSON by `prop_fields` (`object_array_json_display_value`).
+        // `get_prop` must use that same JSON so `config get` round-trips the value `config set` accepts.
+        PropKind::ObjectArray => match value {
+            None => crate::traits::UNSET_DISPLAY.to_string(),
+            Some(toml::Value::String(s)) => s.clone(),
+            Some(v) => {
+                let mut redacted = v.clone();
+                redact_toml_display_secrets(&mut redacted, display_secret_terminals);
+                serde_json::to_string(&toml_value_to_json(&redacted))
+                    .unwrap_or_else(|_| "[]".to_string())
+            }
+        },
+        PropKind::Object => match value {
             None => crate::traits::UNSET_DISPLAY.to_string(),
             Some(toml::Value::String(s)) => s.clone(),
             Some(v) => {
@@ -599,6 +611,28 @@ fn parse_memory_grant_array(value_str: &str) -> anyhow::Result<toml::Value> {
             .map(|item| toml::Value::String(item.to_string()))
             .collect(),
     ))
+}
+
+fn toml_value_to_json(value: &toml::Value) -> serde_json::Value {
+    match value {
+        toml::Value::String(text) => serde_json::Value::String(text.clone()),
+        toml::Value::Integer(number) => serde_json::Value::Number((*number).into()),
+        toml::Value::Float(number) => serde_json::Number::from_f64(*number)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
+        toml::Value::Boolean(flag) => serde_json::Value::Bool(*flag),
+        toml::Value::Datetime(datetime) => serde_json::Value::String(datetime.to_string()),
+        toml::Value::Array(items) => {
+            serde_json::Value::Array(items.iter().map(toml_value_to_json).collect())
+        }
+        toml::Value::Table(table) => {
+            let mut object = serde_json::Map::new();
+            for (key, nested) in table {
+                object.insert(key.clone(), toml_value_to_json(nested));
+            }
+            serde_json::Value::Object(object)
+        }
+    }
 }
 
 /// Walk a `serde_json::Value` into a `toml::Value`, dropping any `null`s

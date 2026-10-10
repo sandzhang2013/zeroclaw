@@ -24,7 +24,8 @@
 //! documented limitation of the opt-in cache.
 
 use super::traits::{
-    ExportFilter, Memory, MemoryCategory, MemoryEntry, MemoryStats, ProceduralMessage, StoreOptions,
+    ExportFilter, Memory, MemoryCategory, MemoryEntry, MemoryStats, PrincipalScope,
+    ProceduralMessage, StoreOptions,
 };
 use async_trait::async_trait;
 use parking_lot::Mutex;
@@ -576,6 +577,109 @@ impl Memory for RetrievalPipeline {
 
     async fn ensure_agent_uuid(&self, alias: &str) -> anyhow::Result<String> {
         self.memory.ensure_agent_uuid(alias).await
+    }
+
+    async fn store_for_principal(
+        &self,
+        scope: &PrincipalScope,
+        key: &str,
+        content: &str,
+        category: MemoryCategory,
+        session_id: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let result = self
+            .memory
+            .store_for_principal(scope, key, content, category, session_id)
+            .await;
+        self.invalidate_cache();
+        result
+    }
+
+    async fn recall_for_principal(
+        &self,
+        scope: &PrincipalScope,
+        query: &str,
+        limit: usize,
+        session_id: Option<&str>,
+        since: Option<&str>,
+        until: Option<&str>,
+    ) -> anyhow::Result<Vec<MemoryEntry>> {
+        self.memory
+            .recall_for_principal(scope, query, limit, session_id, since, until)
+            .await
+    }
+
+    async fn list_for_principal(
+        &self,
+        scope: &PrincipalScope,
+        category: Option<&MemoryCategory>,
+        session_id: Option<&str>,
+    ) -> anyhow::Result<Vec<MemoryEntry>> {
+        self.memory
+            .list_for_principal(scope, category, session_id)
+            .await
+    }
+
+    async fn get_for_principal(
+        &self,
+        scope: &PrincipalScope,
+        key: &str,
+    ) -> anyhow::Result<Option<MemoryEntry>> {
+        self.memory.get_for_principal(scope, key).await
+    }
+
+    async fn forget_for_principal(
+        &self,
+        scope: &PrincipalScope,
+        key: &str,
+    ) -> anyhow::Result<bool> {
+        let result = self.memory.forget_for_principal(scope, key).await;
+        if !matches!(&result, Ok(false)) {
+            self.invalidate_cache();
+        }
+        result
+    }
+
+    async fn count_for_principal(&self, scope: &PrincipalScope) -> anyhow::Result<usize> {
+        self.memory.count_for_principal(scope).await
+    }
+
+    async fn export_for_principal(
+        &self,
+        scope: &PrincipalScope,
+        filter: &ExportFilter,
+    ) -> anyhow::Result<Vec<MemoryEntry>> {
+        self.memory.export_for_principal(scope, filter).await
+    }
+
+    async fn purge_namespace_for_principal(
+        &self,
+        scope: &PrincipalScope,
+        namespace: &str,
+    ) -> anyhow::Result<usize> {
+        let result = self
+            .memory
+            .purge_namespace_for_principal(scope, namespace)
+            .await;
+        if !matches!(&result, Ok(0)) {
+            self.invalidate_cache();
+        }
+        result
+    }
+
+    async fn purge_session_for_principal(
+        &self,
+        scope: &PrincipalScope,
+        session_id: &str,
+    ) -> anyhow::Result<usize> {
+        let result = self
+            .memory
+            .purge_session_for_principal(scope, session_id)
+            .await;
+        if !matches!(&result, Ok(0)) {
+            self.invalidate_cache();
+        }
+        result
     }
 }
 

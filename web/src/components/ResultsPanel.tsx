@@ -119,7 +119,7 @@ function latestMessageArtifact(
 /**
  * Right-hand workbench pane: tool results plus files written in this session.
  */
-export function ResultsPanel() {
+export function ResultsPanel({ showResults = true }: { showResults?: boolean }) {
   const [tab, setTab] = useState<RightTab>('artifacts');
   const { messages } = useAgent();
   const resultCount = useMemo(
@@ -131,14 +131,18 @@ export function ResultsPanel() {
   const lastArtifactPath = lastArtifact?.path ?? '';
 
   useEffect(() => {
+    if (!showResults) {
+      setTab('artifacts');
+      return;
+    }
     if (lastArtifactPath) setTab('artifacts');
     else if (lastPreview) setTab('results');
-  }, [lastPreview, lastArtifactPath]);
+  }, [lastPreview, lastArtifactPath, showResults]);
 
   return (
     <aside
       className="flex min-h-0 min-w-0 flex-1 flex-col bg-pc-base/80"
-      aria-label={t('workbench.results')}
+      aria-label={showResults ? t('workbench.results') : t('workbench.tab_artifacts')}
     >
       <div className="flex shrink-0 items-center gap-1 border-b border-pc-border px-3 py-2">
         <div
@@ -152,16 +156,20 @@ export function ResultsPanel() {
             label={t('workbench.tab_artifacts')}
             onClick={() => setTab('artifacts')}
           />
-          <TabButton
-            id="results"
-            active={tab === 'results'}
-            label={t('workbench.tab_results')}
-            count={resultCount}
-            onClick={() => setTab('results')}
-          />
+          {showResults && (
+            <TabButton
+              id="results"
+              active={tab === 'results'}
+              label={t('workbench.tab_results')}
+              count={resultCount}
+              onClick={() => setTab('results')}
+            />
+          )}
         </div>
       </div>
-      {tab === 'artifacts' ? <ArtifactsList lastArtifact={lastArtifact} /> : <ResultsList preview={lastPreview} />}
+      {showResults && tab === 'results'
+        ? <ResultsList preview={lastPreview} />
+        : <ArtifactsList lastArtifact={lastArtifact} />}
     </aside>
   );
 }

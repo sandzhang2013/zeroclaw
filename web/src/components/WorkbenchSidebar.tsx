@@ -11,6 +11,8 @@ import {
   Pencil,
   Settings,
   Sparkles,
+  ThumbsDown,
+  ThumbsUp,
   X,
 } from 'lucide-react';
 import { t } from '@/lib/i18n';
@@ -26,6 +28,7 @@ import {
 } from '@/lib/workbenchFolderNav';
 import { workbenchVersionLabel } from '@/lib/workbenchVersion';
 import { workbenchCommitCount } from 'virtual:workbench-version';
+import type { TurnVerdict } from '@/lib/turnFeedback';
 
 export interface SessionIndicator {
   streaming: boolean;
@@ -37,6 +40,7 @@ export interface WorkbenchSidebarProps {
   sessions: WorkbenchSession[];
   activeSessionId: string;
   indicators: Record<string, SessionIndicator>;
+  ratings?: Record<string, TurnVerdict>;
   collapsed: boolean;
   onToggleCollapsed: () => void;
   onNewSession: () => void;
@@ -98,6 +102,7 @@ export function WorkbenchSidebar({
   sessions,
   activeSessionId,
   indicators,
+  ratings,
   collapsed,
   onToggleCollapsed,
   onNewSession,
@@ -237,6 +242,7 @@ export function WorkbenchSidebar({
         renameInputRef={renameInputRef}
         buttonRef={(el) => { sessionRefs.current[session.id] = el; }}
         relativeTime={formatRelativeTime(session.updatedAt, now)}
+        rating={ratings?.[session.id]}
         onSelect={() => onSelect(session.id)}
         onClose={() => onClose(session.id)}
         onStartRename={() => startRename(session)}
@@ -515,6 +521,7 @@ function SessionRow({
   renameInputRef,
   buttonRef,
   relativeTime,
+  rating,
   onSelect,
   onClose,
   onStartRename,
@@ -533,6 +540,7 @@ function SessionRow({
   renameInputRef: React.RefObject<HTMLInputElement | null>;
   buttonRef: (el: HTMLButtonElement | null) => void;
   relativeTime: string;
+  rating?: TurnVerdict;
   onSelect: () => void;
   onClose: () => void;
   onStartRename: () => void;
@@ -597,6 +605,12 @@ function SessionRow({
     >
       <StatusDot streaming={indicator?.streaming} unread={indicator?.unread} active={active} />
       <span className="min-w-0 flex-1 truncate text-pc-text">{sessionLabel(session)}</span>
+      {rating === 'like' && (
+        <ThumbsUp className="size-3 shrink-0 text-pc-text-faint" aria-label={t('workbench.feedback_like')} />
+      )}
+      {rating === 'dislike' && (
+        <ThumbsDown className="size-3 shrink-0 text-pc-text-faint" aria-label={t('workbench.feedback_dislike')} />
+      )}
       <span className="relative ml-1 flex h-6 shrink-0 items-center justify-end">
         <span className="whitespace-nowrap text-[10px] tabular-nums text-pc-text-faint group-hover/task-card:opacity-0">
           {relativeTime}

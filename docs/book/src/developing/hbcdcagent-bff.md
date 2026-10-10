@@ -142,11 +142,17 @@ local mock and user-center SSO run `zeroclaw daemon` plus
 `/hbcdcagent/auth/mock?user=chenmin`; SSO mode loads `config/.env` and leaves mock
 off. Do not point those scripts at a Vite source tree.
 
-Callback and HTML navigation failures render a self-contained Chinese
-page with the five login steps (SSO jump, callback `verifyCode`,
-`/sso/code/userInfo`, `/console/tenant/detail` cityCode, session) and a status for each: 已配置 / 通过 /
-未配置 / 失败 / 未执行. Missing SSO env names are listed; secrets are
-not. API and WebSocket still return `401 login required` as text.
+Opening the workbench with no session renders a self-contained Chinese
+page titled 无法进入工作台. It tells the user to open a ticket URL from
+省统筹平台, or to enter from the 省统筹平台门户 item 「数智疾控」. The
+steps are the alert ticket (`clientId` + `verifyData` to
+`/hbcdcagent/sso/auth/verify`) and the portal callback (`verifyCode` to
+`/hbcdcagent/auth/callback`). It
+does not ask for `USER_CENTER_LOGIN_URL`, `USER_CENTER_CLIENT_ID`, or
+`USER_CENTER_REALM`. Callback failures still list the verifyCode steps
+(callback, `/sso/code/userInfo`, `/console/tenant/detail`, session) with
+status 已配置 / 通过 / 未配置 / 失败 / 未执行. Secrets are not shown.
+API and WebSocket still return `401 login required` as text.
 
 WebSocket proxying splices the HTTP upgrade onto the daemon so Chinese
 `X-User-Role` / region / org bytes and `zeroclaw.v1` pass through.

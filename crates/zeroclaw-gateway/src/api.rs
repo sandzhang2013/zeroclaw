@@ -1741,7 +1741,9 @@ fn session_visible_to(
     match attrs {
         None => true,
         Some(a) if a.is_ops() => true,
-        Some(a) => meta.user_id.as_deref() == Some(a.user_id.as_str()),
+        Some(a) => {
+            zeroclaw_infra::session_backend::session_belongs_to_platform_user(meta, &a.user_id)
+        }
     }
 }
 
@@ -1757,13 +1759,33 @@ fn require_session_access(
         return Ok(());
     }
     match backend.get_session_metadata(session_key) {
-        Some(meta) if meta.user_id.is_none() => {
-            // Pre-identity rows: the first user who already holds the UUID
-            // (typically after workbench localStorage inherit) claims them.
-            let _ = backend.set_session_user_id(session_key, &attrs.user_id);
+        Some(meta)
+            if zeroclaw_infra::session_backend::session_belongs_to_platform_user(
+                &meta,
+                &attrs.user_id,
+            ) =>
+        {
+            if meta.principal_id.is_none() {
+                let _ = backend.set_session_principal(
+                    session_key,
+                    &crate::trusted_proxy::roster_principal_id(&attrs.user_id),
+                );
+            }
+            if meta.user_id.is_none() {
+                let _ = backend.set_session_user_id(session_key, &attrs.user_id);
+            }
             Ok(())
         }
-        Some(meta) if meta.user_id.as_deref() == Some(attrs.user_id.as_str()) => Ok(()),
+        Some(meta) if meta.user_id.is_none() && meta.principal_id.is_none() => {
+            // Pre-identity rows: the first user who already holds the UUID
+            // (typically after workbench localStorage inherit) claims them.
+            crate::trusted_proxy::stamp_platform_session_owner(
+                backend,
+                session_key,
+                &attrs.user_id,
+            );
+            Ok(())
+        }
         _ => Err((
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": "Session not found"})),
@@ -2666,6 +2688,7 @@ pub(crate) mod tests {
             .collect();
         let expected_fields = [
             "agent_alias",
+            "agents",
             "allow_self_upgrade",
             "channels",
             "check_updates",
@@ -2688,6 +2711,7 @@ pub(crate) mod tests {
         .into_iter()
         .collect();
         assert_eq!(actual_fields, expected_fields);
+        assert!(json["agents"].is_array());
         assert!(json["version"].as_str().is_some());
         assert!(json["temperature"].is_null());
         assert!(json["agent_alias"].is_null());
@@ -3551,7 +3575,11 @@ pub(crate) mod tests {
 
     fn pairing_on_bff_state(tmp: &tempfile::TempDir) -> AppState {
         let mut state = test_state(trusted_proxy_config(tmp));
-        state.pairing = Arc::new(PairingGuard::new(true, &[]));
+        state.pairing = Arc::new(PairingGuard::new(
+            true,
+            &[],
+            zeroclaw_config::pairing::PairingCodePolicy::default(),
+        ));
         state
     }
 
@@ -3954,10 +3982,10 @@ pub(crate) mod tests {
 
         let saved =
             handle_save_personal_skill(State(state.clone()), advanced, Json(flu_skill())).await;
-        assert_eq!(saved.status(), StatusCode::CREATED);
+        assert_eq!(saved.status(), StatusCode::CONFLICT);
         let cfg = state.config.read();
         assert!(
-            cfg.user_workspace_dir("adv-1", "web")
+            !cfg.user_workspace_dir("adv-1", "web")
                 .join("skills/flu-weekly/SKILL.md")
                 .exists()
         );

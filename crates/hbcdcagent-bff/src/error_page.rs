@@ -9,7 +9,7 @@ use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use uuid::Uuid;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum LoginErrorKind {
     MissingVerifyCode,
     ExchangeFailed,
@@ -81,7 +81,7 @@ impl LoginErrorKind {
             ),
             Self::NoLoginEntry => (
                 "无法进入工作台",
-                "本地模拟登录已关闭。对照下面清单补齐用户中心配置后，重新打开工作台。",
+                "工作台不能从这里直接登录。请从省统筹平台打开带票据的地址，或从省统筹平台门户点「数智疾控」进入。",
             ),
             Self::LoggedOut => (
                 "已退出登录",
@@ -130,7 +130,47 @@ fn callback_url(cfg: &Config) -> String {
     cfg.callback_url()
 }
 
+fn entry_checklist(cfg: &Config) -> Vec<Step> {
+    let ticket = match cfg.ticket_sso.as_ref() {
+        Some(sso) => Step {
+            title: "省统筹平台带票据进入",
+            status: StepStatus::Configured,
+            detail: format!(
+                "地址需带 clientId={}&verifyData=。页面会提交到 {}，通过后建立会话",
+                sso.client_id,
+                Config::TICKET_VERIFY_PATH
+            ),
+        },
+        None => Step {
+            title: "省统筹平台带票据进入",
+            status: StepStatus::Missing,
+            detail: "未启用。需要同时配置 HBCDCAGENT_SSO_CLIENT_ID 与 HBCDCAGENT_SSO_KEY_B64"
+                .to_string(),
+        },
+    };
+    vec![
+        ticket,
+        Step {
+            title: "省统筹平台门户回跳",
+            status: StepStatus::Pending,
+            detail: format!(
+                "从省统筹平台门户点「数智疾控」，带着 verifyCode 打开 {}。这一步用已配置的 OpenAPI 换票，不经过登录页跳转",
+                callback_url(cfg)
+            ),
+        },
+        Step {
+            title: "建立会话并进入工作台",
+            status: StepStatus::Pending,
+            detail: "上述任一入口成功后写入会话，再打开 /hbcdcagent/workbench。直接打开工作台地址不会建立会话"
+                .to_string(),
+        },
+    ]
+}
+
 fn checklist(cfg: &Config, kind: LoginErrorKind) -> Vec<Step> {
+    if kind == LoginErrorKind::NoLoginEntry {
+        return entry_checklist(cfg);
+    }
     let login_ready = cfg.login_redirect().is_some();
     let missing = missing_login_env(cfg);
     let (login_status, login_detail) = if login_ready {
@@ -275,10 +315,16 @@ fn render_steps(steps: &[Step]) -> String {
 
 fn render(cfg: &Config, kind: LoginErrorKind, state: Option<&str>) -> String {
     let (title, body) = kind.copy();
-    let retry = cfg
-        .login_redirect_with_state(state)
-        .unwrap_or_else(|| Config::workbench_path().to_string());
-    let href = escape_html_attr(&retry);
+    let action = match kind {
+        LoginErrorKind::NoLoginEntry => String::new(),
+        _ => {
+            let retry = cfg
+                .login_redirect_with_state(state)
+                .unwrap_or_else(|| Config::workbench_path().to_string());
+            let href = escape_html_attr(&retry);
+            format!(r#"<a class="btn" href="{href}">重新登录</a>"#)
+        }
+    };
     let steps = render_steps(&checklist(cfg, kind));
     format!(
         r#"<!DOCTYPE html>
@@ -331,7 +377,7 @@ fn render(cfg: &Config, kind: LoginErrorKind, state: Option<&str>) -> String {
   <h1>{title}</h1>
   <p class="lead">{body}</p>
   {steps}
-  <a class="btn" href="{href}">重新登录</a>
+  {action}
 </main>
 </body>
 </html>
@@ -375,18 +421,20 @@ mod tests {
     }
 
     #[test]
-    fn no_login_entry_lists_missing_sso_env() {
+    fn no_login_entry_lists_current_entries() {
         let mut cfg = Config::for_test("http://88.7.129.9/openapi", "http://up");
         cfg.login_url = None;
         let html = render(&cfg, LoginErrorKind::NoLoginEntry, None);
         assert!(html.contains("无法进入工作台"));
-        assert!(html.contains("USER_CENTER_LOGIN_URL"));
+        assert!(html.contains("省统筹平台带票据进入"));
+        assert!(html.contains("省统筹平台门户回跳"));
+        assert!(html.contains("请从省统筹平台打开带票据的地址，或从省统筹平台门户点「数智疾控」进入"));
+        assert!(html.contains("HBCDCAGENT_SSO_CLIENT_ID"));
         assert!(html.contains("未配置"));
         assert!(html.contains("未执行"));
-        assert!(html.contains("http://88.7.129.9/openapi"));
         assert!(html.contains("/hbcdcagent/auth/callback"));
-        assert!(html.contains("/console/tenant/detail"));
-        assert!(html.contains("查租户区域代码"));
+        assert!(!html.contains("USER_CENTER_LOGIN_URL"));
+        assert!(!html.contains("重新登录"));
         assert!(!html.contains("app-key"));
         assert!(!html.contains("bff-secret"));
     }

@@ -3030,16 +3030,15 @@ async fn post_connect_transport_failure_quarantines_endpoint() {
 
 #[tokio::test]
 async fn connection_establishment_failure_does_not_quarantine_endpoint() {
-    // Reserve the port with a socket that is bound but never placed in the
-    // listening state, and keep it alive for the whole test. The reservation
-    // stops a parallel fixture from claiming the port, while the absent
-    // `listen()` call makes every connect attempt refuse deterministically
-    // instead of racing another server onto a released address.
+    // Pick a free port, then release it before connecting. A socket that is
+    // bound but not listening blackholes SYNs on macOS, so the client times
+    // out instead of seeing connection refused.
     let reservation = tokio::net::TcpSocket::new_v4().expect("create reservation socket");
     reservation
         .bind("127.0.0.1:0".parse().expect("loopback reservation address"))
         .expect("reserve unused port");
     let addr = reservation.local_addr().expect("unused address");
+    drop(reservation);
 
     let endpoint = format!("http://{addr}");
     let provider = hailo_provider(&endpoint);

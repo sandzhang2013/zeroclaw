@@ -20,6 +20,7 @@ import {
 import { persistSessionId } from '@/lib/sessionId';
 import { generateUUID } from '@/lib/uuid';
 import { t } from '@/lib/i18n';
+import { canOpenDashboard } from '@/lib/platformUser';
 import { nextStoredSessionTitle, titleFromTranscript, titleFromUserMessage, type HomeSkillRef } from '@/lib/homeSend';
 import {
   saveWorkbenchAutonomy,
@@ -37,6 +38,8 @@ import {
   dropSessionFromList,
 } from '@/lib/workbenchSession';
 import { clearChatHistory, loadChatHistory } from '@/lib/chatHistoryStorage';
+import { latestTurnVerdict, type TurnVerdict } from '@/lib/turnFeedback';
+import { useTurnFeedback } from '@/lib/useTurnFeedback';
 import { isEmbeddedFrame, planIframeAsk } from '@/lib/iframeAsk';
 
 const SIDEBAR_COLLAPSED_KEY = 'zeroclaw-workbench-sidebar-collapsed';
@@ -224,6 +227,7 @@ export default function ChatWorkspace({
     () => isEmbeddedFrame(window) || readBool(SIDEBAR_COLLAPSED_KEY, false),
   );
   const [rightCollapsed, setRightCollapsed] = useState(() => readBool(RIGHT_COLLAPSED_KEY, false));
+  const showResultTab = canOpenDashboard(userRole);
   const [rightPct, setRightPct] = useState(() => readPct(RIGHT_PCT_KEY, 55));
   const splitRef = useRef<HTMLDivElement>(null);
   const [pendingPrompt, setPendingPrompt] = useState<{
@@ -254,6 +258,17 @@ export default function ChatWorkspace({
   const userIdRef = useRef(userId);
   userIdRef.current = userId;
   const [indicators, setIndicators] = useState<Record<string, SessionIndicator>>({});
+  const feedbackEntries = useTurnFeedback();
+  const ratings = useMemo(() => {
+    const out: Record<string, TurnVerdict> = {};
+    for (const session of sessions) {
+      const gatewayId = gatewayIdFor(session, userId);
+      if (!gatewayId) continue;
+      const verdict = latestTurnVerdict(gatewayId, loadChatHistory(gatewayId), feedbackEntries);
+      if (verdict) out[session.id] = verdict;
+    }
+    return out;
+  }, [sessions, userId, feedbackEntries]);
 
   const visibleSessionIds = useMemo(() => new Set([activeSessionId]), [activeSessionId]);
 
@@ -659,6 +674,7 @@ export default function ChatWorkspace({
         sessions={sessions}
         activeSessionId={activeSessionId}
         indicators={indicators}
+        ratings={ratings}
         collapsed={sidebarCollapsed}
         onToggleCollapsed={toggleSidebar}
         onNewSession={newSession}
@@ -699,6 +715,7 @@ export default function ChatWorkspace({
             onSelectFolder={setActiveFolderId}
             agentAlias={activeAlias}
             userRole={userRole}
+            userId={userId}
           />
         )}
         {!showSkills && !showSkillCenter && sessions.filter((session) => mountedSessionIds.has(session.id)).map((session) => {
@@ -735,6 +752,7 @@ export default function ChatWorkspace({
                     initialFiles={pendingPrompt?.sessionId === session.id ? pendingPrompt.files : undefined}
                     autonomyScope={session.id}
                     userRole={userRole}
+                    userId={userId}
                     sessionSkill={session.homeSkill}
                     onInitialPromptConsumed={() => {
                       setPendingPrompt((p) => (p?.sessionId === session.id ? null : p));
@@ -758,7 +776,7 @@ export default function ChatWorkspace({
                       className="flex min-h-0 min-w-[16rem] overflow-hidden"
                       style={{ flex: `${rightPct} 1 0` }}
                     >
-                      <ResultsPanel />
+                      <ResultsPanel showResults={showResultTab} />
                     </div>
                   </>
                 )}

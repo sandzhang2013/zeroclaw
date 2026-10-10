@@ -532,9 +532,23 @@ async fn handle_socket(
                     return;
                 }
                 Ok(true) => {
-                    let _ = backend.set_session_user_id(&session_key, &attrs.user_id);
+                    crate::trusted_proxy::stamp_platform_session_owner(
+                        backend.as_ref(),
+                        &session_key,
+                        &attrs.user_id,
+                    );
                 }
-                Ok(false) => {}
+                Ok(false) => {
+                    if let Some(meta) = backend.get_session_metadata(&session_key)
+                        && meta.user_id.as_deref() == Some(attrs.user_id.as_str())
+                        && meta.principal_id.is_none()
+                    {
+                        let _ = backend.set_session_principal(
+                            &session_key,
+                            &crate::trusted_proxy::roster_principal_id(&attrs.user_id),
+                        );
+                    }
+                }
             }
         }
     }
@@ -719,6 +733,40 @@ async fn handle_socket(
     // what lets ask_user/poll/escalate_to_human default to this conversation.
     agent.set_channel_name(WS_CHANNEL_KEY.to_string());
     agent.set_memory_session_id(Some(memory_session_id));
+    if let Some(ref attrs) = frozen_user {
+        let (principal, tenant) = state
+            .session_backend
+            .as_ref()
+            .and_then(|backend| backend.get_session_metadata(&session_key))
+            .map(|meta| {
+                (
+                    meta.principal_id.unwrap_or_else(|| {
+                        crate::trusted_proxy::roster_principal_id(&attrs.user_id)
+                    }),
+                    meta.user_id
+                        .clone()
+                        .unwrap_or_else(|| attrs.user_id.clone()),
+                )
+            })
+            .unwrap_or_else(|| {
+                (
+                    crate::trusted_proxy::roster_principal_id(&attrs.user_id),
+                    attrs.user_id.clone(),
+                )
+            });
+        let scope = zeroclaw_api::memory_traits::PrincipalScope::new(principal)
+            .with_agent(Some(agent_alias.clone()))
+            .with_tenant(Some(tenant));
+        if let Err(e) = agent.route_memory_to_principal(scope) {
+            let err = serde_json::json!({
+                "type": "error",
+                "message": format!("Failed to pin session memory: {e}"),
+                "code": "MEMORY_PIN_FAILED"
+            });
+            let _ = sender.send(Message::Text(err.to_string().into())).await;
+            return;
+        }
+    }
     // How much of the persisted transcript this connection's history reflects.
     // Read the generation before seeding so a write landing in between shows
     // up as a changed generation on the next turn, which is the safe direction.
@@ -1636,19 +1684,12 @@ fn apply_ws_autonomy(
     }
 }
 
-/// Role cap for WebSocket session overlays. Ordinary users cannot skip
-/// tool approval even when the agent profile is `full`. Missing identity
-/// (legacy non-BFF) applies no extra role cap; the config snapshot still
-/// ceilings the request.
+/// Role does not cap session autonomy. Ordinary users may select `full`;
+/// the agent config snapshot is the only ceiling.
 fn ws_role_autonomy_ceiling(
-    user: Option<&zeroclaw_api::UserAttrs>,
+    _user: Option<&zeroclaw_api::UserAttrs>,
 ) -> zeroclaw_config::autonomy::AutonomyLevel {
-    use zeroclaw_config::autonomy::AutonomyLevel;
-    match user {
-        Some(u) if u.is_ops() || u.is_advanced() => AutonomyLevel::Full,
-        Some(_) => AutonomyLevel::Supervised,
-        None => AutonomyLevel::Full,
-    }
+    zeroclaw_config::autonomy::AutonomyLevel::Full
 }
 
 fn ws_autonomy_ceiling(
@@ -2832,46 +2873,20 @@ mod tests {
     }
 
     #[test]
-    fn ws_autonomy_ceiling_ordinary_user_cannot_take_full() {
+    fn ws_autonomy_ceiling_follows_config_for_every_role() {
         use zeroclaw_config::autonomy::AutonomyLevel;
-        let user = zeroclaw_api::UserAttrs::new("chenmin").with_role("普通用户");
-        assert_eq!(
-            ws_autonomy_ceiling(AutonomyLevel::Full, Some(&user)),
-            AutonomyLevel::Supervised
-        );
-        assert_eq!(
-            ws_autonomy_ceiling(AutonomyLevel::ReadOnly, Some(&user)),
-            AutonomyLevel::ReadOnly
-        );
-    }
-
-    #[test]
-    fn ws_autonomy_ceiling_advanced_and_ops_follow_config() {
-        use zeroclaw_config::autonomy::AutonomyLevel;
-        let advanced = zeroclaw_api::UserAttrs::new("liuyang").with_role("高级用户");
+        let ordinary = zeroclaw_api::UserAttrs::new("chenmin").with_role("普通用户");
         let ops = zeroclaw_api::UserAttrs::new("ops").with_role("管理员");
         assert_eq!(
-            ws_autonomy_ceiling(AutonomyLevel::Full, Some(&advanced)),
+            ws_autonomy_ceiling(AutonomyLevel::Full, Some(&ordinary)),
             AutonomyLevel::Full
         );
         assert_eq!(
+            ws_autonomy_ceiling(AutonomyLevel::ReadOnly, Some(&ordinary)),
+            AutonomyLevel::ReadOnly
+        );
+        assert_eq!(
             ws_autonomy_ceiling(AutonomyLevel::Supervised, Some(&ops)),
-            AutonomyLevel::Supervised
-        );
-    }
-
-    #[test]
-    fn ws_autonomy_ceiling_english_role_alias_is_not_ops() {
-        use zeroclaw_config::autonomy::AutonomyLevel;
-        let english_ops = zeroclaw_api::UserAttrs::new("ops").with_role("ops");
-        assert_eq!(
-            ws_autonomy_ceiling(AutonomyLevel::Full, Some(&english_ops)),
-            AutonomyLevel::Supervised,
-            "BFF must send the admin role; English ops must not skip the ordinary-user cap"
-        );
-        let english_advanced = zeroclaw_api::UserAttrs::new("liu").with_role("advanced");
-        assert_eq!(
-            ws_autonomy_ceiling(AutonomyLevel::Full, Some(&english_advanced)),
             AutonomyLevel::Supervised
         );
     }

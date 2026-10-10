@@ -414,6 +414,94 @@ export function putWorkbenchHomeCatalog(tabs: HomeTabEdit[]): Promise<HomeCatalo
   }).then(normalizeHomeCatalogEdit);
 }
 
+export interface QuickPromptRecord {
+  id: string;
+  title: string;
+  body: string;
+}
+
+export interface QuickPromptAccount {
+  personal: QuickPromptRecord[];
+  shared: QuickPromptRecord[];
+  personal_stored: boolean;
+  shared_stored: boolean;
+}
+
+export function getQuickPrompts(): Promise<QuickPromptAccount> {
+  return apiFetch<QuickPromptAccount>("/api/quick-prompts");
+}
+
+export function putQuickPrompts(body: {
+  personal: QuickPromptRecord[];
+  shared: QuickPromptRecord[];
+}): Promise<QuickPromptAccount> {
+  invalidateInFlightGet("/api/quick-prompts");
+  return apiFetch<QuickPromptAccount>("/api/quick-prompts", {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+}
+
+export interface TurnFeedbackEntry {
+  session_id: string;
+  message_key: string;
+  verdict: "like" | "dislike";
+  reason?: "wrong_data" | "unhelpful" | "unsafe" | "other";
+  comment?: string;
+  updated_at: string;
+}
+
+export function getTurnFeedback(): Promise<{ entries: TurnFeedbackEntry[] }> {
+  return apiFetch<{ entries: TurnFeedbackEntry[] }>("/api/turn-feedback");
+}
+
+export interface TurnFeedbackReviewEntry {
+  user_id: string;
+  session_id: string;
+  verdict: "like" | "dislike";
+  reason?: "wrong_data" | "unhelpful" | "unsafe" | "other";
+  comment?: string;
+  updated_at: string;
+  excerpt: string;
+}
+
+export interface TurnFeedbackReview {
+  summary: {
+    like: number;
+    dislike: number;
+    wrong_data: number;
+    unhelpful: number;
+    unsafe: number;
+    other: number;
+  };
+  /** Likes, dislikes, and unrated replies among assistant turns still stored. */
+  coverage: {
+    turns: number;
+    like: number;
+    dislike: number;
+    unrated: number;
+  };
+  entries: TurnFeedbackReviewEntry[];
+}
+
+export function getTurnFeedbackReview(): Promise<TurnFeedbackReview> {
+  return apiFetch<TurnFeedbackReview>("/api/turn-feedback/review");
+}
+
+export function putTurnFeedback(body: {
+  session_id: string;
+  message_key: string;
+  verdict?: "like" | "dislike" | null;
+  reason?: "wrong_data" | "unhelpful" | "unsafe" | "other" | null;
+  comment?: string;
+}): Promise<{ entries: TurnFeedbackEntry[] }> {
+  invalidateInFlightGet("/api/turn-feedback");
+  return apiFetch<{ entries: TurnFeedbackEntry[] }>("/api/turn-feedback", {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+}
+
 export function getHealth(): Promise<HealthSnapshot> {
   return apiFetch<HealthSnapshot | { health: HealthSnapshot }>(
     "/api/health",
@@ -1072,9 +1160,14 @@ export function installPlazaSkill(body: {
   });
 }
 
-/** Next skill directory id. Opening a create form consumes the number. */
+/** Next plaza or skill-center id (`sk0001`). Opening a create form consumes the number. */
 export function allocateSkillId(): Promise<{ id: string }> {
   return apiFetch<{ id: string }>("/api/skill-ids", { method: "POST" });
+}
+
+/** Next personal skill id (`ps0001`). Separate counter from plaza `sk` ids. */
+export function allocatePersonalSkillId(): Promise<{ id: string }> {
+  return apiFetch<{ id: string }>("/api/skill-ids?scope=personal", { method: "POST" });
 }
 
 /** Write a personal SKILL.md under the frozen user's workspace. */

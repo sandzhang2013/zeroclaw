@@ -92,6 +92,35 @@ export function nextStoredSessionTitle(input: {
   return preview ?? skill ?? undefined;
 }
 
+export interface HomeInstalledSkill {
+  name: string;
+  title: string;
+  fromPlaza?: boolean;
+  enabled?: boolean;
+}
+
+/**
+ * Directory id to invoke for a homepage chip.
+ * The chip id wins when that skill is still installed. Otherwise the user's
+ * own skill with the same title is used, so a renamed `ps0002` still answers `sk0002`.
+ */
+export function resolveHomeCapSkill(
+  cap: { id: string; label: string },
+  skills: HomeInstalledSkill[],
+): { id: string; label: string } | null {
+  const id = cap.id.trim();
+  const label = cap.label.trim();
+  const usable = skills.filter((skill) => skill.enabled !== false && skill.name.trim());
+  const exact = usable.find((skill) => skill.name === id);
+  if (exact) return { id: exact.name, label: exact.title.trim() || label || exact.name };
+  if (!label) return null;
+  const own = usable.filter((skill) => skill.fromPlaza !== true && skill.title.trim() === label);
+  if (own.length === 1 && own[0]) {
+    return { id: own[0].name, label: own[0].title.trim() };
+  }
+  return null;
+}
+
 /**
  * Homepage chip. An installed skill is invoked by its directory id.
  * A chip that is not an installed skill sends the example text only.

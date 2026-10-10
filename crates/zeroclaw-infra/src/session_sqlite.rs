@@ -1632,7 +1632,7 @@ impl SessionBackend for SqliteSessionBackend {
     fn list_sessions_for_user(&self, user_id: &str) -> Vec<SessionMetadata> {
         self.list_sessions_with_metadata()
             .into_iter()
-            .filter(|m| m.user_id.as_deref() == Some(user_id))
+            .filter(|m| crate::session_backend::session_belongs_to_platform_user(m, user_id))
             .collect()
     }
 
@@ -3263,6 +3263,45 @@ mod tests {
         let bob_meta = backend.get_session_metadata("gw_bob").unwrap();
         assert_eq!(bob_meta.user_id.as_deref(), Some("bob"));
         assert!(backend.list_sessions_for_user("carol").is_empty());
+    }
+
+    #[test]
+    fn roster_principal_owns_the_session_without_user_id() {
+        let tmp = TempDir::new().unwrap();
+        let backend = SqliteSessionBackend::new(tmp.path()).unwrap();
+        backend
+            .append("gw_alice", &ChatMessage::user("hi"))
+            .unwrap();
+        backend
+            .set_session_principal(
+                "gw_alice",
+                zeroclaw_api::principal::PrincipalId::for_roster("alice").as_str(),
+            )
+            .unwrap();
+
+        let alice = backend.list_sessions_for_user("alice");
+        assert_eq!(alice.len(), 1);
+        assert_eq!(alice[0].principal_id.as_deref(), Some("user:alice"));
+        assert!(backend.list_sessions_for_user("bob").is_empty());
+    }
+
+    #[test]
+    fn stored_principal_wins_over_a_different_user_id() {
+        let tmp = TempDir::new().unwrap();
+        let backend = SqliteSessionBackend::new(tmp.path()).unwrap();
+        backend
+            .append("gw_mix", &ChatMessage::user("hi"))
+            .unwrap();
+        backend.set_session_user_id("gw_mix", "alice").unwrap();
+        backend
+            .set_session_principal(
+                "gw_mix",
+                zeroclaw_api::principal::PrincipalId::for_roster("bob").as_str(),
+            )
+            .unwrap();
+
+        assert!(backend.list_sessions_for_user("alice").is_empty());
+        assert_eq!(backend.list_sessions_for_user("bob").len(), 1);
     }
 
     #[test]

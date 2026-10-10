@@ -155,8 +155,9 @@ emit_secret_units() {
     HBCDCAGENT_SSO_KEY_B64="${HBCDCAGENT_SSO_KEY_B64:-}"
     HBCDCAGENT_SSO_KEY_VERSION="${HBCDCAGENT_SSO_KEY_VERSION:-1}"
     HBCDCAGENT_SSO_RATE_PER_MIN="${HBCDCAGENT_SSO_RATE_PER_MIN:-}"
-    # 允许嵌入本工作台的父页面 origin（逗号分隔；留空即 frame-ancestors 'none'）
-    HBCDCAGENT_BFF_FRAME_ANCESTORS="${HBCDCAGENT_BFF_FRAME_ANCESTORS:-}"
+    # 允许嵌入本工作台的父页面 origin（逗号分隔）。默认放行湖北 PHES。
+    # 设为空字符串可恢复 frame-ancestors 'none'。不要填 *。
+    HBCDCAGENT_BFF_FRAME_ANCESTORS="${HBCDCAGENT_BFF_FRAME_ANCESTORS:-http://88.7.129.120:50001}"
     cat >"$stage/config/systemd/zeroclaw-secret.conf" <<EOF
 # 由 pack-release.sh 从编译机 .env 生成。勿提交 git。
 [Service]

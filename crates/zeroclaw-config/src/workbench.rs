@@ -135,9 +135,9 @@ pub fn builtin_home_caps() -> Vec<WorkbenchHomeCap> {
     vec![
         cap(
             "sk0001",
-            "query",
-            "数据查询",
-            "Query",
+            "monitor",
+            "监测分析",
+            "Surveillance",
             "activity",
             "chat",
             "疫情概况",
@@ -147,9 +147,9 @@ pub fn builtin_home_caps() -> Vec<WorkbenchHomeCap> {
         ),
         cap(
             "sk0002",
-            "query",
-            "数据查询",
-            "Query",
+            "monitor",
+            "监测分析",
+            "Surveillance",
             "syringe",
             "chat",
             "疫苗覆盖",
@@ -159,9 +159,9 @@ pub fn builtin_home_caps() -> Vec<WorkbenchHomeCap> {
         ),
         cap(
             "sk0003",
-            "query",
-            "数据查询",
-            "Query",
+            "monitor",
+            "监测分析",
+            "Surveillance",
             "search",
             "chat",
             "病例检索",
@@ -171,9 +171,9 @@ pub fn builtin_home_caps() -> Vec<WorkbenchHomeCap> {
         ),
         cap(
             "sk0004",
-            "query",
-            "数据查询",
-            "Query",
+            "monitor",
+            "监测分析",
+            "Surveillance",
             "building-2",
             "chat",
             "机构名单",
@@ -183,9 +183,9 @@ pub fn builtin_home_caps() -> Vec<WorkbenchHomeCap> {
         ),
         cap(
             "sk0005",
-            "monitor",
-            "监测分析",
-            "Surveillance",
+            "forecast",
+            "预警预测",
+            "Forecast",
             "bar-chart-3",
             "chat",
             "趋势分析",
@@ -195,9 +195,9 @@ pub fn builtin_home_caps() -> Vec<WorkbenchHomeCap> {
         ),
         cap(
             "sk0006",
-            "monitor",
-            "监测分析",
-            "Surveillance",
+            "forecast",
+            "预警预测",
+            "Forecast",
             "shield-alert",
             "chat",
             "聚集性疫情",
@@ -207,9 +207,9 @@ pub fn builtin_home_caps() -> Vec<WorkbenchHomeCap> {
         ),
         cap(
             "sk0007",
-            "monitor",
-            "监测分析",
-            "Surveillance",
+            "forecast",
+            "预警预测",
+            "Forecast",
             "activity",
             "chat",
             "预警信号",
@@ -219,9 +219,9 @@ pub fn builtin_home_caps() -> Vec<WorkbenchHomeCap> {
         ),
         cap(
             "sk0008",
-            "monitor",
-            "监测分析",
-            "Surveillance",
+            "forecast",
+            "预警预测",
+            "Forecast",
             "map",
             "chat",
             "地区对比",
@@ -231,9 +231,9 @@ pub fn builtin_home_caps() -> Vec<WorkbenchHomeCap> {
         ),
         cap(
             "sk0009",
-            "report",
-            "报告撰写",
-            "Reports",
+            "assess",
+            "综合研判",
+            "Assessment",
             "file-text",
             "outline",
             "工作简报",
@@ -243,9 +243,9 @@ pub fn builtin_home_caps() -> Vec<WorkbenchHomeCap> {
         ),
         cap(
             "sk0010",
-            "report",
-            "报告撰写",
-            "Reports",
+            "assess",
+            "综合研判",
+            "Assessment",
             "clipboard-list",
             "outline",
             "监测周报",
@@ -255,9 +255,9 @@ pub fn builtin_home_caps() -> Vec<WorkbenchHomeCap> {
         ),
         cap(
             "sk0011",
-            "report",
-            "报告撰写",
-            "Reports",
+            "assess",
+            "综合研判",
+            "Assessment",
             "file-text",
             "outline",
             "专题报告",
@@ -267,9 +267,9 @@ pub fn builtin_home_caps() -> Vec<WorkbenchHomeCap> {
         ),
         cap(
             "sk0012",
-            "report",
-            "报告撰写",
-            "Reports",
+            "assess",
+            "综合研判",
+            "Assessment",
             "clipboard-list",
             "outline",
             "会议纪要",
@@ -680,9 +680,11 @@ mod tests {
                 .iter()
                 .map(|t| t.id.as_str())
                 .collect::<Vec<_>>(),
-            ["query", "monitor", "report"]
+            ["monitor", "forecast", "assess"]
         );
-        assert_eq!(catalog.tabs[0].label, "数据查询");
+        assert_eq!(catalog.tabs[0].label, "监测分析");
+        assert_eq!(catalog.tabs[1].label, "预警预测");
+        assert_eq!(catalog.tabs[2].label, "综合研判");
         assert_eq!(catalog.tabs[0].caps[0].label, "疫情概况");
         assert_eq!(
             catalog.tabs[0].caps[0].prompts[0].text,
@@ -695,7 +697,7 @@ mod tests {
     fn english_locale_uses_en_labels() {
         let catalog = resolve_home_catalog(&builtin_home_caps(), "en");
         assert_eq!(catalog.source, "config");
-        assert_eq!(catalog.tabs[0].label, "Query");
+        assert_eq!(catalog.tabs[0].label, "Surveillance");
         assert_eq!(catalog.tabs[0].caps[0].label, "Outbreak overview");
     }
 
@@ -772,9 +774,9 @@ mod tests {
         let flat = edit_catalog_to_caps(&edit.tabs).expect("flatten");
         assert_eq!(flat.len(), original.len());
         assert_eq!(flat[0].id, "sk0001");
-        assert_eq!(flat[0].tab, "query");
+        assert_eq!(flat[0].tab, "monitor");
         assert_eq!(flat[0].label_zh, "疫情概况");
-        assert_eq!(flat[0].tab_label_zh, "数据查询");
+        assert_eq!(flat[0].tab_label_zh, "监测分析");
         assert_eq!(
             flat[0].prompts[0].text_zh,
             "帮我查询并概述近期全省传染病疫情情况。"
@@ -786,7 +788,7 @@ mod tests {
     fn empty_stored_caps_edit_as_builtin() {
         let edit = caps_to_edit_catalog(&[]);
         assert_eq!(edit.source, "builtin");
-        assert_eq!(edit.tabs[0].label_zh, "数据查询");
+        assert_eq!(edit.tabs[0].label_zh, "监测分析");
     }
 
     #[test]

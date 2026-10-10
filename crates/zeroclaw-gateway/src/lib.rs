@@ -17,6 +17,7 @@ pub mod api_oidc;
 pub mod api_pairing;
 pub mod api_personality;
 pub mod api_plugins;
+pub mod api_quick_prompts;
 pub mod api_quickstart;
 pub mod api_sections;
 pub mod api_skill_center;
@@ -24,6 +25,7 @@ pub mod api_skills;
 pub mod api_sop;
 pub mod api_sop_author;
 pub mod api_sop_webhook;
+pub mod api_turn_feedback;
 pub mod api_upload;
 #[cfg(feature = "webauthn")]
 pub mod api_webauthn;
@@ -2111,6 +2113,21 @@ pub async fn run_gateway_with_plugin_webhooks(
         },
     };
 
+    let skill_config = state.config.read().clone();
+    let skill_reconcile = api_skill_center::reconcile_colliding_personal_skills(&skill_config);
+    if skill_reconcile.marked > 0 || skill_reconcile.renamed > 0 {
+        ::zeroclaw_log::record!(
+            INFO,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(
+                ::serde_json::json!({
+                    "marked": skill_reconcile.marked,
+                    "renamed": skill_reconcile.renamed,
+                })
+            ),
+            "reconciled personal skills that shared a plaza id"
+        );
+    }
+
     // Build router with middleware
     let inner = Router::new()
         .merge(config_admin_router(&inbound_auth))
@@ -2141,6 +2158,20 @@ pub async fn run_gateway_with_plugin_webhooks(
             "/api/workbench/home/catalog",
             get(api_workbench::handle_workbench_home_catalog_get)
                 .put(api_workbench::handle_workbench_home_catalog_put),
+        )
+        .route(
+            "/api/quick-prompts",
+            get(api_quick_prompts::handle_list_quick_prompts)
+                .put(api_quick_prompts::handle_save_quick_prompts),
+        )
+        .route(
+            "/api/turn-feedback",
+            get(api_turn_feedback::handle_list_turn_feedback)
+                .put(api_turn_feedback::handle_save_turn_feedback),
+        )
+        .route(
+            "/api/turn-feedback/review",
+            get(api_turn_feedback::handle_review_turn_feedback),
         )
         .route("/api/version/check", get(version::handle_version_check))
         .route("/api/version/upgrade", post(version::handle_version_upgrade))
@@ -2345,8 +2376,6 @@ pub async fn run_gateway_with_plugin_webhooks(
             "/api/user/skills/{name}/fork",
             post(api_skill_center::handle_fork_personal_skill),
         )
-        .route("/api/config/init", post(api_config::handle_init))
-        .route("/api/config/migrate", post(api_config::handle_migrate))
         .route("/api/openapi.json", get(openapi::handle_openapi_json))
         .route("/api/docs", get(openapi::handle_docs))
         .route("/api/tools", get(api::handle_api_tools))
@@ -6922,7 +6951,15 @@ path = "{trigger_path}"
     async fn run_gateway_starts_with_mismatched_provider_api_key() {
         // `run_gateway` binds the process-global pricing config handle.
         let _pricing_binding = crate::PRICING_BINDING_TEST_LOCK.lock().await;
-        let mut config = Config::default();
+        // Isolate the lifecycle lock from a daemon already running against
+        // the operator's real data directory.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut config = Config {
+            data_dir: tmp.path().join("workspace"),
+            config_path: tmp.path().join("config.toml"),
+            ..Config::default()
+        };
+        std::fs::create_dir_all(&config.data_dir).unwrap();
         config.providers.models.anthropic.insert(
             "default".to_string(),
             zeroclaw_config::schema::AnthropicModelProviderConfig {

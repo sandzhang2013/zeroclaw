@@ -1,7 +1,5 @@
 /** Workbench maps to the runtime `AutonomyLevel` wire form. */
 
-import { normalizeRole } from './platformUser.ts';
-
 export type WorkbenchAutonomy = 'readonly' | 'supervised' | 'full';
 
 export const WORKBENCH_AUTONOMY_LEVELS: WorkbenchAutonomy[] = [
@@ -18,14 +16,11 @@ const RANK: Record<WorkbenchAutonomy, number> = {
   full: 2,
 };
 
-/** Ordinary users cannot skip tool approval. Advanced/ops may use `full`
- * only when the agent config ceiling also allows it (enforced server-side).
- * Missing role (legacy dashboard) applies no extra cap. */
-export function maxAutonomyForRole(role?: string): WorkbenchAutonomy {
-  if (role == null || role.trim() === '') return 'full';
-  const canonical = normalizeRole(role);
-  if (canonical === '高级用户' || canonical === '管理员') return 'full';
-  return 'supervised';
+/** Role does not cap the selector. Ordinary users and admins may both pick
+ * `full`; the server still applies the agent config ceiling. The workbench
+ * default stays supervised until the user changes it. */
+export function maxAutonomyForRole(_role?: string): WorkbenchAutonomy {
+  return 'full';
 }
 
 export function clampWorkbenchAutonomy(

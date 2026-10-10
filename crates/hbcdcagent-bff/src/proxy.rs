@@ -2,7 +2,7 @@ use crate::config::Config;
 use crate::error_page::{LoginErrorKind, login_error_response};
 use crate::identity::{
     HEADER_AUTH_SECRET, HEADER_USER_ID, HEADER_USER_ORG, HEADER_USER_REGION, HEADER_USER_ROLE,
-    IDENTITY_HEADERS, Identity, MOCK_COOKIE_NAME, mock_user, normalize_user_id,
+    IDENTITY_HEADERS, Identity, MOCK_COOKIE_NAME, ROLE_OPS, mock_user, normalize_user_id,
 };
 use crate::session::{
     STATE_TTL, SessionStore, append_set_cookie, cookie_value, session_id_from_headers,
@@ -71,6 +71,12 @@ fn mock_identity(cfg: &Config, cookie: Option<&str>) -> Option<Identity> {
 }
 
 pub async fn fallback(State(state): State<Arc<AppState>>, req: Request) -> Response {
+    if mcp_tools_match(req.uri().path()).is_some() {
+        return match proxy_mcp_tools(state, req).await {
+            Ok(resp) => resp,
+            Err(resp) => resp,
+        };
+    }
     if is_websocket(&req) {
         proxy_ws(state, req).await
     } else {
@@ -424,6 +430,64 @@ fn header_utf8(value: &str) -> HeaderValue {
         .unwrap_or_else(|_| HeaderValue::from_static("invalid"))
 }
 
+#[derive(Debug)]
+enum McpToolsMatch {
+    /// `/hbcdcagent/mcp-tools` without the trailing slash. The page derives its
+    /// API prefix from the directory of the current URL, so the slash is required.
+    Redirect,
+    /// Path on the loopback service, always starting with `/`.
+    Forward(String),
+}
+
+fn mcp_tools_match(path: &str) -> Option<McpToolsMatch> {
+    const PREFIX: &str = Config::MCP_TOOLS_PREFIX;
+    if path == PREFIX {
+        return Some(McpToolsMatch::Redirect);
+    }
+    let rest = path.strip_prefix(PREFIX)?;
+    if !rest.starts_with('/') {
+        return None;
+    }
+    Some(McpToolsMatch::Forward(rest.to_string()))
+}
+
+async fn proxy_mcp_tools(state: Arc<AppState>, mut req: Request) -> Result<Response, Response> {
+    let route = mcp_tools_match(req.uri().path()).expect("caller checked mcp tools path");
+    let identity = identity_from_request(&state, req.headers());
+    strip_embed_credentials(req.headers_mut());
+    strip_identity(req.headers_mut());
+    let Some(identity) = identity else {
+        return Err(unauthenticated(&state.cfg, req.uri().path()));
+    };
+    if identity.role != ROLE_OPS {
+        return Err((StatusCode::FORBIDDEN, "forbidden").into_response());
+    }
+    let McpToolsMatch::Forward(suffix) = route else {
+        let loc = format!("{}/", Config::MCP_TOOLS_PREFIX);
+        return Ok(Redirect::temporary(&loc).into_response());
+    };
+    let query = req.uri().query().map(str::to_string);
+    let target = mcp_tools_upstream_uri(&state.cfg.mcp_tools_upstream, &suffix, query.as_deref())
+        .map_err(|_| (StatusCode::BAD_GATEWAY, "bad upstream URI").into_response())?;
+    *req.uri_mut() = target;
+    if let Ok(host) = HeaderValue::from_str(&state.cfg.mcp_tools_host) {
+        req.headers_mut().insert(axum::http::header::HOST, host);
+    }
+    remove_hop_by_hop(req.headers_mut(), false);
+    match state.http.request(req).await {
+        Ok(resp) => Ok(resp.map(Body::new).into_response()),
+        Err(err) => {
+            tracing::warn!(error = %err, "mcp tools upstream failed");
+            Err((StatusCode::BAD_GATEWAY, "upstream failed").into_response())
+        }
+    }
+}
+
+fn mcp_tools_upstream_uri(upstream: &str, suffix: &str, query: Option<&str>) -> Result<Uri, ()> {
+    let query = query.map(|q| format!("?{q}")).unwrap_or_default();
+    format!("{upstream}{suffix}{query}").parse().map_err(|_| ())
+}
+
 pub(crate) fn rewrite_uri(upstream: &str, incoming: &Uri) -> Result<Uri, ()> {
     let path_and_query = incoming
         .path_and_query()
@@ -471,6 +535,27 @@ fn remove_hop_by_hop(headers: &mut HeaderMap, keep_upgrade: bool) {
 mod tests {
     use super::*;
     use crate::identity::{Identity, ROLE_NORMAL};
+
+    #[test]
+    fn mcp_tools_prefix_strips_to_the_loopback_path() {
+        match mcp_tools_match("/hbcdcagent/mcp-tools/api/tools") {
+            Some(McpToolsMatch::Forward(suffix)) => assert_eq!(suffix, "/api/tools"),
+            other => panic!("expected forward, got {other:?}"),
+        }
+        match mcp_tools_match("/hbcdcagent/mcp-tools/") {
+            Some(McpToolsMatch::Forward(suffix)) => assert_eq!(suffix, "/"),
+            other => panic!("expected forward, got {other:?}"),
+        }
+        assert!(matches!(
+            mcp_tools_match("/hbcdcagent/mcp-tools"),
+            Some(McpToolsMatch::Redirect)
+        ));
+        assert!(mcp_tools_match("/hbcdcagent/mcp-tools-extra").is_none());
+        assert!(mcp_tools_match("/hbcdcagent/mcp-config").is_none());
+        let uri = mcp_tools_upstream_uri("http://127.0.0.1:9100", "/api/prompt", Some("x=1"))
+            .expect("uri");
+        assert_eq!(uri.to_string(), "http://127.0.0.1:9100/api/prompt?x=1");
+    }
 
     #[test]
     fn rewrite_keeps_prefix() {
@@ -606,8 +691,8 @@ mod tests {
         assert_eq!(id.display_name.as_deref(), Some("陈敏"));
         assert_eq!(id.role, ROLE_NORMAL);
 
-        let advanced = mock_identity(&cfg, Some("zeroclaw_mock_user=liuyang")).expect("adv");
-        assert_eq!(advanced.role, crate::identity::ROLE_ADVANCED);
+        let ordinary = mock_identity(&cfg, Some("zeroclaw_mock_user=liuyang")).expect("user");
+        assert_eq!(ordinary.role, crate::identity::ROLE_NORMAL);
 
         let ops = mock_identity(&cfg, Some("zeroclaw_mock_user=ops")).expect("ops");
         assert_eq!(ops.role, crate::identity::ROLE_OPS);

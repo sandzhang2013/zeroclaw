@@ -118,6 +118,18 @@ function prefixProxyKey(key: string, prefix: string): string {
   return `${prefix}${key}`;
 }
 
+function mcpToolsProxy(prefix: string): ProxyOptions {
+  const mount = `${prefix}/mcp-tools`;
+  return {
+    target: process.env.HBCDCAGENT_BFF_MCP_TOOLS_UPSTREAM ?? "http://127.0.0.1:9100",
+    changeOrigin: true,
+    rewrite(path) {
+      const rest = path.startsWith(mount) ? path.slice(mount.length) : path;
+      return rest.startsWith("/") ? rest : `/${rest}`;
+    },
+  };
+}
+
 function buildProxy(prefix: string): Record<string, ProxyOptions> {
   const proxy: Record<string, ProxyOptions> = {};
   for (const { key, ws } of GATEWAY_PROXY_KEYS) {
@@ -143,6 +155,7 @@ const SPA_REDIRECT_PREFIXES = [
   "/sops",
   "/runs",
   "/tools",
+  "/mcp-config",
   "/cron",
   "/integrations",
   "/canvas",
@@ -232,6 +245,11 @@ export default defineConfig(({ command }) => {
             const search = qIndex >= 0 ? raw.slice(qIndex) : "";
 
             if (prefix) {
+              if (pathname === `${prefix}/mcp-tools`) {
+                res.writeHead(302, { Location: `${prefix}/mcp-tools/${search}` });
+                res.end();
+                return;
+              }
               if (pathname === "/" || pathname === "") {
                 res.writeHead(302, { Location: `${prefix}/workbench${search}` });
                 res.end();
@@ -279,7 +297,10 @@ export default defineConfig(({ command }) => {
     },
     server: {
       allowedHosts,
-      proxy: buildProxy(prefix),
+      proxy: {
+        [`${prefix}/mcp-tools`]: mcpToolsProxy(prefix),
+        ...buildProxy(prefix),
+      },
     },
   };
 });

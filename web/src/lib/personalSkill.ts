@@ -1,16 +1,13 @@
-/** Personal-skill draft helpers. Writes go to POST /api/user/skills. */
+/** Personal skill ids and list filters. Writes go to POST /api/user/skills. */
 
-export interface PersonalSkillDraft {
-  /** Issued directory id, for example sk0009. Empty until the allocator returns. */
-  name: string;
-  title: string;
-  description: string;
-  body: string;
-}
-
-/** Ids handed out by POST /api/skill-ids. */
+/** Plaza and skill-center ids from POST /api/skill-ids. */
 export function isIssuedSkillId(raw: string): boolean {
   return /^sk\d{4,}$/.test(raw.trim());
+}
+
+/** Personal ids from POST /api/skill-ids?scope=personal. */
+export function isPersonalSkillId(raw: string): boolean {
+  return /^ps\d{4,}$/.test(raw.trim());
 }
 
 /** Directory slug: no path separators, no `..`, length-capped. */
@@ -23,31 +20,6 @@ export function skillSlug(raw: string): string {
     .replace(/-+/g, '-')
     .replace(/^-+|-+$/g, '');
   return collapsed.slice(0, 64) || 'my-skill';
-}
-
-export function skillTitleFromAsk(userText: string): string {
-  const first = userText.trim().split('\n')[0]?.trim() ?? '';
-  return first.slice(0, 32) || '我的技能';
-}
-
-export function draftPersonalSkill(input: {
-  userText: string;
-  assistantText: string;
-}): PersonalSkillDraft {
-  const title = skillTitleFromAsk(input.userText);
-  const ask = input.userText.trim();
-  const reply = input.assistantText.trim();
-  const description = (ask.split('\n')[0]?.trim() || title).slice(0, 160);
-  const body = [
-    `# ${title}`,
-    '',
-    '## When to use',
-    ask || title,
-    '',
-    '## How we did it',
-    reply || title,
-  ].join('\n');
-  return { name: '', title, description, body };
 }
 
 export function isPersonalSkillEnabled(skill: { enabled?: boolean }): boolean {
@@ -76,15 +48,4 @@ export function skillIdTakenKey(message: string): string | null {
     return 'workbench.skill_id_taken';
   }
   return null;
-}
-
-export function shouldShowSaveSkillButton(input: {
-  isAssistant: boolean;
-  streaming: boolean;
-  hasProse: boolean;
-  content: string;
-  isError?: boolean;
-}): boolean {
-  if (!input.isAssistant || input.streaming || !input.hasProse || input.isError) return false;
-  return Boolean(input.content.trim());
 }

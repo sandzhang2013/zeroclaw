@@ -20724,10 +20724,13 @@ mod tests {
             .lock_model_provider_update("cfg")
             .await
             .expect("the live session has an update lock");
+        let waiting = sessions.model_provider_update_waiting();
         let params = json!({"session_id": "cfg", "overrides": {"temperature": 0.2}});
         let operation = alice.handle_session_configure(&params);
         let replace = async {
-            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            tokio::time::timeout(std::time::Duration::from_secs(5), waiting.notified())
+                .await
+                .expect("configure must block on the provider-update lock before the swap");
             assert!(sessions.remove("cfg").await);
             let successor =
                 install_live_session_owned_by(&sessions, "cfg", Some("user:bob"), ChatMode::Chat)
