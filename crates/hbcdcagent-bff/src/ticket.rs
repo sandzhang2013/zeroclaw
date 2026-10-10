@@ -565,6 +565,94 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn workbench_ticket_link_sets_session_and_strips_query() {
+        use crate::config::Config;
+        use crate::router;
+        use crate::session::{COOKIE_NAME, cookie_value};
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+
+        let mut cfg = Config::for_test("http://127.0.0.1:9", "http://127.0.0.1:9");
+        let sso = sso();
+        let now = chrono::Utc::now().timestamp_millis();
+        let data = ticket(&sso, &payload(now, "nonce-link"));
+        cfg.ticket_sso = Some(sso);
+        let app = router(cfg).expect("router");
+        let plain = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/hbcdcagent/workbench")
+                    .body(Body::empty())
+                    .expect("req"),
+            )
+            .await
+            .expect("resp");
+        assert_eq!(plain.status(), StatusCode::TEMPORARY_REDIRECT);
+        let login = plain
+            .headers()
+            .get("location")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert!(login.starts_with("http://sso/login?"));
+
+        let uri = format!(
+            "/hbcdcagent/workbench/deepseek?clientId=CDSS-B-ZJJK-001&verifyData={data}&tab=1"
+        );
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&uri)
+                    .body(Body::empty())
+                    .expect("req"),
+            )
+            .await
+            .expect("resp");
+        assert_eq!(resp.status(), StatusCode::TEMPORARY_REDIRECT);
+        let loc = resp
+            .headers()
+            .get("location")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert_eq!(loc, "/hbcdcagent/workbench/deepseek?tab=1");
+        let set_cookie = resp
+            .headers()
+            .get("set-cookie")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        let sid = cookie_value(Some(set_cookie), COOKIE_NAME).expect("sid");
+        let next = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/hbcdcagent/workbench/deepseek?tab=1")
+                    .header("cookie", format!("{COOKIE_NAME}={sid}"))
+                    .body(Body::empty())
+                    .expect("req"),
+            )
+            .await
+            .expect("resp");
+        assert_eq!(next.status(), StatusCode::BAD_GATEWAY);
+        let replay = app
+            .oneshot(
+                Request::builder()
+                    .uri(&uri)
+                    .body(Body::empty())
+                    .expect("req"),
+            )
+            .await
+            .expect("resp");
+        assert_eq!(replay.status(), StatusCode::BAD_REQUEST);
+        let bytes = axum::body::to_bytes(replay.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let html = String::from_utf8(bytes.to_vec()).expect("utf8");
+        assert!(html.contains("链接已失效"));
+    }
+
+    #[tokio::test]
     async fn http_verify_returns_session_id_for_embed() {
         use crate::config::Config;
         use crate::router;

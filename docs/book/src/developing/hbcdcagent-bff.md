@@ -76,8 +76,10 @@ Alert-system encrypted tickets (AES-256-GCM, separate from user-center SM4)
 are optional. Set both `HBCDCAGENT_SSO_CLIENT_ID` and `HBCDCAGENT_SSO_KEY_B64`
 (32-byte key, standard Base64). `HBCDCAGENT_SSO_KEY_VERSION` defaults to `1`.
 The BFF reads them at startup and serves `POST /hbcdcagent/sso/auth/verify`
-(also `POST /sso/auth/verify`). A valid ticket creates the same
-`hbcdcagent_session` cookie. Leave both variables unset to keep the endpoint
+(also `POST /sso/auth/verify`). A browser opening
+`/hbcdcagent/workbench…?clientId=&verifyData=` with no session is verified
+on that GET: a valid ticket sets `hbcdcagent_session` and redirects to the
+same path without those parameters. Leave both variables unset to keep the endpoint
 closed. Do not put the key in `config.toml` or git.
 
 When 智能预警 embeds the workbench, the page loads `docs/集成/iframe-bridge.js`
@@ -145,8 +147,8 @@ off. Do not point those scripts at a Vite source tree.
 Opening the workbench with no session renders a self-contained Chinese
 page titled 无法进入工作台. It tells the user to open a ticket URL from
 省统筹平台, or to enter from the 省统筹平台门户 item 「数智疾控」. The
-steps are the alert ticket (`clientId` + `verifyData` to
-`/hbcdcagent/sso/auth/verify`) and the portal callback (`verifyCode` to
+steps are the alert ticket (`clientId` + `verifyData` on the workbench
+URL, or `POST /hbcdcagent/sso/auth/verify`) and the portal callback (`verifyCode` to
 `/hbcdcagent/auth/callback`). It
 does not ask for `USER_CENTER_LOGIN_URL`, `USER_CENTER_CLIENT_ID`, or
 `USER_CENTER_REALM`. Callback failures still list the verifyCode steps

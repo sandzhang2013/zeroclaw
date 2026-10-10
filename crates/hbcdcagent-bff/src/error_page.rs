@@ -136,9 +136,8 @@ fn entry_checklist(cfg: &Config) -> Vec<Step> {
             title: "省统筹平台带票据进入",
             status: StepStatus::Configured,
             detail: format!(
-                "地址需带 clientId={}&verifyData=。页面会提交到 {}，通过后建立会话",
+                "地址需带 clientId={}&verifyData=。打开该地址会验票并建立会话，然后进入工作台",
                 sso.client_id,
-                Config::TICKET_VERIFY_PATH
             ),
         },
         None => Step {

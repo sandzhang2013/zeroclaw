@@ -5,8 +5,8 @@ use crate::identity::{
     IDENTITY_HEADERS, Identity, MOCK_COOKIE_NAME, ROLE_OPS, mock_user, normalize_user_id,
 };
 use crate::session::{
-    STATE_TTL, SessionStore, append_set_cookie, cookie_value, session_id_from_headers,
-    state_cookie_header, strip_embed_credentials,
+    STATE_TTL, SessionStore, append_set_cookie, cookie_header, cookie_value,
+    session_id_from_headers, state_cookie_header, strip_embed_credentials,
 };
 use crate::user_center::UserCenter;
 use anyhow::Result;
@@ -124,7 +124,12 @@ async fn proxy_http(state: Arc<AppState>, mut req: Request) -> Result<Response, 
             // SPA + static assets must load so the mock picker can set the cookie.
             forward_http(&state, req, None).await
         }
-        None => Err(unauthenticated(&state.cfg, req.uri().path())),
+        None => {
+            if let Some(resp) = alert_ticket_link(&state, &req) {
+                return Err(resp);
+            }
+            Err(unauthenticated(&state.cfg, req.uri().path()))
+        }
     }
 }
 
@@ -387,6 +392,133 @@ async fn splice_upstream_ws(
         });
     }
     Ok(res.map(Body::new).into_response())
+}
+
+/// 没有会话时，工作台地址上的 `clientId` + `verifyData` 在这里验票。
+/// 通过后写会话并 307 到去掉票据参数的同一路径。页面脚本走不到，因为 SPA 还没下发。
+fn alert_ticket_link(state: &AppState, req: &Request) -> Option<Response> {
+    if req.method() != axum::http::Method::GET || state.cfg.ticket_sso.is_none() {
+        return None;
+    }
+    let (client_id, verify_data) = ticket_query(req.uri())?;
+    let sso = state.cfg.ticket_sso.as_ref()?;
+    if !crate::ticket::rate_ok(&state.ticket_rate, sso, &ticket_caller(req)) {
+        return Some(ticket_rejected(
+            StatusCode::TOO_MANY_REQUESTS,
+            crate::ticket::MSG_RATE,
+        ));
+    }
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let outcome = crate::ticket::verify_ticket(
+        Some(sso),
+        &client_id,
+        &verify_data,
+        now_ms,
+        &state.cfg.ops_user_ids,
+        &state.nonces,
+        false,
+    );
+    let Some(identity) = outcome.identity else {
+        if outcome.code == crate::ticket::CODE_DECRYPT || outcome.code == crate::ticket::CODE_REPLAY
+        {
+            tracing::warn!(code = outcome.code, client_id = %client_id, "alert ticket link rejected");
+        } else {
+            tracing::info!(code = outcome.code, client_id = %client_id, "alert ticket link rejected");
+        }
+        let status = if outcome.code == crate::ticket::CODE_RATE {
+            StatusCode::TOO_MANY_REQUESTS
+        } else {
+            StatusCode::BAD_REQUEST
+        };
+        return Some(ticket_rejected(status, outcome.msg));
+    };
+    tracing::info!(user_id = %identity.user_id, "alert ticket session created from workbench link");
+    let sid = state.sessions.insert(identity, state.cfg.session_ttl);
+    let mut response = Redirect::temporary(&location_without_ticket(req.uri())).into_response();
+    append_set_cookie(
+        &mut response,
+        &cookie_header(&sid, state.cfg.session_ttl, state.cfg.cookie_secure),
+    );
+    Some(response)
+}
+
+fn ticket_caller(req: &Request) -> String {
+    req.headers()
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("direct")
+        .to_string()
+}
+
+fn ticket_query(uri: &Uri) -> Option<(String, String)> {
+    let query = uri.query()?;
+    let mut client_id = None;
+    let mut verify_data = None;
+    for pair in query.split('&') {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        match key {
+            "clientId" => client_id = Some(percent_decode(value)),
+            "verifyData" => verify_data = Some(percent_decode(value)),
+            _ => {}
+        }
+    }
+    let client_id = client_id.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())?;
+    let verify_data = verify_data
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())?;
+    Some((client_id, verify_data))
+}
+
+fn location_without_ticket(uri: &Uri) -> String {
+    let path = uri.path();
+    let rest: Vec<&str> = uri
+        .query()
+        .unwrap_or("")
+        .split('&')
+        .filter(|pair| {
+            let key = pair.split_once('=').map(|(key, _)| key).unwrap_or(pair);
+            !pair.is_empty() && key != "clientId" && key != "verifyData"
+        })
+        .collect();
+    if rest.is_empty() {
+        path.to_string()
+    } else {
+        format!("{path}?{}", rest.join("&"))
+    }
+}
+
+fn percent_decode(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[index + 1..index + 3]).unwrap_or("");
+            if let Ok(value) = u8::from_str_radix(hex, 16) {
+                out.push(value);
+                index += 3;
+                continue;
+            }
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn ticket_rejected(status: StatusCode, msg: &str) -> Response {
+    let html = format!(
+        "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><title>无法进入工作台</title></head><body><h1>无法进入工作台</h1><p>{msg}</p></body></html>"
+    );
+    (
+        status,
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        html,
+    )
+        .into_response()
 }
 
 fn unauthenticated(cfg: &Config, path: &str) -> Response {
