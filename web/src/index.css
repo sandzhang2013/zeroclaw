@@ -317,6 +317,36 @@ code, kbd, pre {
 .bounce-dot:nth-child(2) { animation-delay: 0.12s; }
 .bounce-dot:nth-child(3) { animation-delay: 0.24s; }
 
+/* Live thinking header. The sweep keeps moving after the transcript collapses,
+   so a pause between tokens does not look like a freeze. */
+.thinking-live-label {
+  background-image: linear-gradient(
+    90deg,
+    var(--pc-text-muted) 0%,
+    var(--pc-text-muted) 35%,
+    var(--pc-accent-light) 50%,
+    var(--pc-text-muted) 65%,
+    var(--pc-text-muted) 100%
+  );
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: shimmer 1.4s linear infinite;
+}
+
+.thinking-live-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.thinking-live-dots > .bounce-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 9999px;
+  background: var(--pc-accent);
+}
+
 /* Stagger delays */
 .stagger-children > *:nth-child(1) { animation-delay: 0ms; }
 .stagger-children > *:nth-child(2) { animation-delay: 60ms; }
@@ -736,6 +766,12 @@ code, kbd, pre {
   .bounce-dot {
     animation: none;
     opacity: 0.7;
+  }
+  .thinking-live-label {
+    animation: none;
+    background: none;
+    -webkit-text-fill-color: currentColor;
+    color: var(--pc-text-muted);
   }
   .progress-bar-animated::after {
     animation: none;

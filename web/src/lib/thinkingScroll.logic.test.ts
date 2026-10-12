@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { shouldFollowThinkingScroll } from './thinkingScroll.ts';
+import { shouldFollowThinkingScroll, thinkingPanelOpen } from './thinkingScroll.ts';
+
+test('thinkingPanelOpen stays open until the answer has visible text', () => {
+  assert.equal(thinkingPanelOpen(''), true);
+  assert.equal(thinkingPanelOpen(' \n\t'), true);
+  assert.equal(thinkingPanelOpen('好的'), false);
+});
 
 test('shouldFollowThinkingScroll stays pinned near the bottom', () => {
   assert.equal(

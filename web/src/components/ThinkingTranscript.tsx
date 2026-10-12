@@ -2,6 +2,19 @@ import { useLayoutEffect, useRef } from 'react';
 import { t } from '@/lib/i18n';
 import { shouldFollowThinkingScroll } from '@/lib/thinkingScroll';
 
+function LiveThinkingMark() {
+  return (
+    <span className="inline-flex items-center gap-1.5 align-middle">
+      <span className="thinking-live-label">{t('agentchat.thinking')}</span>
+      <span className="thinking-live-dots" aria-hidden="true">
+        <span className="bounce-dot" />
+        <span className="bounce-dot" />
+        <span className="bounce-dot" />
+      </span>
+    </span>
+  );
+}
+
 export function ThinkingTranscript({
   text,
   live = false,
@@ -27,7 +40,7 @@ export function ThinkingTranscript({
   return (
     <details className="mb-2" open={open}>
       <summary className="text-xs cursor-pointer select-none text-pc-text-muted">
-        {t('agentchat.thinking')}{live && open !== false ? '...' : ''}
+        {live ? <LiveThinkingMark /> : t('agentchat.thinking')}
       </summary>
       <pre
         ref={ref}

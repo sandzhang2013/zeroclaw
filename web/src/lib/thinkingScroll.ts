@@ -1,3 +1,9 @@
+/** Keep the live transcript open until the answer has visible text.
+ *  A whitespace-only chunk would otherwise snap the panel shut and look frozen. */
+export function thinkingPanelOpen(streamedAnswer: string): boolean {
+  return streamedAnswer.trim().length === 0;
+}
+
 /** Pin to the newest thinking line unless the reader scrolled up. */
 export function shouldFollowThinkingScroll(input: {
   scrollTop: number;

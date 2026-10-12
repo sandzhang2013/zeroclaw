@@ -20,6 +20,7 @@ import ToolCallCard from '@/components/ToolCallCard';
 import { ArtifactCard } from '@/components/ArtifactCard';
 import { OutlineEditModal } from '@/components/OutlineEditModal';
 import { ThinkingTranscript } from '@/components/ThinkingTranscript';
+import { thinkingPanelOpen } from '@/lib/thinkingScroll';
 import ApprovalBanner from '@/components/ApprovalBanner';
 import { AutonomySelect } from '@/components/AutonomySelect';
 import { QuickPromptButton, QuickPromptSendHint } from '@/components/QuickPromptButton';
@@ -1071,7 +1072,7 @@ export function AgentChatInner({
                         <ThinkingTranscript
                           text={streamingThinking}
                           live
-                          open={!streamingContent}
+                          open={thinkingPanelOpen(streamingContent)}
                         />
                       )}
                       {streamingContent && <p className="text-sm whitespace-pre-wrap break-words leading-relaxed">{streamingContent}</p>}
@@ -1558,7 +1559,7 @@ const MessageItem = memo(function MessageItem({
                   <ThinkingTranscript
                     text={streaming.thinking}
                     live
-                    open={!streaming.content}
+                    open={thinkingPanelOpen(streaming.content)}
                   />
                 )}
                 {streaming.content && (
