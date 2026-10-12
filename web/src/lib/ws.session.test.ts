@@ -107,6 +107,16 @@ test('generateUUID is RFC 4122 version 4', () => {
   assert.match(generateUUID(), UUID_RE);
 });
 
+test('generateUUID falls back when randomUUID is missing', () => {
+  const desc = Object.getOwnPropertyDescriptor(crypto, 'randomUUID');
+  Object.defineProperty(crypto, 'randomUUID', { value: undefined, configurable: true });
+  try {
+    assert.match(generateUUID(), UUID_RE);
+  } finally {
+    if (desc) Object.defineProperty(crypto, 'randomUUID', desc);
+  }
+});
+
 test('releaseWebSocket does not close() while CONNECTING', () => {
   let closed = 0;
   const socket = {

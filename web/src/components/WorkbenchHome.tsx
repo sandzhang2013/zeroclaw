@@ -31,6 +31,7 @@ import {
   CHAT_UPLOAD_MAX_FILES,
   uniqueUploadFileName,
 } from '@/lib/chatUpload';
+import { generateUUID } from '@/lib/uuid';
 import {
   fallbackHomeCatalog,
   homeCapIcon,
@@ -234,7 +235,7 @@ export function WorkbenchHome({
       const filename = uniqueUploadFileName(used, file.name);
       used.push(filename);
       extras.push({
-        id: crypto.randomUUID(),
+        id: generateUUID(),
         file,
         filename,
         previewUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined,

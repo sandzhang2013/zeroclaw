@@ -1,9 +1,9 @@
 /**
  * Generate a UUID v4 string.
  *
- * Uses `crypto.randomUUID()` when available (modern browsers, secure contexts)
- * and falls back to a manual implementation backed by `crypto.getRandomValues()`
- * for older browsers (e.g. Safari < 15.4, some Electron/Raspberry-Pi builds).
+ * Uses `crypto.randomUUID()` when available (secure contexts: HTTPS or localhost)
+ * and falls back to `crypto.getRandomValues()` on plain HTTP, where browsers
+ * omit `randomUUID`.
  *
  * Closes #3303, #3261.
  */

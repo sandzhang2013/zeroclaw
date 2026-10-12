@@ -30,6 +30,7 @@ import { loadQuickPrompts, resolveQuickPromptSend } from '@/lib/quickPrompts';
 import { useQuickPrompts } from '@/lib/useQuickPrompts';
 import { resolveContextBarState } from '@/lib/contextBar';
 import { ApiError, uploadAgentWorkspaceFile, uploadChatImage } from '@/lib/api';
+import { generateUUID } from '@/lib/uuid';
 import {
   DEFAULT_WORKBENCH_AUTONOMY,
   loadWorkbenchAutonomy,
@@ -543,7 +544,7 @@ export function AgentChatInner({
         }
         const filename = uniqueUploadFileName(used, file.name);
         used.push(filename);
-        const id = crypto.randomUUID();
+        const id = generateUUID();
         const path = sessionUploadWorkspacePath(sessionId, filename);
         jobs.push({ id, file, filename, path });
         extras.push({
