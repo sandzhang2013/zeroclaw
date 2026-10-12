@@ -1,6 +1,8 @@
 # ZeroClaw 数智疾控 — 发布打包清单
 
 > 编译完成后，在 Linux x86-64 编译机上打 tar。默认把本机 `deploy/hbcdcagent/.env` 打进包（不进 git）。只要占位符则加 `--no-secrets`。
+>
+> 生产环境要填哪些项、本地模式和 SSO 模式怎么启动，见 [生产发布配置.md](./生产发布配置.md)。
 
 ```bash
 # 含密钥（需已有 deploy/hbcdcagent/.env）

@@ -7,10 +7,28 @@ hbcdcagent_resolve_root() {
   if [[ ! -d "$ROOT/bin" ]]; then
     ROOT="$(cd "$script_dir/.." && pwd)"
   fi
-  BIN="$ROOT/bin"
-  WEB_DIST="$ROOT/web/dist"
-  TEMPLATE="$ROOT/config/config.toml.template"
-  ENV_FILE="$ROOT/config/.env"
+  if [[ -d "$ROOT/bin" ]]; then
+    BIN="$ROOT/bin"
+    WEB_DIST="$ROOT/web/dist"
+    TEMPLATE="$ROOT/config/config.toml.template"
+    ENV_FILE="$ROOT/config/.env"
+  else
+    # Git checkout: scripts live in deploy/hbcdcagent/scripts.
+    # Skill plaza and the config template stay next to this script.
+    local repo
+    repo="$(cd "$script_dir/../../.." && pwd)"
+    ROOT="$(cd "$script_dir/.." && pwd)"
+    BIN="$repo/target/debug"
+    WEB_DIST="$repo/web/dist"
+    TEMPLATE="$ROOT/config.toml.template"
+    if [[ -n "${HBCDCAGENT_ENV_FILE:-}" ]]; then
+      ENV_FILE="$HBCDCAGENT_ENV_FILE"
+    elif [[ -f "$ROOT/.env" ]]; then
+      ENV_FILE="$ROOT/.env"
+    else
+      ENV_FILE="$ROOT/config/.env"
+    fi
+  fi
   export ZEROCLAW_CONFIG_DIR="${ZEROCLAW_CONFIG_DIR:-$HOME/.zeroclaw}"
 }
 
@@ -80,6 +98,9 @@ hbcdcagent_export_runtime_env() {
   export ZEROCLAW_gateway__path_prefix="${ZEROCLAW_gateway__path_prefix:-/hbcdcagent}"
   export ZEROCLAW_gateway__web_dist_dir="${ZEROCLAW_gateway__web_dist_dir:-$WEB_DIST}"
   export ZEROCLAW_gateway__require_pairing="${ZEROCLAW_gateway__require_pairing:-false}"
+  # Intranet hosts cannot reach the public web. Keep these off even if config.toml flips them.
+  export ZEROCLAW_web_search__enabled="${ZEROCLAW_web_search__enabled:-false}"
+  export ZEROCLAW_http_request__enabled="${ZEROCLAW_http_request__enabled:-false}"
   export HBCDCAGENT_BFF_UPSTREAM="${HBCDCAGENT_BFF_UPSTREAM:-http://127.0.0.1:42617}"
   export HBCDCAGENT_BFF_LISTEN="${HBCDCAGENT_BFF_LISTEN:-0.0.0.0:50002}"
 }

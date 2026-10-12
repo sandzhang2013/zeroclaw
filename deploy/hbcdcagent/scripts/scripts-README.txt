@@ -1,7 +1,9 @@
 # 交付包启动脚本
 
+生产要填哪些项，见上一级《生产发布配置.md》。
+
 两种接入共用同一套进程：daemon (127.0.0.1:42617) + hbcdcagent-bff (0.0.0.0:50002)。
-前端永远是包内 web/dist，不需要 Vite / npm / web 源码。
+交付包用包内 web/dist。源码目录用仓库 web/dist 和 target/debug。
 
 daemon 配置目录是 ~/.zeroclaw（可用 ZEROCLAW_CONFIG_DIR 覆盖），不是 ~/.config/zeroclaw。
 脚本会用环境变量覆盖 web_dist_dir 为包内 web/dist，并打开 trusted_proxy + path_prefix=/hbcdcagent。
@@ -13,7 +15,8 @@ daemon 配置目录是 ~/.zeroclaw（可用 ZEROCLAW_CONFIG_DIR 覆盖），不�
 - 可选：config/.env 里的 trusted_proxy_secret（没有则用 zeroclaw-local-bff-secret）
 
 ## start-user-center.sh —— 用户中心 SSO
-- 需要 config/.env（USER_CENTER_*、ZEROCLAW_gateway__trusted_proxy_secret、HBCDCAGENT_BFF_PUBLIC_ORIGIN）
+- 需要 .env（USER_CENTER_*、ZEROCLAW_gateway__trusted_proxy_secret、HBCDCAGENT_BFF_PUBLIC_ORIGIN）
+- 预警票据还要同时填写 HBCDCAGENT_SSO_CLIENT_ID 与 HBCDCAGENT_SSO_KEY_B64
 - 入口：HBCDCAGENT_BFF_PUBLIC_ORIGIN/hbcdcagent/workbench
 - 用户中心 redirectUrl：…/hbcdcagent/auth/callback
 

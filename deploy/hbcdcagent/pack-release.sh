@@ -163,6 +163,11 @@ emit_secret_units() {
 [Service]
 Environment=ZEROCLAW_gateway__trusted_proxy=true
 Environment=ZEROCLAW_gateway__trusted_proxy_secret=${ZEROCLAW_gateway__trusted_proxy_secret}
+Environment=ZEROCLAW_gateway__require_pairing=false
+Environment=ZEROCLAW_gateway__path_prefix=/hbcdcagent
+Environment=ZEROCLAW_gateway__web_dist_dir=/opt/zeroclaw/web/dist
+Environment=ZEROCLAW_web_search__enabled=false
+Environment=ZEROCLAW_http_request__enabled=false
 EOF
     cat >"$stage/config/systemd/hbcdcagent-bff.service" <<EOF
 # 由 pack-release.sh 从编译机 .env 生成。勿提交 git。
