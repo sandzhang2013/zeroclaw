@@ -7,9 +7,12 @@ import { isEmbeddedFrame } from './lib/iframeAsk';
 import { rememberEmbedSession } from './lib/iframeSession';
 import { basePath, gatewayUrl } from './lib/basePath';
 import { installStructuredClonePolyfill } from './lib/browserSupport';
+import { installEmbedCounterZoom } from './lib/embedZoom';
 import './index.css';
 
 installStructuredClonePolyfill(window);
+const appRoot = document.getElementById('root');
+if (appRoot) installEmbedCounterZoom(window, appRoot);
 
 function mountApp() {
   ReactDOM.createRoot(document.getElementById('root')!).render(
