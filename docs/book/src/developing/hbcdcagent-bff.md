@@ -76,11 +76,15 @@ Alert-system encrypted tickets (AES-256-GCM, separate from user-center SM4)
 are optional. Set both `HBCDCAGENT_SSO_CLIENT_ID` and `HBCDCAGENT_SSO_KEY_B64`
 (32-byte key, standard Base64). `HBCDCAGENT_SSO_KEY_VERSION` defaults to `1`.
 The BFF reads them at startup and serves `POST /hbcdcagent/sso/auth/verify`
-(also `POST /sso/auth/verify`). A browser opening
+(also `POST /sso/auth/verify`). A top-level browser opening
 `/hbcdcagent/workbench…?clientId=&verifyData=` with no session is verified
 on that GET: a valid ticket sets `hbcdcagent_session` and redirects to the
-same path without those parameters. Leave both variables unset to keep the endpoint
-closed. Do not put the key in `config.toml` or git.
+same path without those parameters. An iframe navigation (`Sec-Fetch-Dest:
+iframe`) is not verified on the GET. The page script still has the ticket,
+posts it with `X-Hbcdcagent-Embed: 1`, and keeps `sessionId` in memory.
+Static `/_app/` files load without a session so that script can run. Leave
+both variables unset to keep the endpoint closed. Do not put the key in
+`config.toml` or git.
 
 When 智能预警 embeds the workbench, the page loads `docs/集成/iframe-bridge.js`
 (copied to `/_app/iframe-bridge.js` at build time) only inside an iframe or

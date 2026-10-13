@@ -136,7 +136,7 @@ fn entry_checklist(cfg: &Config) -> Vec<Step> {
             title: "省统筹平台带票据进入",
             status: StepStatus::Configured,
             detail: format!(
-                "地址需带 clientId={}&verifyData=。打开该地址会验票并建立会话，然后进入工作台",
+                "地址需带 clientId={}&verifyData=。直接打开会验票并进入工作台。门户内嵌时页面自己验票，问题由父页面发进来。",
                 sso.client_id,
             ),
         },
@@ -427,7 +427,9 @@ mod tests {
         assert!(html.contains("无法进入工作台"));
         assert!(html.contains("省统筹平台带票据进入"));
         assert!(html.contains("省统筹平台门户回跳"));
-        assert!(html.contains("请从省统筹平台打开带票据的地址，或从省统筹平台门户点「数智疾控」进入"));
+        assert!(
+            html.contains("请从省统筹平台打开带票据的地址，或从省统筹平台门户点「数智疾控」进入")
+        );
         assert!(html.contains("HBCDCAGENT_SSO_CLIENT_ID"));
         assert!(html.contains("未配置"));
         assert!(html.contains("未执行"));

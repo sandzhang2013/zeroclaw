@@ -653,6 +653,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn iframe_ticket_link_leaves_the_nonce_for_the_page() {
+        use crate::config::Config;
+        use crate::router;
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+
+        let mut cfg = Config::for_test("http://127.0.0.1:9", "http://127.0.0.1:9");
+        let sso = sso();
+        let now = chrono::Utc::now().timestamp_millis();
+        let data = ticket(&sso, &payload(now, "nonce-iframe"));
+        cfg.ticket_sso = Some(sso);
+        let app = router(cfg).expect("router");
+        let uri =
+            format!("/hbcdcagent/workbench/deepseek?clientId=CDSS-B-ZJJK-001&verifyData={data}");
+        let framed = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&uri)
+                    .header("sec-fetch-dest", "iframe")
+                    .body(Body::empty())
+                    .expect("req"),
+            )
+            .await
+            .expect("resp");
+        // Upstream is closed, which proves the ticket was forwarded instead of spent.
+        assert_eq!(framed.status(), StatusCode::BAD_GATEWAY);
+        let again = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&uri)
+                    .header("sec-fetch-dest", "iframe")
+                    .body(Body::empty())
+                    .expect("req"),
+            )
+            .await
+            .expect("resp");
+        assert_eq!(again.status(), StatusCode::BAD_GATEWAY);
+        let asset = app
+            .oneshot(
+                Request::builder()
+                    .uri("/hbcdcagent/_app/assets/index.js")
+                    .body(Body::empty())
+                    .expect("req"),
+            )
+            .await
+            .expect("resp");
+        assert_eq!(asset.status(), StatusCode::BAD_GATEWAY);
+    }
+
+    #[tokio::test]
     async fn http_verify_returns_session_id_for_embed() {
         use crate::config::Config;
         use crate::router;

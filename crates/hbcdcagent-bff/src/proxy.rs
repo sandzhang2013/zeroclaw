@@ -125,6 +125,11 @@ async fn proxy_http(state: Arc<AppState>, mut req: Request) -> Result<Response, 
             forward_http(&state, req, None).await
         }
         None => {
+            // A cross-site iframe cannot keep the SameSite cookie. Leave the
+            // ticket on the document so the page can verify and hold sessionId.
+            if is_embed_ticket_document(&req) || is_anonymous_asset(req.uri().path()) {
+                return forward_http(&state, req, None).await;
+            }
             if let Some(resp) = alert_ticket_link(&state, &req) {
                 return Err(resp);
             }
@@ -394,8 +399,8 @@ async fn splice_upstream_ws(
     Ok(res.map(Body::new).into_response())
 }
 
-/// 没有会话时，工作台地址上的 `clientId` + `verifyData` 在这里验票。
-/// 通过后写会话并 307 到去掉票据参数的同一路径。页面脚本走不到，因为 SPA 还没下发。
+/// 没有会话时，顶层打开的工作台地址上的 `clientId` + `verifyData` 在这里验票。
+/// 通过后写会话并 307 到去掉票据参数的同一路径。内嵌页面不走这里。
 fn alert_ticket_link(state: &AppState, req: &Request) -> Option<Response> {
     if req.method() != axum::http::Method::GET || state.cfg.ticket_sso.is_none() {
         return None;
@@ -442,6 +447,23 @@ fn alert_ticket_link(state: &AppState, req: &Request) -> Option<Response> {
     Some(response)
 }
 
+/// Iframe navigations carry `Sec-Fetch-Dest: iframe`. Top-level opens stay
+/// `document`, so they still get the cookie redirect.
+fn is_embed_ticket_document(req: &Request) -> bool {
+    if req.method() != axum::http::Method::GET || ticket_query(req.uri()).is_none() {
+        return false;
+    }
+    req.headers()
+        .get("sec-fetch-dest")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.eq_ignore_ascii_case("iframe"))
+}
+
+/// Script and style requests from the framed page have no session yet.
+fn is_anonymous_asset(path: &str) -> bool {
+    path.contains("/_app/") || path.ends_with("/favicon.ico")
+}
+
 fn ticket_caller(req: &Request) -> String {
     req.headers()
         .get("x-forwarded-for")
@@ -465,7 +487,9 @@ fn ticket_query(uri: &Uri) -> Option<(String, String)> {
             _ => {}
         }
     }
-    let client_id = client_id.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())?;
+    let client_id = client_id
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())?;
     let verify_data = verify_data
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())?;
