@@ -589,7 +589,7 @@ export function MySkillsPage({
           <input
             ref={zipRef}
             type="file"
-            accept=".zip,application/zip"
+            accept=".zip"
             className="hidden"
             onChange={(event) => {
               const files = [...(event.target.files ?? [])];
