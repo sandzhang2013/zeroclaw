@@ -338,21 +338,43 @@ fn parse_version_num(raw: &str) -> u32 {
     raw.trim().trim_matches('"').parse().unwrap_or(0)
 }
 
-fn skill_text(dir: &Path) -> Option<(String, String, String, u32)> {
+struct SkillText {
+    title: String,
+    description: String,
+    body: String,
+    version: u32,
+    /// The file is present but not a canonical SKILL.md. The center still
+    /// opens it so the raw text can be repaired instead of failing the page.
+    invalid: bool,
+}
+
+fn skill_text(dir: &Path) -> Option<SkillText> {
     let content = std::fs::read_to_string(dir.join("SKILL.md")).ok()?;
-    let doc = zeroclaw_runtime::skills::document::SkillDocument::parse(&content).ok()?;
-    let version = doc
-        .frontmatter
-        .version
-        .as_deref()
-        .map(parse_version_num)
-        .unwrap_or(0);
-    Some((
-        doc.frontmatter.name,
-        doc.frontmatter.description,
-        doc.body,
-        version,
-    ))
+    let normalized = content
+        .trim_start_matches('\u{feff}')
+        .trim_start_matches([' ', '\t', '\r', '\n']);
+    if let Ok(doc) = zeroclaw_runtime::skills::document::SkillDocument::parse(normalized) {
+        let version = doc
+            .frontmatter
+            .version
+            .as_deref()
+            .map(parse_version_num)
+            .unwrap_or(0);
+        return Some(SkillText {
+            title: doc.frontmatter.name,
+            description: doc.frontmatter.description,
+            body: doc.body,
+            version,
+            invalid: false,
+        });
+    }
+    Some(SkillText {
+        title: String::new(),
+        description: String::new(),
+        body: normalized.to_string(),
+        version: 0,
+        invalid: true,
+    })
 }
 
 fn load_review(config: &zeroclaw_config::schema::Config, id: &str) -> Option<SkillReview> {
@@ -1004,7 +1026,15 @@ fn review_json(review: &SkillReview, on_plaza: bool) -> serde_json::Value {
 }
 
 fn list_row(id: &str, dir: &Path, review: &SkillReview, on_plaza: bool) -> serde_json::Value {
-    let (title, description, _, _) = skill_text(dir).unwrap_or_default();
+    let text = skill_text(dir).unwrap_or(SkillText {
+        title: String::new(),
+        description: String::new(),
+        body: String::new(),
+        version: 0,
+        invalid: true,
+    });
+    let title = text.title;
+    let description = text.description;
     let mut row = review_json(review, on_plaza);
     if let Some(obj) = row.as_object_mut() {
         obj.insert("id".into(), serde_json::json!(id));
@@ -1034,7 +1064,7 @@ fn materialize_plaza(
     }
     replace_skill_tree(&plaza, &catalog_dir(config, id))?;
     let version = skill_text(&catalog_dir(config, id))
-        .map(|(_, _, _, version)| version)
+        .map(|text| text.version)
         .unwrap_or(0);
     let review = SkillReview {
         status: STATUS_PUBLISHED.to_string(),
@@ -1117,9 +1147,7 @@ pub async fn handle_list_skill_center(
             if skill_text(&path).is_none() {
                 continue;
             }
-            let version = skill_text(&path)
-                .map(|(_, _, _, version)| version)
-                .unwrap_or(0);
+            let version = skill_text(&path).map(|text| text.version).unwrap_or(0);
             let review = SkillReview {
                 status: STATUS_PUBLISHED.to_string(),
                 creator_id: String::new(),
@@ -1223,9 +1251,16 @@ pub async fn handle_read_skill_center(
     let Some(dir) = content_dir(&config, &id) else {
         return json_error(StatusCode::NOT_FOUND, "skill not found");
     };
-    let Some((title, description, body, file_version)) = skill_text(&dir) else {
+    let Some(text) = skill_text(&dir) else {
         return json_error(StatusCode::UNPROCESSABLE_ENTITY, "SKILL.md is invalid");
     };
+    let SkillText {
+        title,
+        description,
+        body,
+        version: file_version,
+        invalid,
+    } = text;
     let review = load_review(&config, &id).unwrap_or(SkillReview {
         status: if on_plaza(&config, &id) {
             STATUS_PUBLISHED
@@ -1255,6 +1290,7 @@ pub async fn handle_read_skill_center(
         );
         obj.insert("description".into(), serde_json::json!(description));
         obj.insert("body".into(), serde_json::json!(body));
+        obj.insert("invalid".into(), serde_json::json!(invalid));
     }
     Json(row).into_response()
 }
@@ -2151,6 +2187,30 @@ mod tests {
         assert_eq!(json_body(response).await["id"], "sk0002");
         let stored = std::fs::read_to_string(tmp.path().join("shared").join("skill-seq")).unwrap();
         assert_eq!(stored.trim(), "2");
+    }
+
+    #[tokio::test]
+    async fn unparsed_skill_markdown_still_opens() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp
+            .path()
+            .join("shared")
+            .join("skill-catalog")
+            .join("sk0009");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("SKILL.md"), "# 只有正文\n没有前言\n").unwrap();
+        let state = state_in(&tmp);
+        let response = handle_read_skill_center(
+            State(state),
+            headers("ops", ROLE_OPS),
+            AxumPath("sk0009".into()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = json_body(response).await;
+        assert_eq!(body["invalid"], true);
+        assert_eq!(body["title"], "sk0009");
+        assert!(body["body"].as_str().unwrap().contains("只有正文"));
     }
 
     #[tokio::test]

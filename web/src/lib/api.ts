@@ -1342,6 +1342,7 @@ export interface SkillCenterSkill {
   version?: number;
   published_at?: string;
   on_plaza?: boolean;
+  invalid?: boolean;
   releases?: Array<{ version: number; published_at: string; kind?: string; note?: string }>;
 }
 

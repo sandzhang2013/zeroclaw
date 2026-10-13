@@ -134,7 +134,8 @@ export function SkillCenterPage({
     try {
       setView({ kind: 'detail', skill: await readSkillCenter(id) });
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : t('workbench.skill_center_failed'));
+      const message = err instanceof Error ? err.message : '';
+      setError(message || t('workbench.skill_center_failed'));
     }
   }
 
@@ -307,6 +308,9 @@ export function SkillCenterPage({
                 <dt className="text-pc-text-muted">{t('workbench.skill_center_published_at')}</dt>
                 <dd className="text-pc-text">{detail.published_at ?? ''}</dd>
               </dl>
+              {detail.invalid ? (
+                <p className="text-xs text-status-error">{t('workbench.skill_center_invalid_md')}</p>
+              ) : null}
               {detail.reject_reason ? (
                 <p className="text-xs text-status-error">
                   {t('workbench.skill_center_reject_reason')} {detail.reject_reason}
