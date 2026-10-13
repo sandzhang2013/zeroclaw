@@ -15,6 +15,13 @@ export interface TurnStreamState {
   hadToolCall: boolean;
 }
 
+/** Keep whatever already streamed, and always leave a visible stop line. */
+export function interruptedContent(streamed: string, note: string): string {
+  const body = streamed.trim();
+  if (!body) return note;
+  return `${body}\n\n${note}`;
+}
+
 /** Fresh per-turn state. Returned after every completion so the next turn
  *  starts clean — the "ref state resets across turns" invariant. */
 export function initialTurnStreamState(): TurnStreamState {

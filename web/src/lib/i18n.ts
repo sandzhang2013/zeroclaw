@@ -94,6 +94,9 @@ const translations: Record<Locale, Record<string, string>> = {
     'agent.disconnected': '已断开',
     'agent.reconnecting': '重新连接中...',
     'agent.thinking': '思考中...',
+    'agent.running': '正在运行…',
+    'agent.stop': '停止',
+    'agent.interrupted': '已停止',
     'agentchat.thinking': '思考过程',
     'acp.agent_thought': '智能体思考',
     'acp.role_thought': '思考',
@@ -2456,6 +2459,7 @@ const translations: Record<Locale, Record<string, string>> = {
     'agent.approval_always': 'Always approve',
     'agent.approval_always_hint': 'Approve this tool automatically for the rest of this session',
     'agent.stop': 'Stop',
+    'agent.interrupted': 'Stopped',
 
     // Agent drawer / card
     'agent.detail_aria_prefix': 'Agent',

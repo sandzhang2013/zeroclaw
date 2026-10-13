@@ -32,6 +32,7 @@ import { resolveToolResultIndex } from '@/lib/toolCardMatch';
 import { parseToolArtifact } from '@/lib/artifactKind';
 import {
   initialTurnStreamState,
+  interruptedContent,
   reduceTurnFrame,
   type TurnStreamFrame,
   type TurnStreamState,
@@ -671,6 +672,7 @@ export function AgentProvider({
         // Gateway sends this after a cancelled turn; the parked approval (if
         // any) is no longer valid because its request_id belongs to the old
         // turn. Clear so the banner does not linger across the abort.
+        // The stop button already kept the partial transcript.
         foldTurnStream({ type: 'aborted' });
         setStreamingContent('');
         setStreamingThinking('');
@@ -1348,6 +1350,24 @@ export function AgentProvider({
       // backend on a late click anyway. Don't wait for the `aborted` frame
       // to round-trip; the user clicked Stop and expects the UI to follow.
       setPendingApproval(null);
+      const note = t('agent.interrupted');
+      const thinking = streamingThinking.trim();
+      const content = interruptedContent(streamingContent, note);
+      localMessageMutationVersionRef.current += 1;
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: generateUUID(),
+          role: 'agent',
+          content,
+          ...(thinking ? { thinking } : {}),
+          markdown: true,
+          timestamp: new Date(),
+        },
+      ]);
+      setStreamingContent('');
+      setStreamingThinking('');
+      setTyping(false);
       try {
         await abortSession(sessionId);
       } catch {

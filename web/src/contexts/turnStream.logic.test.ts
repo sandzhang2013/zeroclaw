@@ -4,10 +4,17 @@ import test from 'node:test';
 import {
   classifyCompletion,
   initialTurnStreamState,
+  interruptedContent,
   reduceTurnFrame,
   type CompletionOutcome,
   type TurnStreamFrame,
 } from './turnStream.logic.ts';
+
+test('interruptedContent keeps streamed text and still marks a stop', () => {
+  assert.equal(interruptedContent('', '已停止'), '已停止');
+  assert.equal(interruptedContent('  \n', '已停止'), '已停止');
+  assert.equal(interruptedContent('先想到这里', '已停止'), '先想到这里\n\n已停止');
+});
 
 /** Fold a whole frame sequence, collecting every completion the turns emit.
  *  Returns the final state so tests can assert cross-turn reset invariants. */
