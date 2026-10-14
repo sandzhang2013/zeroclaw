@@ -56,11 +56,20 @@ type ZoomRoot = {
   };
 };
 
+type ZoomPage = {
+  dataset: { embedZoom?: string };
+  style: {
+    setProperty: (name: string, value: string) => void;
+    removeProperty: (name: string) => void;
+  };
+};
+
 type ZoomWindow = {
   devicePixelRatio: number;
   parent?: unknown;
   opener?: unknown;
   matchMedia?: (query: string) => ResolutionQuery;
+  document?: { documentElement: ZoomPage };
 };
 
 /** Same rule as `isEmbeddedFrame`: iframe or popup, not a top-level tab. */
@@ -78,15 +87,6 @@ export function installEmbedCounterZoom(win: ZoomWindow, root: ZoomRoot): void {
     root.style.setProperty('zoom', style.zoom);
     root.style.width = style.width;
     root.style.minHeight = style.minHeight;
-  };
-  const watch = () => {
-    const mq = win.matchMedia?.(`(resolution: ${win.devicePixelRatio}dppx)`);
-    mq?.addEventListener('change', () => {
-      apply();
-      watch();
-    }, { once: true });
-  };
-  apply();
     const page = win.document?.documentElement;
     if (!page) return;
     const height = embedLayoutLength(win.devicePixelRatio, baseDpr);
@@ -100,5 +100,14 @@ export function installEmbedCounterZoom(win: ZoomWindow, root: ZoomRoot): void {
     page.dataset.embedZoom = '1';
     page.style.setProperty('--embed-layout-vh', height);
     page.style.setProperty('--embed-layout-vw', width);
+  };
+  const watch = () => {
+    const mq = win.matchMedia?.(`(resolution: ${win.devicePixelRatio}dppx)`);
+    mq?.addEventListener('change', () => {
+      apply();
+      watch();
+    }, { once: true });
+  };
+  apply();
   watch();
 }
