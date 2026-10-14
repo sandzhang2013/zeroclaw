@@ -19,7 +19,7 @@ test('parseWorkbenchAutonomy accepts runtime wire values', () => {
   assert.equal(parseWorkbenchAutonomy('full'), 'full');
 });
 
-test('parseWorkbenchAutonomy falls back to supervised', () => {
+test('parseWorkbenchAutonomy falls back to the default', () => {
   assert.equal(parseWorkbenchAutonomy(undefined), DEFAULT_WORKBENCH_AUTONOMY);
   assert.equal(parseWorkbenchAutonomy('yolo'), DEFAULT_WORKBENCH_AUTONOMY);
   assert.equal(parseWorkbenchAutonomy('read_only'), DEFAULT_WORKBENCH_AUTONOMY);
@@ -39,13 +39,13 @@ test('autonomyStorageKey strips unsafe scope characters', () => {
   );
 });
 
-test('every role can pick full; the default stays supervised', () => {
+test('every role can pick full; the default is autonomous', () => {
   assert.equal(maxAutonomyForRole('普通用户'), 'full');
   assert.equal(maxAutonomyForRole(undefined), 'full');
   assert.equal(maxAutonomyForRole(''), 'full');
   assert.equal(maxAutonomyForRole('管理员'), 'full');
   assert.equal(maxAutonomyForRole('ops'), 'full');
-  assert.equal(DEFAULT_WORKBENCH_AUTONOMY, 'supervised');
+  assert.equal(DEFAULT_WORKBENCH_AUTONOMY, 'full');
   assert.equal(clampWorkbenchAutonomy('full', 'supervised'), 'supervised');
   assert.equal(clampWorkbenchAutonomy('readonly', 'supervised'), 'readonly');
   assert.deepEqual(autonomyLevelsUpTo('supervised'), ['readonly', 'supervised']);

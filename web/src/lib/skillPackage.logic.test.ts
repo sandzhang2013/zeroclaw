@@ -122,6 +122,17 @@ test('readSkillFromZip reads SKILL.md from a stored or deflated archive', async 
   });
 });
 
+test('readSkillFromZip allows a file over 1 MB and rejects an archive over 8 MB', async () => {
+  const skill = Buffer.concat([Buffer.from(VALID), Buffer.alloc(1024 * 1024 + 1, 0x61)]);
+  const parsed = await readSkillFromZip(zipBytes([
+    { name: 'flu-weekly/SKILL.md', data: skill },
+  ], 0).buffer);
+  assert.equal(parsed.ok, true);
+
+  const over = new ArrayBuffer(8 * 1024 * 1024 + 1);
+  assert.deepEqual(await readSkillFromZip(over), { ok: false, error: 'too-large' });
+});
+
 function packageFile(path: string, text: string) {
   const bytes = new TextEncoder().encode(text);
   return {

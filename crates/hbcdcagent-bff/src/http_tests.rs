@@ -741,6 +741,20 @@ async fn local_mock_login_sets_cookie_and_redirects() {
         resp.headers().get("location").and_then(|v| v.to_str().ok()),
         Some("/hbcdcagent/workbench")
     );
+    let back = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/hbcdcagent/auth/mock?user=chenmin&next=%2Fhbcdcagent%2Fworkbench%2Fdeepseek%3Fembed%3Dchat")
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await
+        .expect("resp");
+    assert_eq!(
+        back.headers().get("location").and_then(|v| v.to_str().ok()),
+        Some("/hbcdcagent/workbench/deepseek?embed=chat")
+    );
     let set_cookie = resp
         .headers()
         .get("set-cookie")

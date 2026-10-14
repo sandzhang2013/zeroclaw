@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>工作台嵌入示例</title>
+<style>
+  body { margin: 0; font-family: "PingFang SC", "Microsoft YaHei", sans-serif; color: #1f2937; background: #f8fafc; }
+  header, main { max-width: 1100px; margin: 0 auto; padding: 20px 24px; }
+  h1 { font-size: 22px; margin: 0 0 8px; }
+  p, li { line-height: 1.6; }
+  .note { background: #fffbeb; border-left: 4px solid #d97706; padding: 10px 14px; margin: 12px 0; }
+  label { display: block; font-size: 13px; margin: 10px 0 4px; }
+  input, textarea, select { width: 100%; box-sizing: border-box; font: inherit; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 6px; background: #fff; }
+  textarea { min-height: 72px; }
+  button { margin-top: 12px; background: #0f766e; color: #fff; border: 0; border-radius: 6px; padding: 8px 14px; cursor: pointer; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  #log { white-space: pre-wrap; background: #0f172a; color: #e2e8f0; border-radius: 8px; padding: 12px; min-height: 72px; font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
+  iframe { width: 100%; height: 640px; border: 1px solid #d1d5db; border-radius: 8px; background: #fff; margin-top: 16px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>工作台嵌入示例</h1>
+  <p>父页面用 <code>iframe-bridge.js</code> 嵌入工作台。接入步骤见同目录 <a href="./嵌入开发说明.md">嵌入开发说明</a>。点「打开并提问」后，问题会随嵌入一起用 <code>ai:ask</code> 送进去。</p>
+  <div class="note">
+    调试地址已写成本机工作台 <code>http://127.0.0.1:50002/hbcdcagent/workbench/deepseek</code>。本机是模拟登录，嵌入时默认以普通用户「陈敏」打开。接到会签发票据的环境时，再把地址换成带 <code>clientId</code> 和 <code>verifyData</code> 的链接，身份以票据里的用户为准。父页面来源 <code>http://127.0.0.1:8765</code> 需要在 BFF 的 <code>HBCDCAGENT_BFF_FRAME_ANCESTORS</code> 里。
+  </div>
+</header>
+<main>
+  <label for="mode">嵌入方式</label>
+  <select id="mode">
+    <option value="workbench">工作台（侧栏和首页）</option>
+    <option value="chat" selected>对话框</option>
+  </select>
+  <label for="page">工作台地址（带 clientId 和 verifyData）</label>
+  <input id="page" value="http://127.0.0.1:50002/hbcdcagent/workbench/deepseek">
+  <label for="question">用户能看见的问题 content</label>
+  <textarea id="question">请概述近期需要关注的监测信号。</textarea>
+  <label for="hidden">只给模型、不上屏的数据 provideData</label>
+  <textarea id="hidden">{"area":"示例地区","range":"近7天"}</textarea>
+  <button id="open" type="button">打开并提问</button>
+  <button id="ask" type="button" disabled>再发一个问题</button>
+  <div id="log">还没有连接。</div>
+  <iframe id="frame" title="数智疾控工作台" hidden></iframe>
+</main>
+<script src="./iframe-bridge.js"></script>
+<script>
+(function () {
+  var frame = document.getElementById('frame');
+  var logBox = document.getElementById('log');
+  var askButton = document.getElementById('ask');
+  var bridge = null;
+  var askedForThisOpen = false;
+
+  function log(line) {
+    logBox.textContent += (logBox.textContent ? '\n' : '') + line;
+  }
+
+  function askPayload() {
+    var content = document.getElementById('question').value.trim();
+    if (!content) return null;
+    var raw = document.getElementById('hidden').value.trim();
+    var provideData = raw;
+    try { provideData = JSON.parse(raw); } catch (e) { /* 不是 JSON 时按原文发送 */ }
+    return {
+      content: content,
+      provideData: provideData,
+      msgId: 'demo-' + Date.now()
+    };
+  }
+
+  function sendAsk() {
+    var payload = askPayload();
+    if (!bridge || !payload) return;
+    log('发送 ai:ask …');
+    bridge.emit('ai:ask', payload, 8000).then(function (receipt) {
+      log('已受理 ' + JSON.stringify(receipt));
+    }).catch(function (err) {
+      log('未受理 ' + JSON.stringify(err));
+    });
+  }
+
+  document.getElementById('open').onclick = function () {
+    var src = document.getElementById('page').value.trim();
+    if (!src) {
+      log('先填写工作台地址。');
+      return;
+    }
+    var mode = document.getElementById('mode').value;
+    var url = new URL(src);
+    if (mode === 'chat') url.searchParams.set('embed', 'chat');
+    else url.searchParams.delete('embed');
+    var local = url.hostname === '127.0.0.1' || url.hostname === 'localhost';
+    if (local) {
+      var next = url.pathname + url.search;
+      src = url.origin + '/hbcdcagent/auth/mock?user=chenmin&next=' + encodeURIComponent(next);
+    } else {
+      src = url.toString();
+    }
+    var origin = ScIframeBridge.resolveOrigin(src);
+    if (bridge) bridge.destroy();
+    askedForThisOpen = false;
+    askButton.disabled = true;
+    frame.hidden = false;
+    frame.src = src;
+    bridge = ScIframeBridge.host({
+      allowedOrigins: [origin],
+      getContext: function () { return { from: '嵌入示例' }; }
+    });
+    bridge.on(function (msg) {
+      if (msg.type === 'ai:done') log('回答结束 ' + JSON.stringify(msg.payload));
+    });
+    bridge.onReady(function () {
+      log('握手完成。');
+      if (askedForThisOpen) return;
+      askedForThisOpen = true;
+      sendAsk();
+    });
+    frame.onload = function () {
+      bridge.attach(frame.contentWindow, origin);
+      askButton.disabled = false;
+      log('已嵌入 ' + origin + '。问题会在握手完成后自动送出。');
+    };
+  };
+
+  document.getElementById('ask').onclick = sendAsk;
+})();
+</script>
+</body>
+</html>

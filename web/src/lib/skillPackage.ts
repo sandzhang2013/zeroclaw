@@ -33,7 +33,7 @@ export type SkillPackageResult =
   | { ok: false; error: SkillPackageError };
 
 const MAX_ZIP_BYTES = 8 * 1024 * 1024;
-const MAX_FILE_BYTES = 1024 * 1024;
+const MAX_FILE_BYTES = 8 * 1024 * 1024;
 const MAX_ZIP_ENTRIES = 512;
 
 export function skillImportErrorKey(error: SkillPackageError): string {

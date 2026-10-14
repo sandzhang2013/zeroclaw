@@ -13,6 +13,7 @@ use zeroclaw_runtime::skills::SkillFrontmatter;
 
 use super::AppState;
 use super::api_skills::{
+    MAX_SKILL_PACKAGE_BYTES, MAX_SKILL_PACKAGE_FILE_BYTES, MAX_SKILL_PACKAGE_FILES,
     SkillZipBuilder, personal_skills_dir, require_agent, require_personal_user, require_skill_name,
     respond_skill_files, skill_plaza_dir, write_personal_skill_file, zip_download,
 };
@@ -442,7 +443,10 @@ fn copy_skill_tree(src: &Path, dest: &Path) -> Result<(), String> {
                 continue;
             }
             let len = entry.metadata().map(|meta| meta.len()).unwrap_or(0);
-            if len > 1024 * 1024 || *files >= 512 || total.saturating_add(len) > 8 * 1024 * 1024 {
+            if len > MAX_SKILL_PACKAGE_FILE_BYTES as u64
+                || *files >= MAX_SKILL_PACKAGE_FILES
+                || total.saturating_add(len) > MAX_SKILL_PACKAGE_BYTES as u64
+            {
                 return Err("skill package is too large".into());
             }
             *files += 1;

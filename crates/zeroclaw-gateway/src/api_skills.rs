@@ -466,9 +466,9 @@ pub(crate) fn write_personal_skill_file(
     Ok(fm.name)
 }
 
-const MAX_SKILL_PACKAGE_FILES: usize = 512;
-const MAX_SKILL_PACKAGE_FILE_BYTES: usize = 1024 * 1024;
-const MAX_SKILL_PACKAGE_BYTES: usize = 8 * 1024 * 1024;
+pub(crate) const MAX_SKILL_PACKAGE_FILES: usize = 512;
+pub(crate) const MAX_SKILL_PACKAGE_FILE_BYTES: usize = 8 * 1024 * 1024;
+pub(crate) const MAX_SKILL_PACKAGE_BYTES: usize = 8 * 1024 * 1024;
 
 fn write_skill_package(
     dir: &std::path::Path,

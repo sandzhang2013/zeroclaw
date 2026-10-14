@@ -88,22 +88,30 @@ both variables unset to keep the endpoint closed. Do not put the key in
 
 When 智能预警 embeds the workbench, the page loads `docs/集成/iframe-bridge.js`
 (copied to `/_app/iframe-bridge.js` at build time) only inside an iframe or
-popup. The parent sends `ai:ask`; the workbench collapses the session
+popup. The parent sends `ai:ask` as part of opening the iframe, before or
+after the handshake; messages sent early stay queued. The workbench collapses the session
 sidebar, sends `content` immediately, and keeps `provideData` out of the
-visible transcript. It answers with `{ accepted, sessionId, mode: "new" }`
+visible transcript. Add `embed=chat` to that workbench URL to open the
+conversation directly, without the session sidebar, homepage, or results
+pane. Other query values, including a ticket's `clientId` and `verifyData`,
+keep the full workbench. The page answers with `{ accepted, sessionId, mode: "new" }`
 and later emits `ai:done`. Set `HBCDCAGENT_BFF_FRAME_ANCESTORS` to the
 parent origins (`https://alert.example`, comma-separated). An empty value
 keeps `frame-ancestors 'none'`. Do not use `*`. Cross-site iframes on
 plain HTTP cannot store the `SameSite=Lax` cookie; the verify response
 then includes `sessionId` only when the page sends `X-Hbcdcagent-Embed: 1`,
-and the workbench keeps that id in memory.
+and the workbench keeps that id in memory. Step-by-step integrator
+instructions are in `docs/集成/嵌入开发说明.md`.
 
 Optional demo mode: set `HBCDCAGENT_BFF_LOCAL_MOCK=true` to skip SSO and
 derive the identity from a `zeroclaw_mock_user` cookie instead. Allowed
 ids: `chenmin`, `liuyang`, `zhoujing`, `ops` (`MOCK_USERS` in
 `crates/hbcdcagent-bff/src/identity.rs`). Open
 `/hbcdcagent/auth/mock?user=chenmin` to set the cookie, or load `/hbcdcagent/workbench`
-without a cookie to reach the SPA picker. API and WebSocket still return
+without a cookie to reach the SPA picker. Optional `next` must be a path
+under `/hbcdcagent/workbench` (for example `?embed=chat`); anything else
+falls back to the workbench root. The embed example uses this so a local
+iframe opens as 陈敏, an ordinary user. API and WebSocket still return
 401 until a cookie is present. Demo only: do not enable in production.
 
 The BFF does not depend on `zeroclaw-*` crates. Sign and SM4 follow

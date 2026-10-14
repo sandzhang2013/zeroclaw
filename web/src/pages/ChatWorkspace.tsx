@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { GripVertical } from 'lucide-react';
 import { AgentProvider } from '@/contexts/AgentContext';
@@ -25,6 +25,7 @@ import { nextStoredSessionTitle, titleFromTranscript, titleFromUserMessage, type
 import {
   saveWorkbenchAutonomy,
   clampWorkbenchAutonomy,
+  DEFAULT_WORKBENCH_AUTONOMY,
   maxAutonomyForRole,
   type WorkbenchAutonomy,
 } from '@/lib/workbenchAutonomy';
@@ -40,7 +41,7 @@ import {
 import { clearChatHistory, loadChatHistory } from '@/lib/chatHistoryStorage';
 import { latestTurnVerdict, type TurnVerdict } from '@/lib/turnFeedback';
 import { useTurnFeedback } from '@/lib/useTurnFeedback';
-import { isEmbeddedFrame, planIframeAsk } from '@/lib/iframeAsk';
+import { isEmbeddedFrame, parseEmbedMode, planIframeAsk } from '@/lib/iframeAsk';
 
 const SIDEBAR_COLLAPSED_KEY = 'zeroclaw-workbench-sidebar-collapsed';
 const RIGHT_COLLAPSED_KEY = 'zeroclaw-workbench-right-collapsed';
@@ -207,6 +208,8 @@ export default function ChatWorkspace({
 }: ChatWorkspaceProps) {
   const navigate = useNavigate();
   const location = useLocation();
+  const chatEmbed = parseEmbedMode(typeof window === 'undefined' ? '' : window.location.search) === 'chat';
+  const dialogSessionIdRef = useRef<string | null>(null);
   const persisted = useRef<Partial<PersistedStateV3>>(loadPersisted(userId));
 
   const [folders, setFolders] = useState<WorkbenchFolder[]>(() => {
@@ -376,7 +379,14 @@ export default function ChatWorkspace({
   }, [activeSessionId]);
 
   useEffect(() => {
-    const snapshot: PersistedStateV3 = { folders, sessions, activeSessionId };
+    const dialogId = dialogSessionIdRef.current;
+    const dialog = dialogId ? sessions.find((session) => session.id === dialogId) : undefined;
+    const keepDialog = Boolean(dialog?.title);
+    const snapshot: PersistedStateV3 = {
+      folders,
+      sessions: keepDialog || !dialogId ? sessions : sessions.filter((session) => session.id !== dialogId),
+      activeSessionId: !keepDialog && activeSessionId === dialogId ? '' : activeSessionId,
+    };
     try { localStorage.setItem(workspaceStorageKey(userId), JSON.stringify(snapshot)); } catch { /* noop */ }
   }, [folders, sessions, activeSessionId, userId]);
 
@@ -463,9 +473,9 @@ export default function ChatWorkspace({
   useEffect(() => {
     const target = `/workbench/${encodeURIComponent(activeAlias)}`;
     if (location.pathname !== target) {
-      navigate(target, { replace: true });
+      navigate({ pathname: target, search: location.search }, { replace: true });
     }
-  }, [activeAlias, location.pathname, navigate]);
+  }, [activeAlias, location.pathname, location.search, navigate]);
 
   const selectSession = useCallback((sessionId: string) => {
     setShowSkills(false);
@@ -566,6 +576,21 @@ export default function ChatWorkspace({
     setActiveFolderId(folder.id);
   }, []);
 
+  useLayoutEffect(() => {
+    if (!chatEmbed || dialogSessionIdRef.current) return;
+    const taskId = createTaskSessionId(initialAlias);
+    const session: WorkbenchSession = {
+      id: makeSessionId(initialAlias, taskId),
+      agentAlias: initialAlias,
+      taskId,
+      folderId: DEFAULT_FOLDER_ID,
+      updatedAt: stampNow(),
+    };
+    dialogSessionIdRef.current = session.id;
+    setSessions((prev) => (prev.some((item) => item.id === session.id) ? prev : [...prev, session]));
+    setActiveSessionId((current) => current || session.id);
+  }, [chatEmbed, initialAlias]);
+
   const toggleSidebar = useCallback(() => {
     setSidebarCollapsed((v) => {
       const next = !v;
@@ -607,7 +632,7 @@ export default function ChatWorkspace({
       const sessionId = makeSessionId(alias, taskId);
       if (plan.msgId) bridgeSeenRef.current.set(plan.msgId, gatewayId);
       bridgeDoneRef.current.set(sessionId, gatewayId);
-      const capped = clampWorkbenchAutonomy('supervised', maxAutonomyForRole(bridgeRoleRef.current));
+      const capped = clampWorkbenchAutonomy(DEFAULT_WORKBENCH_AUTONOMY, maxAutonomyForRole(bridgeRoleRef.current));
       saveWorkbenchAutonomy(sessionId, capped);
       const title = sanitizeSessionTitle(plan.title) ?? undefined;
       setPendingPrompt({ sessionId, text: plan.modelText, autonomy: capped, files: [] });
@@ -669,6 +694,7 @@ export default function ChatWorkspace({
 
   return (
     <div translate="no" className="notranslate flex flex-1 h-full min-h-0 overflow-hidden bg-pc-base">
+      {!chatEmbed && (
       <WorkbenchSidebar
         folders={folders}
         sessions={sessions}
@@ -701,13 +727,14 @@ export default function ChatWorkspace({
           setActiveSessionId('');
         }}
       />
+      )}
 
       <div ref={splitRef} className="flex flex-1 min-w-0 min-h-0 bg-pc-surface">
         {showSkillCenter ? (
           <SkillCenterPage userName={userName} onClose={() => setShowSkillCenter(false)} />
         ) : showSkills ? (
           <MySkillsPage agent={activeAlias} userName={userName} onClose={() => setShowSkills(false)} />
-        ) : showHome && (
+        ) : showHome && !chatEmbed && (
           <WorkbenchHome
             onSend={startSessionFromHome}
             folders={folders}
@@ -738,15 +765,15 @@ export default function ChatWorkspace({
               >
                 <div
                   className="flex flex-col min-h-0 min-w-0 overflow-hidden bg-pc-surface"
-                  style={{ flex: rightCollapsed ? '1 1 100%' : `${100 - rightPct} 1 0` }}
+                  style={{ flex: chatEmbed || rightCollapsed ? '1 1 100%' : `${100 - rightPct} 1 0` }}
                 >
                   <AgentChatInner
                     agentAlias={session.agentAlias}
                     sessionTitle={session.title}
                     onRenameSession={(name) => renameSession(session.id, name)}
                     onStatus={onStatusFor(session.id)}
-                    rightPanelCollapsed={rightCollapsed}
-                    onToggleRightPanel={toggleRight}
+                    rightPanelCollapsed={chatEmbed || rightCollapsed}
+                    onToggleRightPanel={chatEmbed ? undefined : toggleRight}
                     initialPrompt={pendingPrompt?.sessionId === session.id ? pendingPrompt.text : undefined}
                     initialAutonomy={pendingPrompt?.sessionId === session.id ? pendingPrompt.autonomy : undefined}
                     initialFiles={pendingPrompt?.sessionId === session.id ? pendingPrompt.files : undefined}
@@ -759,7 +786,7 @@ export default function ChatWorkspace({
                     }}
                   />
                 </div>
-                {!rightCollapsed && (
+                {!chatEmbed && !rightCollapsed && (
                   <>
                     <div
                       role="separator"

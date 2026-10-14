@@ -35,6 +35,15 @@ export function isEmbeddedFrame(win: {
   return win.parent !== win || Boolean(win.opener);
 }
 
+/** `embed=chat` opens the conversation. Anything else keeps the workbench. */
+export type EmbedMode = 'workbench' | 'chat';
+
+export function parseEmbedMode(search: string): EmbedMode {
+  const raw = search.startsWith('?') ? search.slice(1) : search;
+  const value = new URLSearchParams(raw).get('embed')?.trim().toLowerCase();
+  return value === 'chat' ? 'chat' : 'workbench';
+}
+
 export function composeModelText(content: string, provideData: unknown): string {
   const visible = content.trim();
   const hidden = serializeProvideData(provideData);

@@ -3,9 +3,18 @@ import test from 'node:test';
 import {
   composeModelText,
   isEmbeddedFrame,
+  parseEmbedMode,
   planIframeAsk,
   stripProvideData,
 } from './iframeAsk.ts';
+
+test('embed=chat opens the dialog and other values keep the workbench', () => {
+  assert.equal(parseEmbedMode(''), 'workbench');
+  assert.equal(parseEmbedMode('?clientId=a&verifyData=b'), 'workbench');
+  assert.equal(parseEmbedMode('?embed=workbench'), 'workbench');
+  assert.equal(parseEmbedMode('?clientId=a&verifyData=b&embed=chat'), 'chat');
+  assert.equal(parseEmbedMode('?embed=CHAT'), 'chat');
+});
 
 test('standalone window is not an embed', () => {
   const win: { parent?: unknown; opener?: unknown } = { opener: null };

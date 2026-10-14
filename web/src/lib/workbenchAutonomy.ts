@@ -8,7 +8,7 @@ export const WORKBENCH_AUTONOMY_LEVELS: WorkbenchAutonomy[] = [
   'full',
 ];
 
-export const DEFAULT_WORKBENCH_AUTONOMY: WorkbenchAutonomy = 'supervised';
+export const DEFAULT_WORKBENCH_AUTONOMY: WorkbenchAutonomy = 'full';
 
 const RANK: Record<WorkbenchAutonomy, number> = {
   readonly: 0,
@@ -18,7 +18,7 @@ const RANK: Record<WorkbenchAutonomy, number> = {
 
 /** Role does not cap the selector. Ordinary users and admins may both pick
  * `full`; the server still applies the agent config ceiling. The workbench
- * default stays supervised until the user changes it. */
+ * starts in autonomous mode until the user changes it. */
 export function maxAutonomyForRole(_role?: string): WorkbenchAutonomy {
   return 'full';
 }

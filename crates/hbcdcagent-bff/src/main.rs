@@ -47,6 +47,7 @@ struct CallbackQuery {
 #[derive(Deserialize)]
 struct MockLoginQuery {
     user: Option<String>,
+    next: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -219,7 +220,7 @@ async fn mock_login(
     if mock_user(user_id).is_none() {
         return (StatusCode::BAD_REQUEST, "unknown mock user").into_response();
     }
-    let mut response = Redirect::temporary(Config::workbench_path()).into_response();
+    let mut response = Redirect::temporary(&mock_login_next(query.next.as_deref())).into_response();
     match mock_user_cookie_header(user_id).parse() {
         Ok(value) => {
             response.headers_mut().insert(header::SET_COOKIE, value);
@@ -229,6 +230,51 @@ async fn mock_login(
         }
     }
     response
+}
+
+/// Local mock only. `next` may return to the workbench, including `embed=chat`.
+fn mock_login_next(raw: Option<&str>) -> String {
+    let Some(raw) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Config::workbench_path().to_string();
+    };
+    if mock_next_allowed(raw) {
+        raw.to_string()
+    } else {
+        Config::workbench_path().to_string()
+    }
+}
+
+fn mock_next_allowed(raw: &str) -> bool {
+    if raw.starts_with("//") || raw.contains("://") || raw.contains('\\') {
+        return false;
+    }
+    if raw.chars().any(|c| c.is_control()) {
+        return false;
+    }
+    let path = raw.split(['?', '#']).next().unwrap_or(raw);
+    path == Config::workbench_path() || path.starts_with(&format!("{}/", Config::workbench_path()))
+}
+
+#[cfg(test)]
+mod mock_next_tests {
+    use super::mock_login_next;
+
+    #[test]
+    fn next_stays_on_the_workbench() {
+        assert_eq!(mock_login_next(None), "/hbcdcagent/workbench");
+        assert_eq!(
+            mock_login_next(Some("/hbcdcagent/workbench/deepseek?embed=chat")),
+            "/hbcdcagent/workbench/deepseek?embed=chat"
+        );
+        assert_eq!(
+            mock_login_next(Some("https://evil.example/hbcdcagent/workbench")),
+            "/hbcdcagent/workbench"
+        );
+        assert_eq!(
+            mock_login_next(Some("//evil.example/hbcdcagent/workbench")),
+            "/hbcdcagent/workbench"
+        );
+    }
 }
 
 async fn callback(
