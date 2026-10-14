@@ -563,6 +563,11 @@ async fn handle_socket(
     if let Some(ref name) = effective_name {
         session_start["name"] = serde_json::Value::String(name.clone());
     }
+    // The meter otherwise stays blank until a turn's `done` frame. Seed the
+    // same budget and configured window the done frame would use, so reopening
+    // a conversation shows the capacity immediately. Used tokens still arrive
+    // on `done`; the client keeps the last measurement itself.
+    attach_session_start_context_limits(&mut session_start, &config, &agent_alias);
     let _ = sender
         .send(Message::Text(session_start.to_string().into()))
         .await;
@@ -1751,6 +1756,31 @@ fn is_global_chat_event(event: &serde_json::Value) -> bool {
 
 fn is_observability_telemetry(event: &serde_json::Value) -> bool {
     event.get("source").and_then(serde_json::Value::as_str) == Some("observability")
+}
+
+/// Put the route's trim budget and configured model window on `session_start`.
+/// Omits the compatibility-fallback window so the client does not freeze the
+/// meter on the 32k stub. A zero budget is the trimming-disabled sentinel and
+/// is omitted too.
+fn attach_session_start_context_limits(
+    frame: &mut serde_json::Value,
+    config: &zeroclaw_config::schema::Config,
+    agent_alias: &str,
+) {
+    let Some(agent) = config.agents.get(agent_alias) else {
+        return;
+    };
+    let provider_ref = agent.model_provider.as_str();
+    if provider_ref.is_empty() {
+        return;
+    }
+    let limits = config.resolved_context_limits_for_route(agent_alias, provider_ref, "");
+    if limits.context_token_budget > 0 {
+        frame["max_context_tokens"] = serde_json::json!(limits.context_token_budget as u64);
+    }
+    if let Some(window) = limits.configured_model_context_window() {
+        frame["model_context_window"] = serde_json::json!(window as u64);
+    }
 }
 
 fn resolve_done_context_limits(
@@ -5411,6 +5441,54 @@ data: {{\"type\":\"message_stop\"}}\n\n"
             size: 1,
         };
         assert!(workspace_relative_artifact(&artifact, &root).is_none());
+    }
+
+    #[test]
+    fn session_start_carries_configured_context_limits() {
+        use std::collections::HashMap;
+        use zeroclaw_config::schema::{AliasedAgentConfig, Config, RuntimeProfileConfig};
+
+        let mut runtime_profiles = HashMap::new();
+        runtime_profiles.insert(
+            "default".to_string(),
+            RuntimeProfileConfig {
+                max_context_tokens: Some(128_000),
+                ..RuntimeProfileConfig::default()
+            },
+        );
+        let mut agents = HashMap::new();
+        agents.insert(
+            "hbcdc".to_string(),
+            AliasedAgentConfig {
+                enabled: true,
+                runtime_profile: "default".into(),
+                model_provider: "deepseek.default".into(),
+                ..AliasedAgentConfig::default()
+            },
+        );
+        let mut providers = zeroclaw_config::providers::Providers::default();
+        let entry = providers
+            .models
+            .ensure("deepseek", "default")
+            .expect("ensure creates entry");
+        entry.model = Some("deepseek-v4-flash".to_string());
+        entry.context_window = Some(128_000);
+        let cfg = Config {
+            agents,
+            runtime_profiles,
+            providers,
+            ..Config::default()
+        };
+
+        let mut frame = serde_json::json!({ "type": "session_start" });
+        attach_session_start_context_limits(&mut frame, &cfg, "hbcdc");
+        assert_eq!(frame["max_context_tokens"], 128_000);
+        assert_eq!(frame["model_context_window"], 128_000);
+
+        let mut bare = serde_json::json!({ "type": "session_start" });
+        attach_session_start_context_limits(&mut bare, &cfg, "missing");
+        assert!(bare.get("max_context_tokens").is_none());
+        assert!(bare.get("model_context_window").is_none());
     }
 
     /// done-frame model_context_window: present when the provider has an

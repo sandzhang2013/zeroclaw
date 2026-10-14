@@ -45,7 +45,11 @@ import {
 } from '@/contexts/detachedTurn.logic';
 import {
   EMPTY_CONTEXT_LIMITS,
+  browserMeterStorage,
   contextLimitsFromDoneFrame,
+  loadContextMeter,
+  saveContextMeter,
+  type ContextMeterSnapshot,
 } from '@/contexts/contextLimits.logic';
 import {
   loadChatHistory,
@@ -236,6 +240,11 @@ const defaultSessionRuntime: AgentSessionRuntime = {
 /** Shared empty array so panes with no siblings keep a stable context value. */
 const NO_RESERVED_SESSIONS: readonly string[] = [];
 
+function limitsFromSnapshot(saved: ContextMeterSnapshot | null) {
+  if (!saved) return EMPTY_CONTEXT_LIMITS;
+  return { maxTokens: saved.maxTokens, modelWindow: saved.modelWindow };
+}
+
 export function AgentProvider({
   agentAlias,
   taskId,
@@ -284,9 +293,27 @@ export function AgentProvider({
   const [modelLoading, setModelLoading] = useState(false);
   const [modelInfoVersion, setModelInfoVersion] = useState(0);
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
-  // Context window tracking (from "done" WS frames). See #7311.
-  const [contextLimits, setContextLimits] = useState(EMPTY_CONTEXT_LIMITS);
-  const [contextInputTokens, setContextInputTokens] = useState<number | null>(null);
+  // Context window tracking. `session_start` seeds the configured window so
+  // the meter is visible before the first `done` frame; `done` supplies the
+  // measured prompt size, which is remembered per conversation.
+  const [contextLimits, setContextLimits] = useState(() =>
+    limitsFromSnapshot(loadContextMeter(sessionId, browserMeterStorage())),
+  );
+  const [contextInputTokens, setContextInputTokens] = useState<number | null>(() =>
+    loadContextMeter(sessionId, browserMeterStorage())?.inputTokens ?? null,
+  );
+  const contextInputTokensRef = useRef(contextInputTokens);
+  const contextMeterSessionRef = useRef(sessionId);
+  if (contextMeterSessionRef.current !== sessionId) {
+    contextMeterSessionRef.current = sessionId;
+    const saved = loadContextMeter(sessionId, browserMeterStorage());
+    const nextInput = saved?.inputTokens ?? null;
+    contextInputTokensRef.current = nextInput;
+    setContextLimits(limitsFromSnapshot(saved));
+    setContextInputTokens(nextInput);
+  } else {
+    contextInputTokensRef.current = contextInputTokens;
+  }
 
   const wsRef = useRef<WebSocketClient | null>(null);
   // Canonical per-turn stream state. Every production transition that mutates
@@ -564,7 +591,14 @@ export function AgentProvider({
   // Centralised WebSocket message handler — reused across initial connect and reconnects.
   const handleWsMessage = useCallback((msg: WsMessage) => {
     switch (msg.type) {
-      case 'session_start':
+      case 'session_start': {
+        const next = contextLimitsFromDoneFrame(msg);
+        if (next.maxTokens !== null || next.modelWindow !== null) {
+          setContextLimits(next);
+        }
+        break;
+      }
+
       case 'connected':
         break;
 
@@ -630,19 +664,28 @@ export function AgentProvider({
         }
         // Extract context window info from "done" frame (sent by gateway).
         if (msg.type === 'done') {
-          setContextLimits(contextLimitsFromDoneFrame(msg));
+          const nextLimits = contextLimitsFromDoneFrame(msg);
+          setContextLimits(nextLimits);
           // Prefer last_input_tokens (accurate per-turn prompt size) over
           // accumulated input_tokens for context-bar rendering.
           // When last_input_tokens is explicitly null, the accepted route has no
           // usage data; clear the input state and do NOT fall back to the
           // accumulated input_tokens (which would be stale from a previous route).
+          let nextInput = contextInputTokensRef.current;
           if (msg.last_input_tokens === null) {
-            setContextInputTokens(null);
+            nextInput = null;
           } else if (typeof msg.last_input_tokens === 'number') {
-            setContextInputTokens(msg.last_input_tokens);
+            nextInput = msg.last_input_tokens;
           } else if (typeof msg.input_tokens === 'number') {
-            setContextInputTokens(msg.input_tokens);
+            nextInput = msg.input_tokens;
           }
+          contextInputTokensRef.current = nextInput;
+          setContextInputTokens(nextInput);
+          saveContextMeter(activeSessionIdRef.current, {
+            maxTokens: nextLimits.maxTokens,
+            modelWindow: nextLimits.modelWindow,
+            inputTokens: nextInput,
+          }, browserMeterStorage());
         }
         setStreamingContent('');
         setStreamingThinking('');
