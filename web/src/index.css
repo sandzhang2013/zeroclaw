@@ -132,6 +132,25 @@ body {
   min-height: 100vh;
 }
 
+/* Counter-zoom lives on #root. Viewport utilities must use the pre-zoom
+   length or the workbench paints in the top of the iframe and leaves a gap. */
+html[data-embed-zoom] body {
+  max-width: none;
+  overflow-x: visible;
+}
+
+html[data-embed-zoom] .h-screen {
+  height: var(--embed-layout-vh);
+}
+
+html[data-embed-zoom] .min-h-screen {
+  min-height: var(--embed-layout-vh);
+}
+
+html[data-embed-zoom] .w-screen {
+  width: var(--embed-layout-vw);
+}
+
 /* Focus ring — solid accent for a strong, legible, WCAG-friendly ring
    (was a low-contrast 30%-alpha color). */
 :focus-visible {

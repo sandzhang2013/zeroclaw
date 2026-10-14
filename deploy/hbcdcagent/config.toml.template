@@ -49,9 +49,10 @@ model_provider = "vllm.default"
 risk_profile = "default"
 runtime_profile = "default"
 
-# 工作台「自主 / 监督 / 只读」可在此天花板内切换。普通用户仍被角色限制为监督。
+# 工作台「自主 / 监督 / 只读」的天花板。full 且 always_ask 为空时，工具调用不再弹授权。
 [risk_profiles.default]
 level = "full"
+always_ask = []
 
 [runtime_profiles.default]
 max_context_tokens = 128000

@@ -97,6 +97,7 @@ const translations: Record<Locale, Record<string, string>> = {
     'agent.running': '正在运行…',
     'agent.stop': '停止',
     'agent.interrupted': '已停止',
+    'agent.turn_continues': '本轮仍在服务端继续，完成后会出现在这里。',
     'agentchat.thinking': '思考过程',
     'acp.agent_thought': '智能体思考',
     'acp.role_thought': '思考',
@@ -2460,6 +2461,7 @@ const translations: Record<Locale, Record<string, string>> = {
     'agent.approval_always_hint': 'Approve this tool automatically for the rest of this session',
     'agent.stop': 'Stop',
     'agent.interrupted': 'Stopped',
+    'agent.turn_continues': 'This turn is still running on the server. The finished answer will appear here.',
 
     // Agent drawer / card
     'agent.detail_aria_prefix': 'Agent',

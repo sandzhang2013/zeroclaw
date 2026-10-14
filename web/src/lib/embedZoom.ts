@@ -23,6 +23,23 @@ export function embedZoomStyle(
   };
 }
 
+/**
+ * Layout length for one visual viewport after `zoom: 1/z`.
+ * `100vh` inside the zoomed tree paints shorter than the iframe, which leaves
+ * the empty band under the workbench. Empty string means keep normal viewport units.
+ */
+export function embedLayoutLength(currentDpr: number, baseDpr: number): string {
+  const z = browserZoomFactor(currentDpr, baseDpr);
+  if (z == null || Math.abs(z - 1) < 0.01) return '';
+  return `${100 * z}vh`;
+}
+
+export function embedLayoutWidth(currentDpr: number, baseDpr: number): string {
+  const z = browserZoomFactor(currentDpr, baseDpr);
+  if (z == null || Math.abs(z - 1) < 0.01) return '';
+  return `${100 * z}vw`;
+}
+
 type ResolutionQuery = {
   addEventListener: (
     type: 'change',
@@ -70,5 +87,18 @@ export function installEmbedCounterZoom(win: ZoomWindow, root: ZoomRoot): void {
     }, { once: true });
   };
   apply();
+    const page = win.document?.documentElement;
+    if (!page) return;
+    const height = embedLayoutLength(win.devicePixelRatio, baseDpr);
+    const width = embedLayoutWidth(win.devicePixelRatio, baseDpr);
+    if (!height || !width) {
+      delete page.dataset.embedZoom;
+      page.style.removeProperty('--embed-layout-vh');
+      page.style.removeProperty('--embed-layout-vw');
+      return;
+    }
+    page.dataset.embedZoom = '1';
+    page.style.setProperty('--embed-layout-vh', height);
+    page.style.setProperty('--embed-layout-vw', width);
   watch();
 }
