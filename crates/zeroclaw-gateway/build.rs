@@ -1,9 +1,10 @@
 use std::process::Command;
 
 fn main() {
-    // For `cargo install` users: attempt a best-effort npm build so the
-    // dashboard is available out of the box. If node/npm is missing or
-    // the build fails, we skip silently — the binary works fine without it.
+    // For `cargo install` users: attempt a best-effort npm install so the
+    // dashboard can be built out of the box. Missing node/npm or a failed
+    // install is skipped. A failed `npm run build` is not: that would leave
+    // `web/dist` at the previous bundle while this binary's stamp moves on.
     build_web_dashboard();
     ensure_embedded_web_dist_when_enabled();
 }
@@ -56,10 +57,29 @@ fn build_web_dashboard() {
         return;
     }
 
-    let _ = Command::new(npm)
+    run_dashboard_build(npm, &web_dir);
+}
+
+/// `npm ci` already succeeded, so a failed dashboard build must fail this
+/// script. Ignoring the status keeps the previous `web/dist` and lets cargo
+/// embed that stale bundle under the new binary.
+fn run_dashboard_build(npm: &str, web_dir: &std::path::Path) {
+    let status = Command::new(npm)
         .args(["run", "build"])
-        .current_dir(&web_dir)
-        .status();
+        .current_dir(web_dir)
+        .status()
+        .unwrap_or_else(|err| {
+            panic!(
+                "failed to spawn `npm run build` in {}: {err}",
+                web_dir.display()
+            )
+        });
+    if !status.success() {
+        panic!(
+            "`npm run build` failed in {} ({status}); refusing to keep the previous web/dist",
+            web_dir.display()
+        );
+    }
 }
 
 fn ensure_embedded_web_dist_when_enabled() {
