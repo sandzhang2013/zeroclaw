@@ -83,6 +83,15 @@ pub fn clear_mock_cookie_header(secure: bool) -> String {
     v
 }
 
+/// Older local logins set `Path=/`. Clearing only `/hbcdcagent` leaves that copy.
+pub fn clear_legacy_mock_cookie_header(secure: bool) -> String {
+    let mut v = format!("{MOCK_COOKIE_NAME}=; Path=/; SameSite=Lax; Max-Age=0");
+    if secure {
+        v.push_str("; Secure");
+    }
+    v
+}
+
 #[derive(Clone, Debug)]
 pub struct UserIdError;
 
@@ -164,6 +173,14 @@ mod tests {
         assert_eq!(
             mock_user_cookie_header("chenmin"),
             "zeroclaw_mock_user=chenmin; Path=/hbcdcagent; SameSite=Lax"
+        );
+        assert_eq!(
+            clear_mock_cookie_header(false),
+            "zeroclaw_mock_user=; Path=/hbcdcagent; SameSite=Lax; Max-Age=0"
+        );
+        assert_eq!(
+            clear_legacy_mock_cookie_header(true),
+            "zeroclaw_mock_user=; Path=/; SameSite=Lax; Max-Age=0; Secure"
         );
     }
 }

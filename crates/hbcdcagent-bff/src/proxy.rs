@@ -5,8 +5,8 @@ use crate::identity::{
     IDENTITY_HEADERS, Identity, MOCK_COOKIE_NAME, ROLE_OPS, mock_user, normalize_user_id,
 };
 use crate::session::{
-    STATE_TTL, SessionStore, append_set_cookie, cookie_header, cookie_value,
-    session_id_from_headers, state_cookie_header, strip_embed_credentials,
+    STATE_TTL, SessionStore, append_clear_mock_cookies, append_set_cookie, cookie_header,
+    cookie_value, session_id_from_headers, state_cookie_header, strip_embed_credentials,
 };
 use crate::user_center::UserCenter;
 use anyhow::Result;
@@ -153,7 +153,7 @@ async fn forward_http(
     match state.http.request(req).await {
         Ok(resp) => {
             let resp = resp.map(Body::new).into_response();
-            Ok(inject_workbench_html(resp, identity, &state.cfg.frame_ancestors).await)
+            Ok(inject_workbench_html(resp, identity, &state.cfg).await)
         }
         Err(err) => {
             tracing::warn!(error = %err, "upstream request failed");
@@ -227,8 +227,11 @@ fn path_prefix_script() -> String {
     )
 }
 
-fn workbench_head_script(identity: Option<&Identity>) -> String {
+fn workbench_head_script(identity: Option<&Identity>, local_mock: bool) -> String {
     let mut script = path_prefix_script();
+    if !local_mock {
+        script.push_str("<script>window.__ZEROCLAW_LOCAL_MOCK__=false;</script>");
+    }
     if let Some(identity) = identity
         && let Some(user) = platform_user_script(identity)
     {
@@ -286,12 +289,12 @@ pub(crate) fn apply_frame_policy(headers: &mut HeaderMap, ancestors: &[String]) 
 async fn inject_workbench_html(
     resp: Response,
     identity: Option<&Identity>,
-    frame_ancestors: &[String],
+    cfg: &Config,
 ) -> Response {
     if !should_inject_html(resp.headers()) {
         return resp;
     }
-    let script = workbench_head_script(identity);
+    let script = workbench_head_script(identity, cfg.local_mock);
     let (mut parts, body) = resp.into_parts();
     let bytes = match to_bytes(body, MAX_HTML_INJECT_BYTES).await {
         Ok(b) => b,
@@ -302,18 +305,24 @@ async fn inject_workbench_html(
     };
     let Ok(html) = std::str::from_utf8(&bytes) else {
         parts.headers.remove(header::CONTENT_LENGTH);
-        apply_frame_policy(&mut parts.headers, frame_ancestors);
+        apply_frame_policy(&mut parts.headers, &cfg.frame_ancestors);
         return Response::from_parts(parts, Body::from(bytes));
     };
     let injected = inject_script_into_html(html, &script);
-    apply_frame_policy(&mut parts.headers, frame_ancestors);
+    apply_frame_policy(&mut parts.headers, &cfg.frame_ancestors);
     parts.headers.remove(header::TRANSFER_ENCODING);
     if let Ok(len) = HeaderValue::from_str(&injected.len().to_string()) {
         parts.headers.insert(header::CONTENT_LENGTH, len);
     } else {
         parts.headers.remove(header::CONTENT_LENGTH);
     }
-    Response::from_parts(parts, Body::from(injected))
+    let mut response = Response::from_parts(parts, Body::from(injected));
+    // SSO has no mock login. Expire a leftover local cookie before page script
+    // runs, or the picker treats this visit as local mode.
+    if !cfg.local_mock {
+        append_clear_mock_cookies(&mut response, cfg.cookie_secure);
+    }
+    response
 }
 
 async fn proxy_ws(state: Arc<AppState>, mut req: Request) -> Response {
@@ -557,9 +566,19 @@ fn unauthenticated(cfg: &Config, path: &str) -> Response {
                 &mut response,
                 &state_cookie_header(&state, STATE_TTL, cfg.cookie_secure),
             );
+            if !cfg.local_mock {
+                append_clear_mock_cookies(&mut response, cfg.cookie_secure);
+            }
             response
         }
-        None => login_error_response(StatusCode::UNAUTHORIZED, cfg, LoginErrorKind::NoLoginEntry),
+        None => {
+            let mut response =
+                login_error_response(StatusCode::UNAUTHORIZED, cfg, LoginErrorKind::NoLoginEntry);
+            if !cfg.local_mock {
+                append_clear_mock_cookies(&mut response, cfg.cookie_secure);
+            }
+            response
+        }
     }
 }
 
@@ -774,7 +793,7 @@ mod tests {
 
     #[test]
     fn html_injects_path_prefix_and_platform_user() {
-        let script = workbench_head_script(Some(&sample_identity()));
+        let script = workbench_head_script(Some(&sample_identity()), true);
         let html = inject_script_into_html("<html><head></head><body></body></html>", &script);
         assert!(html.contains(r#"window.__ZEROCLAW_BASE__="/hbcdcagent""#));
         assert!(html.contains("<head><script>window.__ZEROCLAW_BASE__="));

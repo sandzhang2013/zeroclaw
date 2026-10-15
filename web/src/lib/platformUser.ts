@@ -163,18 +163,21 @@ export function clearMockUser(): void {
 }
 
 /**
- * Cookie / picker wins over a stale HTML inject. Switching mock users does
- * not reload the document, so `__ZEROCLAW_PLATFORM_USER__` can still be the
- * first login. Production SSO has no mock cookie and keeps the inject.
+ * A real SSO inject wins over a leftover local cookie. Catalog injects still
+ * lose to the cookie: switching mock users does not reload the document, so
+ * `__ZEROCLAW_PLATFORM_USER__` can still be the first login.
  */
 export function pickWorkbenchIdentity(input: {
   injected?: unknown;
   cookieHeader?: string | null;
   storedUserId?: string | null;
 }): PlatformUser | null {
-  const fromCookie = parseMockUserCookie(input.cookieHeader);
-  if (fromCookie) return fromCookie;
   const injected = parsePlatformPayload(input.injected);
+  const fromCookie = parseMockUserCookie(input.cookieHeader);
+  if (injected && !MOCK_USERS.some((user) => user.userId === injected.userId)) {
+    return injected;
+  }
+  if (fromCookie) return fromCookie;
   if (injected) return switchableWorkbenchUser(injected);
   if (input.storedUserId) {
     return MOCK_USERS.find((u) => u.userId === input.storedUserId) ?? null;
@@ -185,6 +188,12 @@ export function pickWorkbenchIdentity(input: {
 export function resolveWorkbenchUser(): PlatformUser | null {
   const injected =
     typeof window !== 'undefined' ? window.__ZEROCLAW_PLATFORM_USER__ : undefined;
+  // SSO pages set this flag. A leftover local cookie or sessionStorage must
+  // not paint the mock picker over the injected user.
+  if (typeof window !== 'undefined' && window.__ZEROCLAW_LOCAL_MOCK__ === false) {
+    clearMockUser();
+    return parsePlatformPayload(injected);
+  }
   const cookieHeader = typeof document !== 'undefined' ? document.cookie : undefined;
   const picked = pickWorkbenchIdentity({ injected, cookieHeader });
   if (picked) return picked;
@@ -207,5 +216,7 @@ declare global {
       region?: string;
       org?: string;
     };
+    /** Set by the BFF outside local mock. Disables the leftover mock cookie. */
+    __ZEROCLAW_LOCAL_MOCK__?: boolean;
   }
 }

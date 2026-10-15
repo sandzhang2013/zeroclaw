@@ -150,6 +150,7 @@ test('pickWorkbenchIdentity prefers mock cookie over a stale HTML inject', () =>
 
   const sso = pickWorkbenchIdentity({
     injected: { userId: 'alice', displayName: '爱丽丝', role: '管理员' },
+    cookieHeader: 'zeroclaw_mock_user=chenmin',
   });
   assert.equal(sso?.userId, 'alice');
   assert.equal(sso?.source, 'platform');

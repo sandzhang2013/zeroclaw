@@ -21,7 +21,9 @@ export default function WorkbenchPage() {
   const [agentAlias, setAgentAlias] = useState<string | null>(null);
 
   useEffect(() => {
-    if (user?.source === 'mock') saveMockUser(user);
+    if (!user) return;
+    if (user.source === 'mock') saveMockUser(user);
+    else clearMockUser();
   }, [user]);
 
   useEffect(() => {

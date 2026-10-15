@@ -17,13 +17,13 @@ mod user_center;
 use crate::config::Config;
 use crate::error_page::{LoginErrorKind, login_error_response};
 use crate::identity::{
-    Identity, clear_mock_cookie_header, map_role, mock_user, mock_user_cookie_header,
-    normalize_user_id,
+    Identity, map_role, mock_user, mock_user_cookie_header, normalize_user_id,
 };
 use crate::proxy::{AppState, fallback};
 use crate::session::{
-    SessionStore, append_set_cookie, clear_cookie_header, clear_state_cookie_header, cookie_header,
-    sid_from_cookie_header, sso_state_matches, wants_embed_session,
+    SessionStore, append_clear_mock_cookies, append_set_cookie, clear_cookie_header,
+    clear_state_cookie_header, cookie_header, sid_from_cookie_header, sso_state_matches,
+    wants_embed_session,
 };
 use crate::user_center::{LoginFetchError, UserCenter};
 use anyhow::Context;
@@ -346,6 +346,9 @@ async fn callback(
         &mut response,
         &clear_state_cookie_header(state.cfg.cookie_secure),
     );
+    if !state.cfg.local_mock {
+        append_clear_mock_cookies(&mut response, state.cfg.cookie_secure);
+    }
     response
 }
 
@@ -365,7 +368,7 @@ async fn logout(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Respo
         login_error_response(StatusCode::OK, &state.cfg, LoginErrorKind::LoggedOut)
     };
     append_set_cookie(&mut response, &clear_cookie_header(secure));
-    append_set_cookie(&mut response, &clear_mock_cookie_header(secure));
+    append_clear_mock_cookies(&mut response, secure);
     if bounce {
         append_set_cookie(&mut response, &clear_state_cookie_header(secure));
     }

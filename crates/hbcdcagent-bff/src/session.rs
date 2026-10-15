@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::identity::Identity;
+use crate::identity::{Identity, clear_legacy_mock_cookie_header, clear_mock_cookie_header};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, header};
 use axum::response::Response;
 use parking_lot::Mutex;
@@ -173,6 +173,12 @@ pub fn append_set_cookie(response: &mut Response, raw: &str) {
     if let Ok(value) = HeaderValue::from_str(raw) {
         response.headers_mut().append(header::SET_COOKIE, value);
     }
+}
+
+/// Drop a leftover local-mode `zeroclaw_mock_user` on both cookie paths.
+pub fn append_clear_mock_cookies(response: &mut Response, secure: bool) {
+    append_set_cookie(response, &clear_mock_cookie_header(secure));
+    append_set_cookie(response, &clear_legacy_mock_cookie_header(secure));
 }
 
 /// Portal jumps have neither cookie nor query `state`. BFF-initiated SSO
