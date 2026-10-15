@@ -77,6 +77,41 @@ export function workspaceStorageId(userId: string): string {
   return cleaned || 'user';
 }
 
+function textField(raw: Record<string, unknown>, key: string): string {
+  const value = raw[key];
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+/** Verify response uses nickName/userName. HTML inject uses displayName. */
+export function platformUserFromTicket(raw: unknown): PlatformUser | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  const userId = textField(o, 'userId');
+  if (!userId) return null;
+  const displayName =
+    textField(o, 'nickName') || textField(o, 'userName') || textField(o, 'displayName') || userId;
+  return parsePlatformPayload({
+    userId,
+    displayName,
+    role: textField(o, 'role') || undefined,
+    region: textField(o, 'region') || textField(o, 'regionName') || textField(o, 'regionCode'),
+    org: textField(o, 'org') || textField(o, 'tenantName'),
+  });
+}
+
+/** The page verifies after HTML is painted. Replace a leftover inject. */
+export function applyTicketUser(raw: unknown): void {
+  const user = platformUserFromTicket(raw);
+  if (!user || typeof window === 'undefined') return;
+  window.__ZEROCLAW_PLATFORM_USER__ = {
+    userId: user.userId,
+    displayName: user.displayName,
+    role: user.role,
+    region: user.region,
+    org: user.org,
+  };
+}
+
 export function parsePlatformPayload(raw: unknown): PlatformUser | null {
   if (!raw || typeof raw !== 'object') return null;
   const o = raw as Record<string, unknown>;

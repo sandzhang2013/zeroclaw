@@ -7,6 +7,7 @@ import {
   parseMockUserCookie,
   parsePlatformPayload,
   pickWorkbenchIdentity,
+  platformUserFromTicket,
   roleI18nKey,
   switchableWorkbenchUser,
   workspaceStorageId,
@@ -158,4 +159,23 @@ test('pickWorkbenchIdentity prefers mock cookie over a stale HTML inject', () =>
 
   const stored = pickWorkbenchIdentity({ storedUserId: 'liuyang' });
   assert.equal(stored?.userId, 'liuyang');
+});
+
+test('platformUserFromTicket prefers the ticket name over a leftover displayName', () => {
+  const user = platformUserFromTicket({
+    userId: 'U10001',
+    nickName: '预警小张',
+    userName: 'zhang',
+    tenantName: '湖北省疾控中心',
+    regionName: '湖北省',
+    role: '普通用户',
+  });
+  assert.equal(user?.userId, 'U10001');
+  assert.equal(user?.displayName, '预警小张');
+  assert.equal(user?.org, '湖北省疾控中心');
+  assert.equal(user?.region, '湖北省');
+  assert.equal(user?.source, 'platform');
+
+  const fallback = platformUserFromTicket({ userId: 'U9', userName: '' });
+  assert.equal(fallback?.displayName, 'U9');
 });

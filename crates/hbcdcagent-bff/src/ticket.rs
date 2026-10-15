@@ -180,32 +180,10 @@ pub fn verify_ticket(
     nonces: &NonceStore,
     has_session: bool,
 ) -> TicketOutcome {
-    let Some(sso) = sso else {
-        return fail(CODE_CLIENT, MSG_CLIENT);
+    let payload = match read_claims(sso, client_id, verify_data, now_ms) {
+        Ok(payload) => payload,
+        Err(outcome) => return outcome,
     };
-    let client_id = client_id.trim();
-    let verify_data = verify_data.trim();
-    if client_id.is_empty() || verify_data.is_empty() {
-        return fail(CODE_FORMAT, MSG_FORMAT);
-    }
-    if client_id != sso.client_id {
-        return fail(CODE_CLIENT, MSG_CLIENT);
-    }
-    let (version, plain) = match open(&sso.key, verify_data, client_id.as_bytes()) {
-        Ok(v) => v,
-        Err(OpenError::Format) => return fail(CODE_FORMAT, MSG_FORMAT),
-        Err(OpenError::Decrypt) => return fail(CODE_DECRYPT, MSG_DECRYPT),
-    };
-    if version != sso.key_version {
-        return fail(CODE_DECRYPT, MSG_DECRYPT);
-    }
-    let payload: TicketClaims = match serde_json::from_str(&plain) {
-        Ok(p) => p,
-        Err(_) => return fail(CODE_FORMAT, MSG_FORMAT),
-    };
-    if let Err(outcome) = check_time(payload.timestamp, payload.expire_at, now_ms) {
-        return outcome;
-    }
     let nonce = payload.nonce.trim();
     if nonce.is_empty() {
         return fail(CODE_FORMAT, MSG_FORMAT);
@@ -228,6 +206,52 @@ pub fn verify_ticket(
         },
         Err(()) => fail(CODE_FORMAT, MSG_FORMAT),
     }
+}
+
+/// Decrypt the ticket for the page label. Does not spend the nonce: the
+/// iframe still verifies afterwards and that call creates the session.
+pub fn preview_identity(
+    sso: Option<&TicketSso>,
+    client_id: &str,
+    verify_data: &str,
+    now_ms: i64,
+    ops_user_ids: &[String],
+) -> Option<Identity> {
+    let payload = read_claims(sso, client_id, verify_data, now_ms).ok()?;
+    identity_from_payload(&payload, ops_user_ids).ok()
+}
+
+fn read_claims(
+    sso: Option<&TicketSso>,
+    client_id: &str,
+    verify_data: &str,
+    now_ms: i64,
+) -> Result<TicketClaims, TicketOutcome> {
+    let Some(sso) = sso else {
+        return Err(fail(CODE_CLIENT, MSG_CLIENT));
+    };
+    let client_id = client_id.trim();
+    let verify_data = verify_data.trim();
+    if client_id.is_empty() || verify_data.is_empty() {
+        return Err(fail(CODE_FORMAT, MSG_FORMAT));
+    }
+    if client_id != sso.client_id {
+        return Err(fail(CODE_CLIENT, MSG_CLIENT));
+    }
+    let (version, plain) = match open(&sso.key, verify_data, client_id.as_bytes()) {
+        Ok(v) => v,
+        Err(OpenError::Format) => return Err(fail(CODE_FORMAT, MSG_FORMAT)),
+        Err(OpenError::Decrypt) => return Err(fail(CODE_DECRYPT, MSG_DECRYPT)),
+    };
+    if version != sso.key_version {
+        return Err(fail(CODE_DECRYPT, MSG_DECRYPT));
+    }
+    let payload: TicketClaims = match serde_json::from_str(&plain) {
+        Ok(p) => p,
+        Err(_) => return Err(fail(CODE_FORMAT, MSG_FORMAT)),
+    };
+    check_time(payload.timestamp, payload.expire_at, now_ms)?;
+    Ok(payload)
 }
 
 fn fail(code: i32, msg: &'static str) -> TicketOutcome {
@@ -348,6 +372,7 @@ pub fn public_user(identity: &Identity) -> Value {
         "tenantName": identity.org.as_deref().unwrap_or(""),
         "regionCode": "",
         "regionName": identity.region.as_deref().unwrap_or(""),
+        "role": identity.role,
     })
 }
 
@@ -356,14 +381,14 @@ pub fn rate_ok(window: &RateWindow, sso: &TicketSso, client_key: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::identity::ROLE_OPS;
 
     /// Test fixture only. Not the joint-debug or production key.
     const KEY_B64: &str = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";
 
-    fn sso() -> TicketSso {
+    pub(crate) fn sso() -> TicketSso {
         TicketSso {
             client_id: "CDSS-B-ZJJK-001".into(),
             key: decode_key(KEY_B64).expect("key"),
@@ -372,7 +397,7 @@ mod tests {
         }
     }
 
-    fn payload(now: i64, nonce: &str) -> String {
+    pub(crate) fn payload(now: i64, nonce: &str) -> String {
         serde_json::json!({
             "userId": "U10001",
             "userName": "张三",
@@ -389,7 +414,7 @@ mod tests {
         .to_string()
     }
 
-    fn ticket(sso: &TicketSso, json: &str) -> String {
+    pub(crate) fn ticket(sso: &TicketSso, json: &str) -> String {
         seal(
             &sso.key,
             sso.key_version,
@@ -739,6 +764,20 @@ mod tests {
         .expect("json");
         let sid = body["data"]["sessionId"].as_str().expect("session id");
         assert_eq!(sid.len(), 36);
+    }
+
+    #[test]
+    fn preview_identity_does_not_spend_the_nonce() {
+        let sso = sso();
+        let now = 1_756_641_000_000;
+        let data = ticket(&sso, &payload(now, "nonce-preview"));
+        let seen = preview_identity(Some(&sso), &sso.client_id, &data, now, &[]).expect("user");
+        assert_eq!(seen.user_id, "U10001");
+        assert_eq!(seen.display_name.as_deref(), Some("预警小张"));
+        let nonces = NonceStore::default();
+        let out = verify_ticket(Some(&sso), &sso.client_id, &data, now, &[], &nonces, false);
+        assert_eq!(out.code, CODE_OK);
+        assert_eq!(out.identity.expect("id").user_id, "U10001");
     }
 
     #[test]

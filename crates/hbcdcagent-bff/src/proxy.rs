@@ -143,6 +143,10 @@ async fn forward_http(
     mut req: Request,
     identity: Option<&Identity>,
 ) -> Result<Response, Response> {
+    // The document may still carry the previous user's session. A ticket in
+    // the URL names who this open is for; paint that person, and leave the
+    // nonce for the page verify that actually switches the session.
+    let shown = html_user(state, &req, identity);
     let target = rewrite_uri(&state.cfg.upstream, req.uri())
         .map_err(|_| (StatusCode::BAD_GATEWAY, "bad upstream URI").into_response())?;
     *req.uri_mut() = target;
@@ -153,7 +157,7 @@ async fn forward_http(
     match state.http.request(req).await {
         Ok(resp) => {
             let resp = resp.map(Body::new).into_response();
-            Ok(inject_workbench_html(resp, identity, &state.cfg).await)
+            Ok(inject_workbench_html(resp, shown.as_ref(), &state.cfg).await)
         }
         Err(err) => {
             tracing::warn!(error = %err, "upstream request failed");
@@ -323,6 +327,20 @@ async fn inject_workbench_html(
         append_clear_mock_cookies(&mut response, cfg.cookie_secure);
     }
     response
+}
+
+/// Ticket URL wins over the session cookie for the injected label.
+fn html_user(state: &AppState, req: &Request, session: Option<&Identity>) -> Option<Identity> {
+    if let Some((client_id, verify_data)) = ticket_query(req.uri()) {
+        return crate::ticket::preview_identity(
+            state.cfg.ticket_sso.as_ref(),
+            &client_id,
+            &verify_data,
+            chrono::Utc::now().timestamp_millis(),
+            &state.cfg.ops_user_ids,
+        );
+    }
+    session.cloned()
 }
 
 async fn proxy_ws(state: Arc<AppState>, mut req: Request) -> Response {

@@ -16,9 +16,7 @@ mod user_center;
 
 use crate::config::Config;
 use crate::error_page::{LoginErrorKind, login_error_response};
-use crate::identity::{
-    Identity, map_role, mock_user, mock_user_cookie_header, normalize_user_id,
-};
+use crate::identity::{Identity, map_role, mock_user, mock_user_cookie_header, normalize_user_id};
 use crate::proxy::{AppState, fallback};
 use crate::session::{
     SessionStore, append_clear_mock_cookies, append_set_cookie, clear_cookie_header,

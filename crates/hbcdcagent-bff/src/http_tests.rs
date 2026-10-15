@@ -870,6 +870,59 @@ async fn proxy_keeps_prefix_and_drops_forged_identity() {
 }
 
 #[tokio::test]
+async fn ticket_on_document_paints_the_ticket_user_not_the_session() {
+    let (uc, uc_h) = start_user_center(MockUserCenter::ok()).await;
+    let (up, up_h) = start_html_upstream().await;
+    let mut cfg = Config::for_test(&uc, &up);
+    let sso = crate::ticket::tests::sso();
+    let now = chrono::Utc::now().timestamp_millis();
+    let data =
+        crate::ticket::tests::ticket(&sso, &crate::ticket::tests::payload(now, "nonce-paint"));
+    cfg.ticket_sso = Some(sso);
+    let app = router(cfg).expect("router");
+    let cookie = login(&app, "good-code").await;
+    let uri = format!("/hbcdcagent/workbench?clientId=CDSS-B-ZJJK-001&verifyData={data}");
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(&uri)
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await
+        .expect("resp");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.expect("body");
+    let html = String::from_utf8(bytes.to_vec()).expect("utf8");
+    assert!(html.contains(r#""userId":"U10001""#));
+    assert!(html.contains("预警小张"));
+    assert!(!html.contains(r#""userId":"alice""#));
+    let verify = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/hbcdcagent/sso/auth/verify")
+                .header("content-type", "application/json")
+                .header("cookie", cookie)
+                .body(Body::from(format!(
+                    r#"{{"clientId":"CDSS-B-ZJJK-001","verifyData":"{data}"}}"#
+                )))
+                .expect("req"),
+        )
+        .await
+        .expect("resp");
+    assert_eq!(verify.status(), StatusCode::OK);
+    let body = json_body(verify).await;
+    assert_eq!(body["code"], 0);
+    assert_eq!(body["data"]["user"]["userId"], "U10001");
+    assert_eq!(body["data"]["user"]["nickName"], "预警小张");
+    uc_h.abort();
+    up_h.abort();
+}
+
+#[tokio::test]
 async fn html_proxy_injects_platform_user() {
     let (uc, uc_h) = start_user_center(MockUserCenter::ok()).await;
     let (up, up_h) = start_html_upstream().await;

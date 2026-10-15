@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import App from './App';
 import { alertTicketErrorText, readAlertTicketQuery, stripAlertTicketSearch } from './lib/alertTicket';
+import { applyTicketUser } from './lib/platformUser';
 import { isEmbeddedFrame } from './lib/iframeAsk';
 import { rememberEmbedSession } from './lib/iframeSession';
 import { basePath, gatewayUrl } from './lib/basePath';
@@ -57,12 +58,16 @@ async function boot() {
       },
       body: JSON.stringify({ clientId: ticket.clientId, verifyData: ticket.verifyData }),
     });
-    const body = (await res.json()) as { code?: number; data?: { sessionId?: string } };
+    const body = (await res.json()) as {
+      code?: number;
+      data?: { sessionId?: string; user?: unknown };
+    };
     const code = typeof body.code === 'number' ? body.code : 40003;
     if (code !== 0) {
       showTicketError(code);
       return;
     }
+    applyTicketUser(body.data?.user);
     if (embedded) rememberEmbedSession(body.data?.sessionId);
     const next =
       window.location.pathname + stripAlertTicketSearch(window.location.search) + window.location.hash;
