@@ -258,7 +258,7 @@ export function WorkbenchSidebar({
     <aside
       className={[
         'flex flex-col shrink-0 min-h-0 overflow-hidden bg-pc-base transition-[width] duration-200 ease-linear',
-        collapsed ? 'w-12' : 'w-[min(16.6667vw,17.5rem)] min-w-[13rem]',
+        collapsed ? 'w-12' : 'w-[min(16.6667%,17.5rem)] min-w-[13rem]',
       ].join(' ')}
       aria-label={t('workbench.sidebar_label')}
     >

@@ -62,7 +62,7 @@ export default function WorkbenchPage() {
 
   if (!user) {
     return (
-      <div className="flex h-screen w-screen flex-col overflow-hidden bg-pc-base text-pc-text">
+      <div className="flex h-full w-full flex-col overflow-hidden bg-pc-base text-pc-text">
         <WorkbenchLogin onSelect={enter} />
       </div>
     );
@@ -70,7 +70,7 @@ export default function WorkbenchPage() {
 
   if (!agentAlias) {
     return (
-      <div className="flex h-screen w-screen items-center justify-center overflow-hidden bg-pc-base text-pc-text-muted">
+      <div className="flex h-full w-full items-center justify-center overflow-hidden bg-pc-base text-pc-text-muted">
         <div
           className="h-8 w-8 rounded-full animate-spin border-2"
           style={{ borderColor: 'var(--pc-border)', borderTopColor: 'var(--pc-accent)' }}
@@ -80,7 +80,7 @@ export default function WorkbenchPage() {
   }
 
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden bg-pc-base text-pc-text">
+    <div className="flex h-full w-full flex-col overflow-hidden bg-pc-base text-pc-text">
       <ErrorBoundary>
         <ChatWorkspace
           key={`${user.userId}:${agentAlias}`}

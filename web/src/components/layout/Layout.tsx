@@ -59,13 +59,13 @@ export default function Layout() {
   }, [pathname]);
 
   return (
-    <div className="min-h-screen bg-pc-base text-pc-text">
+    <div className="flex h-full min-h-0 bg-pc-base text-pc-text">
       {/* Fixed slim icon rail (desktop) + drawer (mobile). */}
       <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
       {/* Main area — offset by the fixed 56px rail on desktop, full-width on
           mobile. The rail is always slim, so the offset is constant. */}
-      <div className="flex flex-col flex-1 min-w-0 h-screen md:ml-14 ml-0">
+      <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col md:ml-14 ml-0">
         <Header
           onMenuToggle={() => setSidebarOpen((v) => !v)}
           onOpenPalette={openPalette}

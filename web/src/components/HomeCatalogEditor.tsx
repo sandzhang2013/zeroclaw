@@ -757,7 +757,7 @@ function PlazaSkillPicker({
       <div className="absolute inset-0 bg-pc-base/70 backdrop-blur-sm" />
       <div
         ref={panelRef}
-        className="relative flex max-h-[70vh] w-full max-w-md flex-col rounded-[var(--radius-xl)] border border-pc-border bg-pc-base shadow-[var(--pc-shadow-md)]"
+        className="relative flex max-h-[70%] w-full max-w-md flex-col rounded-[var(--radius-xl)] border border-pc-border bg-pc-base shadow-[var(--pc-shadow-md)]"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="px-6 pt-5 pb-2">

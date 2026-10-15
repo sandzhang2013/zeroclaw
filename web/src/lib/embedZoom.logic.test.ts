@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { browserZoomFactor, embedLayoutLength, embedLayoutWidth, embedZoomStyle, installEmbedCounterZoom } from './embedZoom.ts';
+import { browserZoomFactor, embedZoomStyle, installEmbedCounterZoom, resolveEmbedBaseDpr } from './embedZoom.ts';
 
 test('zoom factor cancels a stable system DPR', () => {
   assert.equal(browserZoomFactor(1.5, 1.5), 1);
@@ -9,19 +9,24 @@ test('zoom factor cancels a stable system DPR', () => {
   assert.equal(browserZoomFactor(0, 1), null);
 });
 
-test('counter zoom restores the size captured at load and fills the viewport', () => {
-  assert.deepEqual(embedZoomStyle(2, 1), { zoom: '0.5', width: '200%', minHeight: '200vh' });
-  assert.deepEqual(embedZoomStyle(1, 1), { zoom: '1', width: '100%', minHeight: '100vh' });
-  assert.equal(embedLayoutLength(2, 1), '200vh');
-  assert.equal(embedLayoutWidth(2, 1), '200vw');
-  assert.equal(embedLayoutLength(1, 1), '');
-  assert.equal(embedLayoutWidth(1.005, 1), '');
+test('base DPR prefers the query, then storage, then 100%', () => {
+  assert.equal(resolveEmbedBaseDpr('', null), 1);
+  assert.equal(resolveEmbedBaseDpr('', '1.5'), 1.5);
+  assert.equal(resolveEmbedBaseDpr('?baseDpr=2', '1.5'), 2);
+  assert.equal(resolveEmbedBaseDpr('?baseDpr=0', '1.5'), 1.5);
+  assert.equal(resolveEmbedBaseDpr('?tab=1', ''), 1);
+});
+
+test('counter zoom only sets zoom and leaves the root at the parent size', () => {
+  assert.deepEqual(embedZoomStyle(2, 1), { zoom: '0.5' });
+  assert.deepEqual(embedZoomStyle(1, 1), { zoom: '1' });
 });
 
 function fakeRoot() {
   const style = {
     zoom: '',
     width: '',
+    height: '',
     minHeight: '',
     setProperty(name: string, value: string) {
       if (name === 'zoom') style.zoom = value;
@@ -58,18 +63,33 @@ test('install is a no-op outside an embed and listens once inside one', () => {
     }),
   };
   installEmbedCounterZoom(frame, root);
-  assert.equal(root.style.zoom, '1');
-  assert.equal(page.dataset.embedZoom, undefined);
+  assert.equal(root.style.zoom, '0.5');
+  assert.equal(root.style.width, '');
+  assert.equal(root.style.height, '');
+  assert.equal(page.dataset.embedZoom, '1');
   assert.equal(listeners.length, 1);
   assert.equal(listeners[0]?.once, true);
   frame.devicePixelRatio = 4;
   listeners[0]?.fn();
-  assert.equal(root.style.zoom, '0.5');
-  assert.equal(root.style.width, '200%');
-  assert.equal(root.style.minHeight, '200vh');
-  assert.equal(page.dataset.embedZoom, '1');
-  assert.equal(page.style.props['--embed-layout-vh'], '200vh');
-  assert.equal(page.style.props['--embed-layout-vw'], '200vw');
+  assert.equal(root.style.zoom, '0.25');
+  assert.equal(root.style.width, '');
+  assert.equal(root.style.height, '');
   assert.equal(listeners.length, 2);
   assert.equal(listeners[1]?.once, true);
+
+  const store = new Map<string, string>();
+  const calibrated = fakeRoot();
+  installEmbedCounterZoom({
+    devicePixelRatio: 3,
+    parent: {},
+    location: { search: '?baseDpr=1.5' },
+    localStorage: {
+      getItem: (key) => store.get(key) ?? null,
+      setItem: (key, value) => { store.set(key, value); },
+    },
+    document: { documentElement: page },
+  }, calibrated);
+  assert.equal(store.get('baseDpr'), '1.5');
+  assert.equal(calibrated.style.zoom, '0.5');
+  assert.equal(calibrated.style.width, '');
 });

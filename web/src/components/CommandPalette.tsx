@@ -320,7 +320,7 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
 
   return (
     <div
-      className="fixed inset-0 z-[200] flex items-start justify-center px-4 pt-[12vh] animate-fade-in"
+      className="fixed inset-0 z-[200] flex items-start justify-center px-4 pt-24 animate-fade-in"
       onKeyDown={onKeyDown}
     >
       {/* Backdrop */}
@@ -366,7 +366,7 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
           ref={listRef}
           role="listbox"
           aria-label={t('nav.cmdk.title')}
-          className="max-h-[min(50vh,360px)] overflow-y-auto p-1.5"
+          className="max-h-[360px] overflow-y-auto p-1.5"
         >
           {results.length === 0 ? (
             <div className="px-3 py-6 text-center text-sm text-pc-text-muted">

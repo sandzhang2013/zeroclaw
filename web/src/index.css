@@ -114,6 +114,8 @@
 
 html {
   background-color: var(--pc-bg-base);
+  width: 100%;
+  height: 100%;
 }
 
 body {
@@ -124,31 +126,21 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   margin: 0;
+  width: 100%;
+  height: 100%;
   overflow-x: hidden;
-  max-width: 100vw;
 }
 
 #root {
-  min-height: 100vh;
+  width: 100%;
+  height: 100%;
 }
 
-/* Counter-zoom lives on #root. Viewport utilities must use the pre-zoom
-   length or the workbench paints in the top of the iframe and leaves a gap. */
+/* Counter-zoom lives on #root. Hide the document scrollbar so it cannot
+   change the centering box while the browser zoom changes. */
+html[data-embed-zoom],
 html[data-embed-zoom] body {
-  max-width: none;
-  overflow-x: visible;
-}
-
-html[data-embed-zoom] .h-screen {
-  height: var(--embed-layout-vh);
-}
-
-html[data-embed-zoom] .min-h-screen {
-  min-height: var(--embed-layout-vh);
-}
-
-html[data-embed-zoom] .w-screen {
-  width: var(--embed-layout-vw);
+  overflow: hidden;
 }
 
 /* Focus ring — solid accent for a strong, legible, WCAG-friendly ring

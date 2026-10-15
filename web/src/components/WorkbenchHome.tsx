@@ -266,7 +266,7 @@ export function WorkbenchHome({
 
   return (
     <div className="flex flex-1 min-h-0 min-w-0 flex-col overflow-auto">
-      <div className="mx-auto w-full max-w-[920px] px-8 pb-10 pt-[18vh]">
+      <div className="mx-auto w-full max-w-[920px] px-8 pb-10 pt-[120px]">
         <div className="mb-6 text-center">
           <h1 className="mb-2 text-[32px] font-semibold leading-snug tracking-tight text-pc-text">
             {t('workbench.home_title')}

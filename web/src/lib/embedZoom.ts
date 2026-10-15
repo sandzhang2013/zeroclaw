@@ -1,6 +1,23 @@
+/** localStorage key. A visit to `?baseDpr=1.5` remembers a non-100% system scale. */
+export const EMBED_BASE_DPR_KEY = 'baseDpr';
+
 /**
- * Browser zoom relative to the DPR captured when the embed loaded.
- * System DPI is in both numbers, so it cancels. 1 means unchanged since load.
+ * System scale, not the browser zoom at first paint.
+ * `devicePixelRatio` is system scale times browser zoom, and the page cannot
+ * split them. Priority: `?baseDpr=` , then localStorage, then 1 (100%).
+ */
+export function resolveEmbedBaseDpr(search: string, stored: string | null | undefined): number {
+  const raw = search.startsWith('?') ? search.slice(1) : search;
+  const params = new URLSearchParams(raw);
+  const fromQuery = Number(params.get('baseDpr'));
+  if (params.has('baseDpr') && Number.isFinite(fromQuery) && fromQuery > 0) return fromQuery;
+  const fromStore = Number(stored);
+  if (stored != null && stored !== '' && Number.isFinite(fromStore) && fromStore > 0) return fromStore;
+  return 1;
+}
+
+/**
+ * Browser zoom relative to the system scale. 1 means the browser is at 100%.
  */
 export function browserZoomFactor(currentDpr: number, baseDpr: number): number | null {
   if (!Number.isFinite(currentDpr) || !Number.isFinite(baseDpr) || currentDpr <= 0 || baseDpr <= 0) {
@@ -9,35 +26,18 @@ export function browserZoomFactor(currentDpr: number, baseDpr: number): number |
   return currentDpr / baseDpr;
 }
 
-/** Counter-scale so an embedded page keeps the size it had when it opened. */
+/**
+ * Counter-scale so text matches a 100% browser. The root stays 100% of the
+ * parent; shrinking it by the zoom factor leaves an empty band, because
+ * `zoom` does not grow the border box back to the viewport.
+ */
 export function embedZoomStyle(
   currentDpr: number,
   baseDpr: number,
-): { zoom: string; width: string; minHeight: string } | null {
+): { zoom: string } | null {
   const z = browserZoomFactor(currentDpr, baseDpr);
   if (z == null) return null;
-  return {
-    zoom: String(1 / z),
-    width: `${100 * z}%`,
-    minHeight: `${100 * z}vh`,
-  };
-}
-
-/**
- * Layout length for one visual viewport after `zoom: 1/z`.
- * `100vh` inside the zoomed tree paints shorter than the iframe, which leaves
- * the empty band under the workbench. Empty string means keep normal viewport units.
- */
-export function embedLayoutLength(currentDpr: number, baseDpr: number): string {
-  const z = browserZoomFactor(currentDpr, baseDpr);
-  if (z == null || Math.abs(z - 1) < 0.01) return '';
-  return `${100 * z}vh`;
-}
-
-export function embedLayoutWidth(currentDpr: number, baseDpr: number): string {
-  const z = browserZoomFactor(currentDpr, baseDpr);
-  if (z == null || Math.abs(z - 1) < 0.01) return '';
-  return `${100 * z}vw`;
+  return { zoom: String(1 / z) };
 }
 
 type ResolutionQuery = {
@@ -52,6 +52,7 @@ type ZoomRoot = {
   style: {
     setProperty: (name: string, value: string) => void;
     width: string;
+    height: string;
     minHeight: string;
   };
 };
@@ -64,10 +65,17 @@ type ZoomPage = {
   };
 };
 
+type ZoomStorage = {
+  getItem: (key: string) => string | null;
+  setItem: (key: string, value: string) => void;
+};
+
 type ZoomWindow = {
   devicePixelRatio: number;
   parent?: unknown;
   opener?: unknown;
+  location?: { search: string };
+  localStorage?: ZoomStorage;
   matchMedia?: (query: string) => ResolutionQuery;
   document?: { documentElement: ZoomPage };
 };
@@ -77,29 +85,39 @@ function isEmbed(win: { parent?: unknown; opener?: unknown }): boolean {
   return win.parent !== win || Boolean(win.opener);
 }
 
+function storedBaseDpr(win: ZoomWindow): string | null {
+  try {
+    return win.localStorage?.getItem(EMBED_BASE_DPR_KEY) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** Cancel browser zoom inside an iframe or popup. Top-level pages are left alone. */
 export function installEmbedCounterZoom(win: ZoomWindow, root: ZoomRoot): void {
   if (!isEmbed(win)) return;
-  const baseDpr = win.devicePixelRatio;
+  const search = win.location?.search ?? '';
+  const baseDpr = resolveEmbedBaseDpr(search, storedBaseDpr(win));
+  const params = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search);
+  const fromQuery = Number(params.get('baseDpr'));
+  if (params.has('baseDpr') && Number.isFinite(fromQuery) && fromQuery > 0) {
+    try {
+      win.localStorage?.setItem(EMBED_BASE_DPR_KEY, String(fromQuery));
+    } catch { /* private mode */ }
+  }
   const apply = () => {
     const style = embedZoomStyle(win.devicePixelRatio, baseDpr);
     if (!style) return;
-    root.style.setProperty('zoom', style.zoom);
-    root.style.width = style.width;
-    root.style.minHeight = style.minHeight;
     const page = win.document?.documentElement;
-    if (!page) return;
-    const height = embedLayoutLength(win.devicePixelRatio, baseDpr);
-    const width = embedLayoutWidth(win.devicePixelRatio, baseDpr);
-    if (!height || !width) {
-      delete page.dataset.embedZoom;
+    if (page) {
+      page.dataset.embedZoom = '1';
       page.style.removeProperty('--embed-layout-vh');
       page.style.removeProperty('--embed-layout-vw');
-      return;
     }
-    page.dataset.embedZoom = '1';
-    page.style.setProperty('--embed-layout-vh', height);
-    page.style.setProperty('--embed-layout-vw', width);
+    root.style.setProperty('zoom', style.zoom);
+    root.style.width = '';
+    root.style.height = '';
+    root.style.minHeight = '';
   };
   const watch = () => {
     const mq = win.matchMedia?.(`(resolution: ${win.devicePixelRatio}dppx)`);
