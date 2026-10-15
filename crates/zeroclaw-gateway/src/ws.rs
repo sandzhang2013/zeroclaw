@@ -581,6 +581,7 @@ async fn handle_socket(
             first = receiver.next() => first,
             _ = tick_websocket_ping(&mut ping_interval) => {
                 if sender.send(Message::Ping(Vec::new().into())).await.is_err() {
+                    log_idle_ws_disconnect(&session_key, "ping_send_failed");
                     return;
                 }
                 continue;
@@ -625,11 +626,23 @@ async fn handle_socket(
             }
             Some(Ok(Message::Ping(payload))) => {
                 if sender.send(Message::Pong(payload)).await.is_err() {
+                    log_idle_ws_disconnect(&session_key, "pong_send_failed");
                     return;
                 }
             }
             Some(Ok(Message::Pong(_))) => {}
-            Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return,
+            Some(Ok(Message::Close(_))) => {
+                log_idle_ws_disconnect(&session_key, "client_close");
+                return;
+            }
+            Some(Err(_)) => {
+                log_idle_ws_disconnect(&session_key, "client_error");
+                return;
+            }
+            None => {
+                log_idle_ws_disconnect(&session_key, "client_closed");
+                return;
+            }
             Some(Ok(_)) => {}
         }
     }
@@ -922,27 +935,43 @@ async fn handle_socket(
     // Subscribe to the shared broadcast channel so cron/heartbeat events
     // are forwarded to this WebSocket client.
     let mut broadcast_rx = state.event_tx.subscribe();
+    // A mid-turn detach already logged. Only the exits below are an idle close.
+    let mut idle_close_reason: Option<&'static str> = None;
 
     loop {
         tokio::select! {
             // ── Keepalive ─────────────────────────────────────────────
             _ = tick_websocket_ping(&mut ping_interval) => {
                 if sender.send(Message::Ping(Vec::new().into())).await.is_err() {
+                    idle_close_reason = Some("ping_send_failed");
                     break;
                 }
             }
 
             // ── Client message ────────────────────────────────────────
             client_msg = receiver.next() => {
-                let Some(msg) = client_msg else { break };
+                let Some(msg) = client_msg else {
+                    idle_close_reason = Some("client_closed");
+                    break;
+                };
                 let msg = match msg {
                     Ok(Message::Text(text)) => text,
                     Ok(Message::Ping(payload)) => {
-                        if sender.send(Message::Pong(payload)).await.is_err() { break; }
+                        if sender.send(Message::Pong(payload)).await.is_err() {
+                            idle_close_reason = Some("pong_send_failed");
+                            break;
+                        }
                         continue;
                     }
                     Ok(Message::Pong(_)) => continue,
-                    Ok(Message::Close(_)) | Err(_) => break,
+                    Ok(Message::Close(_)) => {
+                        idle_close_reason = Some("client_close");
+                        break;
+                    }
+                    Err(_) => {
+                        idle_close_reason = Some("client_error");
+                        break;
+                    }
                     _ => continue,
                 };
 
@@ -1109,7 +1138,10 @@ async fn handle_socket(
             }
 
             approval_event = approval_event_rx.recv() => {
-                let Some(event) = approval_event else { break };
+                let Some(event) = approval_event else {
+                    idle_close_reason = Some("approval_channel_closed");
+                    break;
+                };
                 // Forward the runtime-produced summary without inspecting or
                 // reconstructing it from the raw argument object.
                 let frame = match event {
@@ -1133,6 +1165,9 @@ async fn handle_socket(
                 let _ = sender.send(Message::Text(frame.to_string().into())).await;
             }
         }
+    }
+    if let Some(reason) = idle_close_reason {
+        log_idle_ws_disconnect(&session_key, reason);
     }
 }
 
@@ -1518,6 +1553,19 @@ fn classify_client_frame(frame: Option<Result<Message, axum::Error>>) -> ClientF
         Some(Ok(Message::Close(_))) | Some(Err(_)) | None => ClientFrame::Gone,
         Some(Ok(Message::Pong(_) | Message::Binary(_))) => ClientFrame::Ignore,
     }
+}
+
+fn log_idle_ws_disconnect(session_key: &str, reason: &str) {
+    ::zeroclaw_log::record!(
+        INFO,
+        ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note).with_attrs(
+            ::serde_json::json!({
+                "session_key": session_key,
+                "reason": reason,
+            })
+        ),
+        "WebSocket client disconnected while idle"
+    );
 }
 
 /// The viewer went away mid-turn. Log it and drop every parked approval

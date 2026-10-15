@@ -19,7 +19,8 @@ use hyper_util::client::legacy::Client;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use serde::Serialize;
 use std::sync::Arc;
-use tokio::io::copy_bidirectional;
+use std::time::Instant;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 const MAX_HTML_INJECT_BYTES: usize = 2 * 1024 * 1024;
@@ -412,7 +413,9 @@ async fn splice_upstream_ws(
                 (Ok(client), Ok(upstream)) => {
                     let mut client = TokioIo::new(client);
                     let mut upstream = TokioIo::new(upstream);
-                    let _ = copy_bidirectional(&mut client, &mut upstream).await;
+                    let started = Instant::now();
+                    let end = splice_until_one_side_closes(&mut client, &mut upstream).await;
+                    log_ws_splice_end(started.elapsed(), &end);
                 }
                 (Err(err), _) => {
                     tracing::debug!(error = %err, "client ws upgrade failed");
@@ -424,6 +427,102 @@ async fn splice_upstream_ws(
         });
     }
     Ok(res.map(Body::new).into_response())
+}
+
+enum DirectionEnd {
+    Eof,
+    ReadError(String),
+    WriteError(String),
+}
+
+struct WsSpliceClose {
+    closed_by: &'static str,
+    cause: &'static str,
+    error: Option<String>,
+}
+
+/// `read_peer` is the socket this copy reads. A write error is the other socket.
+fn classify_ws_splice_close(read_peer: &'static str, end: DirectionEnd) -> WsSpliceClose {
+    let write_peer = if read_peer == "browser" {
+        "daemon"
+    } else {
+        "browser"
+    };
+    match end {
+        DirectionEnd::Eof => WsSpliceClose {
+            closed_by: read_peer,
+            cause: "eof",
+            error: None,
+        },
+        DirectionEnd::ReadError(error) => WsSpliceClose {
+            closed_by: read_peer,
+            cause: "read_error",
+            error: Some(error),
+        },
+        DirectionEnd::WriteError(error) => WsSpliceClose {
+            closed_by: write_peer,
+            cause: "write_error",
+            error: Some(error),
+        },
+    }
+}
+
+async fn copy_one_way<R, W>(read: &mut R, write: &mut W) -> DirectionEnd
+where
+    R: AsyncRead + Unpin + ?Sized,
+    W: AsyncWrite + Unpin + ?Sized,
+{
+    let mut buf = [0u8; 16 * 1024];
+    loop {
+        let n = match read.read(&mut buf).await {
+            Ok(0) => return DirectionEnd::Eof,
+            Ok(n) => n,
+            Err(err) => return DirectionEnd::ReadError(err.to_string()),
+        };
+        if let Err(err) = write.write_all(&buf[..n]).await {
+            return DirectionEnd::WriteError(err.to_string());
+        }
+    }
+}
+
+async fn splice_until_one_side_closes<C, U>(client: &mut C, upstream: &mut U) -> WsSpliceClose
+where
+    C: AsyncRead + AsyncWrite + Unpin,
+    U: AsyncRead + AsyncWrite + Unpin,
+{
+    let (mut client_read, mut client_write) = tokio::io::split(client);
+    let (mut upstream_read, mut upstream_write) = tokio::io::split(upstream);
+    let browser_to_daemon = copy_one_way(&mut client_read, &mut upstream_write);
+    let daemon_to_browser = copy_one_way(&mut upstream_read, &mut client_write);
+    tokio::pin!(browser_to_daemon);
+    tokio::pin!(daemon_to_browser);
+    tokio::select! {
+        end = &mut browser_to_daemon => classify_ws_splice_close("browser", end),
+        end = &mut daemon_to_browser => classify_ws_splice_close("daemon", end),
+    }
+}
+
+fn log_ws_splice_end(elapsed: std::time::Duration, end: &WsSpliceClose) {
+    let duration_ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
+    match &end.error {
+        Some(error) => {
+            tracing::info!(
+                duration_ms,
+                closed_by = end.closed_by,
+                cause = end.cause,
+                error = %error,
+                "websocket splice ended"
+            );
+        }
+        None => {
+            tracing::info!(
+                duration_ms,
+                closed_by = end.closed_by,
+                cause = end.cause,
+                "websocket splice ended"
+            );
+        }
+    }
 }
 
 /// 没有会话时，顶层打开的工作台地址上的 `clientId` + `verifyData` 在这里验票。
@@ -728,6 +827,31 @@ fn remove_hop_by_hop(headers: &mut HeaderMap, keep_upgrade: bool) {
 mod tests {
     use super::*;
     use crate::identity::{Identity, ROLE_NORMAL};
+
+    #[test]
+    fn splice_close_names_the_peer_that_stopped_reading() {
+        let end = classify_ws_splice_close("browser", DirectionEnd::Eof);
+        assert_eq!(end.closed_by, "browser");
+        assert_eq!(end.cause, "eof");
+        assert!(end.error.is_none());
+
+        let end = classify_ws_splice_close("daemon", DirectionEnd::ReadError("reset".into()));
+        assert_eq!(end.closed_by, "daemon");
+        assert_eq!(end.cause, "read_error");
+        assert_eq!(end.error.as_deref(), Some("reset"));
+    }
+
+    #[test]
+    fn splice_write_error_names_the_peer_being_written() {
+        let end =
+            classify_ws_splice_close("browser", DirectionEnd::WriteError("broken pipe".into()));
+        assert_eq!(end.closed_by, "daemon");
+        assert_eq!(end.cause, "write_error");
+
+        let end = classify_ws_splice_close("daemon", DirectionEnd::WriteError("reset".into()));
+        assert_eq!(end.closed_by, "browser");
+        assert_eq!(end.cause, "write_error");
+    }
 
     #[test]
     fn mcp_tools_prefix_strips_to_the_loopback_path() {
