@@ -1027,15 +1027,7 @@ test('abnormal socket close shows reconnect copy instead of a config error', asy
   await unmount(mounted.renderer);
 });
 
-function assistantTranscript(sessionId: string, content: string): SessionMessagesResponse {
-  return {
-    session_id: sessionId,
-    session_persistence: true,
-    messages: [{ role: 'assistant', content, created_at: null }],
-  };
-}
-
-test('a dropped turn leaves the partial text and stops saying it is running', async () => {
+test('a dropped turn stays on the socket stream instead of polling messages', async () => {
   const { t } = await import('../lib/i18n.ts');
   const runtime = new FakeSessionRuntime();
   runtime.queueMessages('A', () => Promise.resolve(messagesResponse('A', true)));
@@ -1047,55 +1039,12 @@ test('a dropped turn leaves the partial text and stops saying it is running', as
   assert.equal(mounted.context().typing, true);
 
   await act(async () => { runtime.sockets[0]!.emitClose(1006); });
-  assert.equal(mounted.context().typing, false);
-  assert.equal(mounted.context().streamingContent, '');
+  assert.equal(mounted.context().typing, true);
+  assert.equal(mounted.context().streamingContent, '先写到这里');
   assert.equal(mounted.context().error, t('agent.connection_error'));
   assert.equal(
     mounted.context().messages.some((message) => message.content === '先写到这里'),
-    true,
+    false,
   );
-  await unmount(mounted.renderer);
-});
-
-test('reconnect fills in the answer once the server has stored it', async () => {
-  const runtime = new FakeSessionRuntime();
-  runtime.queueMessages('A', () => Promise.resolve(messagesResponse('A', true)));
-  const mounted = await mountChat(runtime);
-  await openSocket(runtime, 0);
-  await settle();
-  await act(async () => {
-    runtime.sockets[0]!.emitMessage({ type: 'chunk', content: '先写到这里' });
-  });
-  await act(async () => { runtime.sockets[0]!.emitClose(1006); });
-  runtime.queueMessages('A', () => Promise.resolve(assistantTranscript('A', '完整回答')));
-
-  await openSocket(runtime, 0);
-  await settle();
-  const contents = mounted.context().messages.map((message) => message.content);
-  assert.equal(contents.includes('完整回答'), true);
-  assert.equal(contents.includes('先写到这里'), false);
-  assert.equal(mounted.context().typing, false);
-  await unmount(mounted.renderer);
-});
-
-test('reconnect says the turn is still running when the answer is not stored yet', async () => {
-  const { t } = await import('../lib/i18n.ts');
-  const runtime = new FakeSessionRuntime();
-  runtime.queueMessages('A', () => Promise.resolve(messagesResponse('A', true)));
-  const mounted = await mountChat(runtime);
-  await openSocket(runtime, 0);
-  await settle();
-  await act(async () => {
-    runtime.sockets[0]!.emitMessage({ type: 'chunk', content: '先写到这里' });
-  });
-  await act(async () => { runtime.sockets[0]!.emitClose(1006); });
-  runtime.queueMessages('A', () => Promise.resolve(messagesResponse('A', true, ['新问题'])));
-
-  await openSocket(runtime, 0);
-  await settle();
-  const contents = mounted.context().messages.map((message) => message.content);
-  assert.equal(contents.includes('先写到这里'), true);
-  assert.equal(contents.includes(t('agent.turn_continues')), true);
-  assert.equal(mounted.context().typing, false);
   await unmount(mounted.renderer);
 });

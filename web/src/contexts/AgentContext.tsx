@@ -39,11 +39,6 @@ import {
 } from '@/contexts/turnStream.logic';
 import { buildHistoryTrimmedNotice } from '@/contexts/historyTrimNotices.logic';
 import {
-  DETACHED_TURN_POLL_BUDGET_MS,
-  DETACHED_TURN_POLL_MS,
-  recoveredAssistant,
-} from '@/contexts/detachedTurn.logic';
-import {
   EMPTY_CONTEXT_LIMITS,
   browserMeterStorage,
   contextLimitsFromDoneFrame,
@@ -343,160 +338,10 @@ export function AgentProvider({
   const sessionPersistenceRef = useRef(sessionPersistence);
   const typingRef = useRef(typing);
   const sessionRuntimeRef = useRef(sessionRuntime);
-  const messagesRef = useRef(messages);
-  const streamingContentRef = useRef(streamingContent);
-  const streamingThinkingRef = useRef(streamingThinking);
   activeSessionIdRef.current = sessionId;
   sessionPersistenceRef.current = sessionPersistence;
   typingRef.current = typing;
   sessionRuntimeRef.current = sessionRuntime;
-  messagesRef.current = messages;
-  streamingContentRef.current = streamingContent;
-  streamingThinkingRef.current = streamingThinking;
-
-  // The gateway keeps a dropped turn running but does not replay it onto the
-  // replacement socket. Remember enough to leave "running" immediately and
-  // fill in the stored answer once it lands.
-  const detachedTurnRef = useRef<{
-    sessionId: string;
-    provisionalId: string | null;
-    knownAssistantContents: string[];
-    noticeId: string | null;
-    startedAt: number;
-  } | null>(null);
-  const detachGenerationRef = useRef(0);
-  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  function stopDetachedPoll() {
-    detachGenerationRef.current += 1;
-    if (pollTimerRef.current) {
-      clearTimeout(pollTimerRef.current);
-      pollTimerRef.current = null;
-    }
-  }
-
-  function cancelDetachedTurn() {
-    const noticeId = detachedTurnRef.current?.noticeId ?? null;
-    detachedTurnRef.current = null;
-    stopDetachedPoll();
-    if (noticeId) {
-      setMessages((prev) => prev.filter((message) => message.id !== noticeId));
-    }
-  }
-
-  async function pollDetachedTurn() {
-    const job = detachedTurnRef.current;
-    if (!job) return;
-    const generation = detachGenerationRef.current;
-    if (Date.now() - job.startedAt >= DETACHED_TURN_POLL_BUDGET_MS) {
-      detachedTurnRef.current = null;
-      return;
-    }
-    try {
-      const res = await sessionRuntimeRef.current.getMessages(job.sessionId);
-      if (detachGenerationRef.current !== generation || detachedTurnRef.current !== job) return;
-      if (job.sessionId !== activeSessionIdRef.current) return;
-      const answer = recoveredAssistant(job.knownAssistantContents, res.messages ?? []);
-      if (answer) {
-        const { noticeId, provisionalId } = job;
-        detachedTurnRef.current = null;
-        localMessageMutationVersionRef.current += 1;
-        setMessages((prev) => {
-          const withoutNotice = noticeId
-            ? prev.filter((message) => message.id !== noticeId)
-            : prev;
-          if (provisionalId && withoutNotice.some((message) => message.id === provisionalId)) {
-            return withoutNotice.map((message) => (
-              message.id === provisionalId
-                ? { ...message, content: answer, thinking: undefined, markdown: true }
-                : message
-            ));
-          }
-          return [
-            ...withoutNotice,
-            {
-              id: generateUUID(),
-              role: 'agent' as const,
-              content: answer,
-              markdown: true,
-              timestamp: new Date(),
-            },
-          ];
-        });
-        return;
-      }
-      if (!job.noticeId) {
-        const noticeId = generateUUID();
-        job.noticeId = noticeId;
-        localMessageMutationVersionRef.current += 1;
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: noticeId,
-            role: 'agent',
-            content: t('agent.turn_continues'),
-            timestamp: new Date(),
-            ephemeral: true,
-            notice: true,
-          },
-        ]);
-      }
-    } catch {
-      if (detachGenerationRef.current !== generation) return;
-    }
-    if (detachGenerationRef.current !== generation || detachedTurnRef.current !== job) return;
-    pollTimerRef.current = setTimeout(() => {
-      void pollDetachedTurn();
-    }, DETACHED_TURN_POLL_MS);
-  }
-
-  function holdDetachedTurn() {
-    const knownAssistantContents = messagesRef.current
-      .filter((message) => message.role === 'agent' && !message.ephemeral && !message.notice)
-      .map((message) => message.content.trim())
-      .filter((content) => content.length > 0);
-    const body = streamingContentRef.current.trim();
-    const thinking = streamingThinkingRef.current.trim();
-    const visible = body || thinking;
-    let provisionalId: string | null = null;
-    if (visible) {
-      provisionalId = generateUUID();
-      localMessageMutationVersionRef.current += 1;
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: provisionalId!,
-          role: 'agent',
-          content: visible,
-          ...(body && thinking ? { thinking } : {}),
-          markdown: true,
-          timestamp: new Date(),
-        },
-      ]);
-    }
-    detachedTurnRef.current = {
-      sessionId: activeSessionIdRef.current,
-      provisionalId,
-      knownAssistantContents,
-      noticeId: null,
-      startedAt: Date.now(),
-    };
-    foldTurnStream({ type: 'reset' });
-    setStreamingContent('');
-    setStreamingThinking('');
-    streamingContentRef.current = '';
-    streamingThinkingRef.current = '';
-    setTyping(false);
-    typingRef.current = false;
-    setPendingApproval(null);
-    stopDetachedPoll();
-  }
-
-  function resumeDetachedTurn() {
-    if (detachedTurnRef.current?.sessionId !== activeSessionIdRef.current) return;
-    stopDetachedPoll();
-    void pollDetachedTurn();
-  }
 
   // Prime the model-provider catalog once so error formatting can resolve
   // display names from the backend registry rather than a local shadow list.
@@ -933,7 +778,6 @@ export function AgentProvider({
       }
       setConnected(true);
       setError(null);
-      resumeDetachedTurn();
 
       // If we just reconnected after a committed model switch, apply the
       // pending model now. A session socket can open while the config write is
@@ -990,14 +834,6 @@ export function AgentProvider({
         }
         setModelLoading(false);
         return;
-      }
-
-      // The replacement socket does not receive this turn's remaining frames,
-      // so "running" would otherwise stay on until a reload.
-      if (typingRef.current) {
-        holdDetachedTurn();
-      } else if (detachedTurnRef.current) {
-        stopDetachedPoll();
       }
 
       if (isNormalWsClose(ev.code)) return;
@@ -1062,7 +898,6 @@ export function AgentProvider({
         clearTimeout(reconnectGiveUpRef.current);
         reconnectGiveUpRef.current = null;
       }
-      stopDetachedPoll();
       ws.disconnect();
       // switchModel and clearAllMessages replace the socket this effect
       // created. Before sessions were switchable the effect only re-ran on an
@@ -1171,7 +1006,6 @@ export function AgentProvider({
 
   const sendMessage = useCallback((content: string, autonomy?: 'readonly' | 'supervised' | 'full') => {
     if (!wsRef.current?.connected) return;
-    cancelDetachedTurn();
     try {
       wsRef.current.sendMessage(content, autonomy);
       setTyping(true);
