@@ -39,6 +39,12 @@ import {
 } from '@/contexts/turnStream.logic';
 import { buildHistoryTrimmedNotice } from '@/contexts/historyTrimNotices.logic';
 import {
+  freezeThinkingClock,
+  idleThinkingClock,
+  startThinkingClock,
+  type ThinkingClock,
+} from '@/lib/thinkingScroll';
+import {
   EMPTY_CONTEXT_LIMITS,
   browserMeterStorage,
   contextLimitsFromDoneFrame,
@@ -49,6 +55,7 @@ import {
 import {
   loadChatHistory,
   mapServerMessagesToPersisted,
+  mergePersistedThinking,
   persistedToUiMessages,
   removeChatHistory,
   saveChatHistory,
@@ -60,6 +67,8 @@ export interface ChatMessage {
   role: 'user' | 'agent';
   content: string;
   thinking?: string;
+  /** Whole seconds the thinking stream ran before the answer started. */
+  thinkingSeconds?: number;
   markdown?: boolean;
   toolCall?: ToolCallInfo;
   timestamp: Date;
@@ -90,6 +99,10 @@ export interface AgentContextValue {
   typing: boolean;
   streamingContent: string;
   streamingThinking: string;
+  /** First thinking frame of the live turn. The transcript counts up from here. */
+  streamingThinkingStartedAt: number | null;
+  /** Frozen once the answer has visible text, or when the turn ends. */
+  streamingThinkingSeconds?: number;
   currentModel: string | null;
   availableModels: string[];
   /** Configured model id keyed by provider ref (`deepseek.default` → `deepseek-v4-flash`). */
@@ -282,6 +295,14 @@ export function AgentProvider({
   const [typing, setTyping] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
   const [streamingThinking, setStreamingThinking] = useState('');
+  const thinkingClockRef = useRef<ThinkingClock>(idleThinkingClock);
+  const [thinkingClock, setThinkingClock] = useState<ThinkingClock>(idleThinkingClock);
+  const publishThinkingClock = useCallback((next: ThinkingClock) => {
+    thinkingClockRef.current = next;
+    setThinkingClock((prev) => (
+      prev.startedAt === next.startedAt && prev.seconds === next.seconds ? prev : next
+    ));
+  }, []);
   const [currentModel, setCurrentModel] = useState<string | null>(null);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [modelLabels, setModelLabels] = useState<Record<string, string>>({});
@@ -373,7 +394,10 @@ export function AgentProvider({
         setSessionPersistence(res.session_persistence);
         if (res.session_persistence) {
           if (localMessageMutationVersionRef.current === hydrationStartedAtMutationVersion) {
-            setMessages(persistedToUiMessages(mapServerMessagesToPersisted(res.messages)));
+            const fromServer = mapServerMessagesToPersisted(res.messages);
+            setMessages(persistedToUiMessages(
+              mergePersistedThinking(fromServer, loadChatHistory(sid)),
+            ));
           }
         } else if (!res.session_persistence) {
           setMessages((prev) => {
@@ -451,6 +475,7 @@ export function AgentProvider({
         setTyping(true);
         const { state } = foldTurnStream({ type: 'thinking', content: msg.content });
         setStreamingThinking(state.pendingThinking);
+        publishThinkingClock(startThinkingClock(thinkingClockRef.current, Date.now()));
         break;
       }
 
@@ -458,12 +483,17 @@ export function AgentProvider({
         setTyping(true);
         const { state } = foldTurnStream({ type: 'chunk', content: msg.content });
         setStreamingContent(state.pendingContent);
+        if (state.pendingContent.trim()) {
+          publishThinkingClock(freezeThinkingClock(thinkingClockRef.current, Date.now()));
+        }
         break;
       }
 
       case 'chunk_reset':
         // Server signals that the authoritative done message follows.
-        // Snapshot thinking before clearing display state.
+        // Snapshot thinking before clearing display state. The answer is about
+        // to arrive as one frame, so the thinking clock stops here.
+        publishThinkingClock(freezeThinkingClock(thinkingClockRef.current, Date.now()));
         foldTurnStream({ type: 'chunk_reset' });
         setStreamingContent('');
         setStreamingThinking('');
@@ -476,6 +506,8 @@ export function AgentProvider({
           full_response: msg.full_response,
           content: msg.content,
         });
+        const thinkingClock = freezeThinkingClock(thinkingClockRef.current, Date.now());
+        publishThinkingClock(idleThinkingClock);
         if (outcome?.kind === 'commit') {
           // `commit` includes reasoning-only turns: empty content but present
           // thinking, so the turn renders instead of vanishing silently.
@@ -487,6 +519,9 @@ export function AgentProvider({
               role: 'agent',
               content: outcome.content,
               thinking: outcome.thinking,
+              ...(outcome.thinking && thinkingClock.seconds != null
+                ? { thinkingSeconds: thinkingClock.seconds }
+                : {}),
               markdown: true,
               timestamp: new Date(),
             },
@@ -717,6 +752,7 @@ export function AgentProvider({
         // turn. Clear so the banner does not linger across the abort.
         // The stop button already kept the partial transcript.
         foldTurnStream({ type: 'aborted' });
+        publishThinkingClock(idleThinkingClock);
         setStreamingContent('');
         setStreamingThinking('');
         setTyping(false);
@@ -735,6 +771,7 @@ export function AgentProvider({
           setError(t('agent.session_forbidden'));
           setTyping(false);
           foldTurnStream({ type: 'error' });
+          publishThinkingClock(idleThinkingClock);
           setStreamingContent('');
           setStreamingThinking('');
           setPendingApproval(null);
@@ -759,12 +796,13 @@ export function AgentProvider({
         }
         setTyping(false);
         foldTurnStream({ type: 'error' });
+        publishThinkingClock(idleThinkingClock);
         setStreamingContent('');
         setStreamingThinking('');
         setPendingApproval(null);
         break;
     }
-  }, [agentAlias, foldTurnStream, userId]);
+  }, [agentAlias, foldTurnStream, publishThinkingClock, userId]);
 
   // Wire up a WebSocketClient instance with version-guarded callbacks.
   const attachSocketCallbacks = useCallback((ws: SessionSocket) => {
@@ -1010,6 +1048,7 @@ export function AgentProvider({
       wsRef.current.sendMessage(content, autonomy);
       setTyping(true);
       foldTurnStream({ type: 'turn_start' });
+      publishThinkingClock(idleThinkingClock);
       localMessageMutationVersionRef.current += 1;
       setMessages((prev) => [
         ...prev,
@@ -1024,7 +1063,7 @@ export function AgentProvider({
     } catch {
       setError(t('agent.send_error'));
     }
-  }, [foldTurnStream]);
+  }, [foldTurnStream, publishThinkingClock]);
 
   const switchModel = useCallback(async (model: string) => {
     if (modelLoading) return; // debounce
@@ -1093,6 +1132,7 @@ export function AgentProvider({
 
       // Abort any in-flight streaming before rebuilding the connection.
       foldTurnStream({ type: 'reset' });
+      publishThinkingClock(idleThinkingClock);
       setStreamingContent('');
       setStreamingThinking('');
       setTyping(false);
@@ -1149,7 +1189,7 @@ export function AgentProvider({
       setModelLoading(false);
       setError(err instanceof Error ? err.message : t('agent.failed_switch_model'));
     }
-  }, [attachSocketCallbacks, modelLoading, typing, agentAlias, foldTurnStream]);
+  }, [attachSocketCallbacks, modelLoading, typing, agentAlias, foldTurnStream, publishThinkingClock]);
 
   const deleteMessage = useCallback((id: string) => {
     localMessageMutationVersionRef.current += 1;
@@ -1166,6 +1206,7 @@ export function AgentProvider({
     localMessageMutationVersionRef.current += 1;
     setMessages([]);
     foldTurnStream({ type: 'reset' });
+    publishThinkingClock(idleThinkingClock);
     setStreamingContent('');
     setStreamingThinking('');
     setTyping(false);
@@ -1174,7 +1215,7 @@ export function AgentProvider({
     // them would show the outgoing conversation's token usage against an empty
     // one until the next `done` frame refreshes them.
     setContextInputTokens(null);
-  }, [foldTurnStream]);
+  }, [foldTurnStream, publishThinkingClock]);
 
   const clearAllMessages = useCallback(() => {
     resetTranscriptState();
@@ -1370,6 +1411,8 @@ export function AgentProvider({
     typing,
     streamingContent,
     streamingThinking,
+    streamingThinkingStartedAt: thinkingClock.startedAt,
+    streamingThinkingSeconds: thinkingClock.seconds,
     currentModel,
     availableModels,
     modelLabels,
@@ -1395,6 +1438,8 @@ export function AgentProvider({
       setPendingApproval(null);
       const note = t('agent.interrupted');
       const thinking = streamingThinking.trim();
+      const thinkingClock = freezeThinkingClock(thinkingClockRef.current, Date.now());
+      publishThinkingClock(idleThinkingClock);
       const content = interruptedContent(streamingContent, note);
       localMessageMutationVersionRef.current += 1;
       setMessages((prev) => [
@@ -1403,7 +1448,7 @@ export function AgentProvider({
           id: generateUUID(),
           role: 'agent',
           content,
-          ...(thinking ? { thinking } : {}),
+          ...(thinking ? { thinking, ...(thinkingClock.seconds != null ? { thinkingSeconds: thinkingClock.seconds } : {}) } : {}),
           markdown: true,
           timestamp: new Date(),
         },

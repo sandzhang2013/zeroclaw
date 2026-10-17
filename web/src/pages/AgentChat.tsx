@@ -226,6 +226,8 @@ export function AgentChatInner({
     typing,
     streamingContent,
     streamingThinking,
+    streamingThinkingStartedAt,
+    streamingThinkingSeconds,
     currentModel,
     availableModels,
     modelLabels,
@@ -1058,7 +1060,12 @@ export function AgentChatInner({
                   onLike={likeTurn}
                   onDislike={setDislikeKey}
                   streaming={streamingHere
-                    ? { content: streamingContent, thinking: streamingThinking }
+                    ? {
+                        content: streamingContent,
+                        thinking: streamingThinking,
+                        startedAt: streamingThinkingStartedAt ?? undefined,
+                        seconds: streamingThinkingSeconds,
+                      }
                     : null}
                 />
                 );
@@ -1073,6 +1080,8 @@ export function AgentChatInner({
                           text={streamingThinking}
                           live
                           open={thinkingPanelOpen(streamingContent)}
+                          startedAt={streamingThinkingStartedAt ?? undefined}
+                          seconds={streamingThinkingSeconds}
                         />
                       )}
                       {streamingContent && <p className="text-sm whitespace-pre-wrap break-words leading-relaxed">{streamingContent}</p>}
@@ -1397,7 +1406,7 @@ interface MessageItemProps {
   feedbackVerdict?: TurnVerdict;
   onLike?: (key: string, verdict?: TurnVerdict) => void;
   onDislike?: (key: string) => void;
-  streaming?: { content: string; thinking: string } | null;
+  streaming?: { content: string; thinking: string; startedAt?: number; seconds?: number } | null;
 }
 
 function ChatMarkdown({ content, compact }: { content: string; compact: boolean }) {
@@ -1543,7 +1552,7 @@ const MessageItem = memo(function MessageItem({
             {rows.map((row) => (
               <div key={row.id}>
                 {row.thinking && (
-                  <ThinkingTranscript text={row.thinking} />
+                  <ThinkingTranscript text={row.thinking} seconds={row.thinkingSeconds} />
                 )}
                 <MessageBody
                   msg={row}
@@ -1560,6 +1569,8 @@ const MessageItem = memo(function MessageItem({
                     text={streaming.thinking}
                     live
                     open={thinkingPanelOpen(streaming.content)}
+                    startedAt={streaming.startedAt}
+                    seconds={streaming.seconds}
                   />
                 )}
                 {streaming.content && (

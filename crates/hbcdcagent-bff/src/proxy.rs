@@ -126,9 +126,10 @@ async fn proxy_http(state: Arc<AppState>, mut req: Request) -> Result<Response, 
             forward_http(&state, req, None).await
         }
         None => {
-            // A cross-site iframe cannot keep the SameSite cookie. Leave the
-            // ticket on the document so the page can verify and hold sessionId.
-            if is_embed_ticket_document(&req) || is_anonymous_asset(req.uri().path()) {
+            // Leave clientId and verifyData on the document. The page verifies
+            // and then removes them. A redirect here drops those parameters
+            // before that, and a cross-site iframe cannot keep the cookie.
+            if is_ticket_document(&req) || is_anonymous_asset(req.uri().path()) {
                 return forward_http(&state, req, None).await;
             }
             if let Some(resp) = alert_ticket_link(&state, &req) {
@@ -525,8 +526,7 @@ fn log_ws_splice_end(elapsed: std::time::Duration, end: &WsSpliceClose) {
     }
 }
 
-/// 没有会话时，顶层打开的工作台地址上的 `clientId` + `verifyData` 在这里验票。
-/// 通过后写会话并 307 到去掉票据参数的同一路径。内嵌页面不走这里。
+/// 工作台页面不走这里，票据要留给页面自己验。只有需要登录的地址才会在这里验票后跳转。
 fn alert_ticket_link(state: &AppState, req: &Request) -> Option<Response> {
     if req.method() != axum::http::Method::GET || state.cfg.ticket_sso.is_none() {
         return None;
@@ -565,7 +565,7 @@ fn alert_ticket_link(state: &AppState, req: &Request) -> Option<Response> {
     };
     tracing::info!(user_id = %identity.user_id, "alert ticket session created from workbench link");
     let sid = state.sessions.insert(identity, state.cfg.session_ttl);
-    let mut response = Redirect::temporary(&location_without_ticket(req.uri())).into_response();
+    let mut response = ticket_landing_page(&location_without_ticket(req.uri()));
     append_set_cookie(
         &mut response,
         &cookie_header(&sid, state.cfg.session_ttl, state.cfg.cookie_secure),
@@ -573,16 +573,62 @@ fn alert_ticket_link(state: &AppState, req: &Request) -> Option<Response> {
     Some(response)
 }
 
-/// Iframe navigations carry `Sec-Fetch-Dest: iframe`. Top-level opens stay
-/// `document`, so they still get the cookie redirect.
-fn is_embed_ticket_document(req: &Request) -> bool {
-    if req.method() != axum::http::Method::GET || ticket_query(req.uri()).is_none() {
+/// Document on this host, then a same-origin navigation. The session cookie
+/// is committed before the next request, so SameSite=Lax is sent.
+fn ticket_landing_page(next: &str) -> Response {
+    let html = format!(
+        "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta http-equiv=\"refresh\" content=\"0;url={}\"><title>正在进入工作台</title></head><body><script>location.replace({})</script></body></html>",
+        html_attr(next),
+        js_string(next),
+    );
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        html,
+    )
+        .into_response()
+}
+
+fn html_attr(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '"' => out.push_str("&quot;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+fn js_string(value: &str) -> String {
+    let mut out = String::from("\"");
+    for ch in value.chars() {
+        match ch {
+            '\\' | '"' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            c if c.is_control() => out.push_str(&format!("\\u{:04x}", u32::from(c))),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Workbench HTML that still has `clientId` and `verifyData`. Do not spend
+/// the ticket or redirect: the next request would lose the parameters.
+fn is_ticket_document(req: &Request) -> bool {
+    if req.method() != axum::http::Method::GET || requires_login(req.uri().path()) {
         return false;
     }
-    req.headers()
-        .get("sec-fetch-dest")
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.eq_ignore_ascii_case("iframe"))
+    ticket_query(req.uri()).is_some()
 }
 
 /// Script and style requests from the framed page have no session yet.

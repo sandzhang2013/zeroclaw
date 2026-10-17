@@ -590,10 +590,9 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn workbench_ticket_link_sets_session_and_strips_query() {
+    async fn workbench_ticket_link_keeps_the_query_for_the_page() {
         use crate::config::Config;
         use crate::router;
-        use crate::session::{COOKIE_NAME, cookie_value};
         use axum::body::Body;
         use axum::http::{Request, StatusCode};
         use tower::ServiceExt;
@@ -635,32 +634,10 @@ pub(crate) mod tests {
             )
             .await
             .expect("resp");
-        assert_eq!(resp.status(), StatusCode::TEMPORARY_REDIRECT);
-        let loc = resp
-            .headers()
-            .get("location")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        assert_eq!(loc, "/hbcdcagent/workbench/deepseek?tab=1");
-        let set_cookie = resp
-            .headers()
-            .get("set-cookie")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        let sid = cookie_value(Some(set_cookie), COOKIE_NAME).expect("sid");
-        let next = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/hbcdcagent/workbench/deepseek?tab=1")
-                    .header("cookie", format!("{COOKIE_NAME}={sid}"))
-                    .body(Body::empty())
-                    .expect("req"),
-            )
-            .await
-            .expect("resp");
-        assert_eq!(next.status(), StatusCode::BAD_GATEWAY);
-        let replay = app
+        // Upstream is closed. A redirect or a spent ticket would be a different status.
+        assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+        assert!(resp.headers().get("set-cookie").is_none());
+        let again = app
             .oneshot(
                 Request::builder()
                     .uri(&uri)
@@ -669,12 +646,7 @@ pub(crate) mod tests {
             )
             .await
             .expect("resp");
-        assert_eq!(replay.status(), StatusCode::BAD_REQUEST);
-        let bytes = axum::body::to_bytes(replay.into_body(), usize::MAX)
-            .await
-            .expect("body");
-        let html = String::from_utf8(bytes.to_vec()).expect("utf8");
-        assert!(html.contains("链接已失效"));
+        assert_eq!(again.status(), StatusCode::BAD_GATEWAY);
     }
 
     #[tokio::test]

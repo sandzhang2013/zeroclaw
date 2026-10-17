@@ -35,6 +35,13 @@ test('parseSkillMarkdown requires YAML name and description', () => {
     parseSkillMarkdown('---\nname: flu-weekly\n---\n'),
     { ok: false, error: 'description' },
   );
+  const padded = parseSkillMarkdown('---   \nname: flu-weekly\ndescription: 说明\n---\t\n');
+  assert.equal(padded.ok, true);
+  if (padded.ok) assert.equal(padded.skill.title, 'flu-weekly');
+  assert.deepEqual(parseSkillMarkdown('---\nname: flu-weekly\ndescription: 说明\n----\n'), {
+    ok: false,
+    error: 'frontmatter',
+  });
 });
 
 test('parseSkillMarkdown reads a block-scalar description', () => {

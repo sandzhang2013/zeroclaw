@@ -5,6 +5,7 @@ import {
   clearChatHistory,
   loadChatHistory,
   mapServerMessagesToPersisted,
+  mergePersistedThinking,
   persistedToUiMessages,
   saveChatHistory,
   uiMessagesToPersisted,
@@ -96,10 +97,36 @@ test('mapServerMessagesToPersisted skips system rows and ui round-trip drops eph
       local: true,
       timestamp: new Date('2026-01-01T00:00:00Z'),
     },
+    {
+      id: '4',
+      role: 'agent',
+      content: 'answer',
+      thinking: 'reason',
+      thinkingSeconds: 12,
+      timestamp: new Date('2026-01-01T00:00:01Z'),
+    },
   ]);
-  assert.equal(persisted.length, 2);
+  assert.equal(persisted.length, 3);
   assert.equal(persisted.find((m) => m.id === '2'), undefined);
   assert.equal(persisted.find((m) => m.id === '3')?.local, true);
+  assert.equal(persisted.find((m) => m.id === '4')?.thinkingSeconds, 12);
+  assert.equal(persistedToUiMessages(persisted).find((m) => m.id === '4')?.thinkingSeconds, 12);
+});
+
+test('mergePersistedThinking restores thinking onto the matching assistant row', () => {
+  const merged = mergePersistedThinking(
+    [
+      { id: 'u', role: 'user', content: '算一下', timestamp: '2026-01-01T00:00:00.000Z' },
+      { id: 'a', role: 'agent', content: '391', markdown: true, timestamp: '2026-01-01T00:00:01.000Z' },
+    ],
+    [
+      { id: 'local-a', role: 'agent', content: '391', thinking: '17×20', thinkingSeconds: 4, timestamp: '2026-01-01T00:00:01.000Z' },
+      { id: 'other', role: 'agent', content: '别的', thinking: '不该配上', timestamp: '2026-01-01T00:00:02.000Z' },
+    ],
+  );
+  assert.equal(merged[1]?.thinking, '17×20');
+  assert.equal(merged[1]?.thinkingSeconds, 4);
+  assert.equal(merged[0]?.thinking, undefined);
 });
 
 test('clearChatHistory removes the persisted transcript', () => {

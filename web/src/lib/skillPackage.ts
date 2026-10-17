@@ -40,9 +40,17 @@ export function skillImportErrorKey(error: SkillPackageError): string {
   return `workbench.skill_import_${error.replace('-', '_')}`;
 }
 
+/** A line that is only `---` stays a fence when it has trailing spaces. */
+function normalizeFenceLines(content: string): string {
+  return content
+    .split('\n')
+    .map((line) => (line.trim() === '---' ? '---' : line))
+    .join('\n');
+}
+
 /** Read YAML `name` and `description`. Both must be non-empty. */
 export function parseSkillMarkdown(content: string): SkillPackageResult {
-  const normalized = content.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n');
+  const normalized = normalizeFenceLines(content.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n'));
   if (!normalized.startsWith('---\n')) return { ok: false, error: 'frontmatter' };
   const rest = normalized.slice(4);
   const splitAt = rest.indexOf('\n---\n');

@@ -58,10 +58,12 @@ always_ask = []
 
 # max_context_tokens：主动裁掉更早轮次的预算。不写时固定 32000，不会跟着模型段的
 # context_window 走。max_tool_iterations：一轮里模型提出工具调用并执行的次数上限。
-# 不写或写 0 时是 10。
+# 不写或写 0 时是 10。max_actions_per_hour：每个会话每小时的工具动作上限。
+# 不写时是 20，模型会当成速率限制停下来；写 0 会禁掉全部动作。
 [runtime_profiles.default]
 max_context_tokens = 128000
 max_tool_iterations = 40
+max_actions_per_hour = 100
 
 # 每轮只注入技能名称、说明和目录。正文在点选后由 read_skill 读取。
 [skills]

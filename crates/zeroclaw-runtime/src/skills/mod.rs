@@ -1578,17 +1578,7 @@ fn parse_simple_frontmatter(s: &str) -> SkillMarkdownMeta {
 }
 
 fn split_skill_frontmatter(content: &str) -> Option<(String, String)> {
-    let normalized = content.replace("\r\n", "\n");
-    let rest = normalized.strip_prefix("---\n")?;
-    if let Some(idx) = rest.find("\n---\n") {
-        let frontmatter = rest[..idx].to_string();
-        let body = rest[idx + 5..].to_string();
-        return Some((frontmatter, body));
-    }
-    if let Some(frontmatter) = rest.strip_suffix("\n---") {
-        return Some((frontmatter.to_string(), String::new()));
-    }
-    None
+    document::split_frontmatter(content)
 }
 
 fn extract_description(content: &str) -> String {

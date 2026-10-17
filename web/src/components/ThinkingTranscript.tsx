@@ -1,16 +1,34 @@
-import { useLayoutEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useState, useRef } from 'react';
 import { t } from '@/lib/i18n';
-import { shouldFollowThinkingScroll } from '@/lib/thinkingScroll';
+import { elapsedThinkingSeconds, shouldFollowThinkingScroll } from '@/lib/thinkingScroll';
 
-function LiveThinkingMark() {
+function useThinkingSeconds(startedAt: number | undefined, frozen: number | undefined): number | undefined {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (frozen != null || startedAt == null) return;
+    const id = window.setInterval(() => setNow(Date.now()), 250);
+    return () => window.clearInterval(id);
+  }, [startedAt, frozen]);
+  if (frozen != null) return frozen;
+  if (startedAt == null) return undefined;
+  return elapsedThinkingSeconds(startedAt, now);
+}
+
+function ThinkingSummary({ live, seconds }: { live: boolean; seconds?: number }) {
+  const duration = seconds == null
+    ? null
+    : t('agentchat.thinking_seconds').replace('{n}', String(seconds));
   return (
     <span className="inline-flex items-center gap-1.5 align-middle">
-      <span className="thinking-live-label">{t('agentchat.thinking')}</span>
-      <span className="thinking-live-dots" aria-hidden="true">
-        <span className="bounce-dot" />
-        <span className="bounce-dot" />
-        <span className="bounce-dot" />
-      </span>
+      <span className={live ? 'thinking-live-label' : undefined}>{t('agentchat.thinking')}</span>
+      {duration && <span className="tabular-nums">{duration}</span>}
+      {live && seconds == null && (
+        <span className="thinking-live-dots" aria-hidden="true">
+          <span className="bounce-dot" />
+          <span className="bounce-dot" />
+          <span className="bounce-dot" />
+        </span>
+      )}
     </span>
   );
 }
@@ -19,17 +37,38 @@ export function ThinkingTranscript({
   text,
   live = false,
   open,
+  startedAt,
+  seconds,
 }: {
   text: string;
   live?: boolean;
   open?: boolean;
+  /** Wall clock of the first thinking frame. The live label counts up from here. */
+  startedAt?: number;
+  /** Frozen whole seconds once the answer starts or the turn ends. */
+  seconds?: number;
 }) {
+  const shownSeconds = useThinkingSeconds(live ? startedAt : undefined, seconds);
+  const detailsRef = useRef<HTMLDetailsElement>(null);
   const ref = useRef<HTMLPreElement>(null);
   const followRef = useRef(true);
+  // Collapse once when the answer starts. After that the disclosure stays
+  // under the reader's control, so a finished turn can still be opened.
+  const releasedRef = useRef(false);
+  const applyingRef = useRef(false);
 
   useLayoutEffect(() => {
     if (live) followRef.current = true;
   }, [live]);
+
+  useLayoutEffect(() => {
+    const el = detailsRef.current;
+    if (!el || releasedRef.current || open == null) return;
+    applyingRef.current = true;
+    el.open = open;
+    applyingRef.current = false;
+    if (!open) releasedRef.current = true;
+  }, [open]);
 
   useLayoutEffect(() => {
     const el = ref.current;
@@ -38,9 +77,15 @@ export function ThinkingTranscript({
   }, [text, live, open]);
 
   return (
-    <details className="mb-2" open={open}>
+    <details
+      ref={detailsRef}
+      className="mb-2"
+      onToggle={() => {
+        if (!applyingRef.current) releasedRef.current = true;
+      }}
+    >
       <summary className="text-xs cursor-pointer select-none text-pc-text-muted">
-        {live ? <LiveThinkingMark /> : t('agentchat.thinking')}
+        <ThinkingSummary live={live} seconds={shownSeconds} />
       </summary>
       <pre
         ref={ref}

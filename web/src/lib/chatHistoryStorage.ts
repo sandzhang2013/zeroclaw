@@ -10,6 +10,8 @@ export interface PersistedChatBubble {
   role: 'user' | 'agent';
   content: string;
   thinking?: string;
+  /** Whole seconds the thinking stream ran, measured in the browser. */
+  thinkingSeconds?: number;
   markdown?: boolean;
   /** Verbatim locally-composed user input — never gateway-prefixed, so the
    *  bubble skips stripServerTimestamp for it. (Server rows omit this.) */
@@ -101,6 +103,28 @@ export function mapServerMessagesToPersisted(rows: SessionMessageRow[]): Persist
   return out;
 }
 
+/**
+ * Server transcripts do not store the thinking stream. Copy it back from the
+ * browser cache when the assistant text still matches, so a reload can reopen it.
+ */
+export function mergePersistedThinking(
+  server: PersistedChatBubble[],
+  local: PersistedChatBubble[],
+): PersistedChatBubble[] {
+  const pool = local.filter((row) => row.role === 'agent' && row.thinking);
+  return server.map((row) => {
+    if (row.role !== 'agent' || row.thinking) return row;
+    const index = pool.findIndex((cached) => cached.content === row.content);
+    const match = index < 0 ? undefined : pool.splice(index, 1)[0];
+    if (!match?.thinking) return row;
+    return {
+      ...row,
+      thinking: match.thinking,
+      thinkingSeconds: match.thinkingSeconds,
+    };
+  });
+}
+
 export function persistedToUiMessages(
   rows: PersistedChatBubble[],
 ): Array<{
@@ -108,6 +132,7 @@ export function persistedToUiMessages(
   role: 'user' | 'agent';
   content: string;
   thinking?: string;
+  thinkingSeconds?: number;
   markdown?: boolean;
   local?: boolean;
   toolCall?: { name: string; args?: unknown; output?: string; artifact?: ToolArtifactInfo };
@@ -118,6 +143,7 @@ export function persistedToUiMessages(
     role: m.role,
     content: m.content,
     thinking: m.thinking,
+    thinkingSeconds: m.thinkingSeconds,
     markdown: m.markdown,
     local: m.local,
     toolCall: m.toolCall,
@@ -131,6 +157,7 @@ export function uiMessagesToPersisted(
     role: 'user' | 'agent';
     content: string;
     thinking?: string;
+    thinkingSeconds?: number;
     markdown?: boolean;
     local?: boolean;
     ephemeral?: boolean;
@@ -148,6 +175,7 @@ export function uiMessagesToPersisted(
       role: m.role,
       content: m.content,
       thinking: m.thinking,
+      thinkingSeconds: m.thinkingSeconds,
       markdown: m.markdown,
       // Preserve the verbatim-user-input flag so reloaded bubbles still skip
       // server-timestamp stripping.

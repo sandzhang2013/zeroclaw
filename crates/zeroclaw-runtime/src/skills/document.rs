@@ -59,10 +59,10 @@ impl SkillDocument {
     }
 }
 
-/// Splits `---\n...\n---\n` from the body. Mirrors `super::split_skill_frontmatter`
-/// — extracted here so future readers don't drift on delimiter handling.
+/// Splits `---\n...\n---\n` from the body. A fence line may carry trailing
+/// spaces; those are invisible in an editor and are stripped before matching.
 pub fn split_frontmatter(content: &str) -> Option<(String, String)> {
-    let normalized = content.replace("\r\n", "\n");
+    let normalized = normalize_fence_lines(content);
     let rest = normalized.strip_prefix("---\n")?;
     if let Some(idx) = rest.find("\n---\n") {
         return Some((rest[..idx].to_string(), rest[idx + 5..].to_string()));
@@ -71,6 +71,27 @@ pub fn split_frontmatter(content: &str) -> Option<(String, String)> {
         return Some((frontmatter.to_string(), String::new()));
     }
     None
+}
+
+/// A line whose only visible text is `---` is a fence, even with trailing spaces.
+fn normalize_fence_lines(content: &str) -> String {
+    let normalized = content.replace("\r\n", "\n");
+    let mut out = String::with_capacity(normalized.len());
+    for line in normalized.split_inclusive('\n') {
+        let (text, newline) = match line.strip_suffix('\n') {
+            Some(text) => (text, true),
+            None => (line, false),
+        };
+        if text.trim() == "---" {
+            out.push_str("---");
+        } else {
+            out.push_str(text);
+        }
+        if newline {
+            out.push('\n');
+        }
+    }
+    out
 }
 
 /// Flat `key: value` parser tightly typed to [`SkillFrontmatter`]. Handles
@@ -563,6 +584,17 @@ mod tests {
             err,
             DocumentParseError::MissingRequiredField("description")
         ));
+    }
+
+    #[test]
+    fn accepts_fence_lines_that_only_look_like_dashes() {
+        let content = "---   \nname: 基孔肯雅热专题分析\ndescription: 说明\nagent_created: true\n---\t\n\n正文\n";
+        let doc = SkillDocument::parse(content).unwrap();
+        assert_eq!(doc.frontmatter.name, "基孔肯雅热专题分析");
+        assert_eq!(doc.frontmatter.description, "说明");
+        assert!(doc.body.contains("正文"));
+        let err = SkillDocument::parse("---\nname: x\ndescription: y\n----\n").unwrap_err();
+        assert!(matches!(err, DocumentParseError::MissingFrontmatter));
     }
 
     #[test]

@@ -52,10 +52,16 @@ impl SessionStore {
     }
 }
 
+/// `SameSite=None` is only valid with `Secure`. HTTP sessions stay `Lax`.
+fn session_same_site(secure: bool) -> &'static str {
+    if secure { "None" } else { "Lax" }
+}
+
 pub fn cookie_header(sid: &str, max_age: Duration, secure: bool) -> String {
     let mut v = format!(
-        "{COOKIE_NAME}={sid}; Path={}; HttpOnly; SameSite=Lax; Max-Age={}",
+        "{COOKIE_NAME}={sid}; Path={}; HttpOnly; SameSite={}; Max-Age={}",
         Config::PATH_PREFIX,
+        session_same_site(secure),
         max_age.as_secs()
     );
     if secure {
@@ -66,8 +72,9 @@ pub fn cookie_header(sid: &str, max_age: Duration, secure: bool) -> String {
 
 pub fn clear_cookie_header(secure: bool) -> String {
     let mut v = format!(
-        "{COOKIE_NAME}=; Path={}; HttpOnly; SameSite=Lax; Max-Age=0",
-        Config::PATH_PREFIX
+        "{COOKIE_NAME}=; Path={}; HttpOnly; SameSite={}; Max-Age=0",
+        Config::PATH_PREFIX,
+        session_same_site(secure),
     );
     if secure {
         v.push_str("; Secure");
@@ -277,8 +284,17 @@ mod tests {
         assert!(plain.contains("Max-Age=60"));
         assert!(!plain.contains("Secure"));
         let secure = cookie_header("sid", Duration::from_secs(60), true);
+        assert!(secure.contains("SameSite=None"));
         assert!(secure.contains("Secure"));
-        assert!(clear_cookie_header(false).contains("Max-Age=0"));
+        assert!(!secure.contains("SameSite=Lax"));
+        let cleared = clear_cookie_header(true);
+        assert!(cleared.contains("SameSite=None"));
+        assert!(cleared.contains("Secure"));
+        assert!(cleared.contains("Max-Age=0"));
+        assert!(clear_cookie_header(false).contains("SameSite=Lax"));
+        assert!(
+            state_cookie_header("abc", Duration::from_secs(600), true).contains("SameSite=Lax")
+        );
         assert!(
             state_cookie_header("abc", Duration::from_secs(600), false).contains(STATE_COOKIE_NAME)
         );
