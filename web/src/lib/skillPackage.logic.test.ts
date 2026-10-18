@@ -38,6 +38,12 @@ test('parseSkillMarkdown requires YAML name and description', () => {
   const padded = parseSkillMarkdown('---   \nname: flu-weekly\ndescription: 说明\n---\t\n');
   assert.equal(padded.ok, true);
   if (padded.ok) assert.equal(padded.skill.title, 'flu-weekly');
+  const indented = parseSkillMarkdown('---\nname: flu-weekly\ndescription: |\n  近\n  ---\n  仍在说明\n---\n正文\n');
+  assert.equal(indented.ok, true);
+  if (indented.ok) {
+    assert.match(indented.skill.description, /仍在说明/);
+    assert.match(indented.skill.body, /正文/);
+  }
   assert.deepEqual(parseSkillMarkdown('---\nname: flu-weekly\ndescription: 说明\n----\n'), {
     ok: false,
     error: 'frontmatter',

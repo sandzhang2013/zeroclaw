@@ -44,7 +44,7 @@ export function skillImportErrorKey(error: SkillPackageError): string {
 function normalizeFenceLines(content: string): string {
   return content
     .split('\n')
-    .map((line) => (line.trim() === '---' ? '---' : line))
+    .map((line) => (line.trimEnd() === '---' ? '---' : line))
     .join('\n');
 }
 

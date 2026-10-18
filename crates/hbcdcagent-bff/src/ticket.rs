@@ -638,6 +638,7 @@ pub(crate) mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
         assert!(resp.headers().get("set-cookie").is_none());
         let again = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .uri(&uri)
@@ -647,6 +648,55 @@ pub(crate) mod tests {
             .await
             .expect("resp");
         assert_eq!(again.status(), StatusCode::BAD_GATEWAY);
+        let api = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/hbcdcagent/api/status?clientId=CDSS-B-ZJJK-001&verifyData={data}"
+                    ))
+                    .body(Body::empty())
+                    .expect("req"),
+            )
+            .await
+            .expect("resp");
+        assert_eq!(api.status(), StatusCode::UNAUTHORIZED);
+        let other = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/hbcdcagent/workbench-extra?clientId=CDSS-B-ZJJK-001&verifyData={data}"
+                    ))
+                    .body(Body::empty())
+                    .expect("req"),
+            )
+            .await
+            .expect("resp");
+        assert_eq!(other.status(), StatusCode::TEMPORARY_REDIRECT);
+        let escaped = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/hbcdcagent/workbench/../api/status?clientId=CDSS-B-ZJJK-001&verifyData={data}"
+                    ))
+                    .body(Body::empty())
+                    .expect("req"),
+            )
+            .await
+            .expect("resp");
+        assert_eq!(escaped.status(), StatusCode::UNAUTHORIZED);
+        let favicon = app
+            .oneshot(
+                Request::builder()
+                    .uri("/hbcdcagent/api/favicon.ico")
+                    .body(Body::empty())
+                    .expect("req"),
+            )
+            .await
+            .expect("resp");
+        assert_eq!(favicon.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]

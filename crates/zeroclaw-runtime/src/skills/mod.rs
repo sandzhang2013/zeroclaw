@@ -132,7 +132,7 @@ pub struct DroppedSkill {
 pub struct ShadowedSkill {
     /// The name shared with (and won by) the higher-precedence skill.
     pub name: String,
-    /// Origin of the LOSER: `"open-skills"` | `"plugin"` | `"bundle"`.
+    /// Origin of the LOSER: `"workspace"` | `"open-skills"` | `"plugin"` | `"bundle"`.
     pub origin_hint: String,
 }
 
@@ -1875,7 +1875,7 @@ pub(crate) fn skills_to_prompt_with_mode_and_availability(
              Follow these instructions directly; do not read skill files at runtime unless the user asks.\n\
              Skills are zero-copy: bundled scripts, templates, and references stay in `<directory>`.\n\
              Run them by absolute path under that directory. Relative paths in the skill resolve against `<directory>`, not the session working directory. Do not copy skill files into the workspace.\n\
-             Do not `cd` into `<directory>` (`cd` is not an allowed command). Use that absolute path for `file_read`, `content_search`, `ls`, and `grep`. Do not list the skill tree to discover files after `read_skill`.\n\n\
+             Do not `cd` into `<directory>` (`cd` is not an allowed command). Use that absolute path for `file_read`, `content_search`, `ls`, and `grep`. Do not list the skill tree to discover files.\n\n\
              <available_skills>\n",
         )
     } else {
@@ -5713,7 +5713,7 @@ version = "0.1.0"
     }
 
     #[tokio::test]
-    async fn org_skill_wins_on_name_collision_with_user_skill() {
+    async fn user_skill_replaces_org_skill_on_name_collision() {
         let install_root = TempDir::new().unwrap();
         let data_dir = TempDir::new().unwrap();
         let agent_workspace = TempDir::new().unwrap();
@@ -5738,10 +5738,18 @@ version = "0.1.0"
             .await;
         let hits: Vec<_> = skills.iter().filter(|s| s.name == "flu-forecast").collect();
         assert_eq!(hits.len(), 1);
-        assert!(
-            shadows
-                .iter()
-                .any(|s| s.name == "flu-forecast" && s.origin_hint == "user")
+        let user_manifest = config
+            .user_workspace_dir("alice", agent_alias)
+            .join("skills")
+            .join("flu-forecast")
+            .join("SKILL.toml");
+        assert_eq!(hits[0].location.as_deref(), Some(user_manifest.as_path()));
+        assert_eq!(
+            shadows,
+            vec![ShadowedSkill {
+                name: "flu-forecast".into(),
+                origin_hint: "workspace".into(),
+            }]
         );
     }
 

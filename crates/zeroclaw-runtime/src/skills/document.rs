@@ -73,7 +73,7 @@ pub fn split_frontmatter(content: &str) -> Option<(String, String)> {
     None
 }
 
-/// A line whose only visible text is `---` is a fence, even with trailing spaces.
+/// A column-0 line that is `---` with trailing spaces is a fence.
 fn normalize_fence_lines(content: &str) -> String {
     let normalized = content.replace("\r\n", "\n");
     let mut out = String::with_capacity(normalized.len());
@@ -82,7 +82,8 @@ fn normalize_fence_lines(content: &str) -> String {
             Some(text) => (text, true),
             None => (line, false),
         };
-        if text.trim() == "---" {
+        // Column 0 only. An indented `---` inside a block scalar is body text.
+        if text.trim_end() == "---" {
             out.push_str("---");
         } else {
             out.push_str(text);
@@ -593,6 +594,12 @@ mod tests {
         assert_eq!(doc.frontmatter.name, "基孔肯雅热专题分析");
         assert_eq!(doc.frontmatter.description, "说明");
         assert!(doc.body.contains("正文"));
+        let indented = SkillDocument::parse(
+            "---\nname: x\ndescription: |\n  近\n  ---\n  仍在说明\n---\n正文\n",
+        )
+        .unwrap();
+        assert!(indented.frontmatter.description.contains("仍在说明"));
+        assert!(indented.body.contains("正文"));
         let err = SkillDocument::parse("---\nname: x\ndescription: y\n----\n").unwrap_err();
         assert!(matches!(err, DocumentParseError::MissingFrontmatter));
     }

@@ -5,8 +5,8 @@ use crate::identity::{
     IDENTITY_HEADERS, Identity, MOCK_COOKIE_NAME, ROLE_OPS, mock_user, normalize_user_id,
 };
 use crate::session::{
-    STATE_TTL, SessionStore, append_clear_mock_cookies, append_set_cookie, cookie_header,
-    cookie_value, session_id_from_headers, state_cookie_header, strip_embed_credentials,
+    STATE_TTL, SessionStore, append_clear_mock_cookies, append_set_cookie, cookie_value,
+    session_id_from_headers, state_cookie_header, strip_embed_credentials,
 };
 use crate::user_center::UserCenter;
 use anyhow::Result;
@@ -131,9 +131,6 @@ async fn proxy_http(state: Arc<AppState>, mut req: Request) -> Result<Response, 
             // before that, and a cross-site iframe cannot keep the cookie.
             if is_ticket_document(&req) || is_anonymous_asset(req.uri().path()) {
                 return forward_http(&state, req, None).await;
-            }
-            if let Some(resp) = alert_ticket_link(&state, &req) {
-                return Err(resp);
             }
             Err(unauthenticated(&state.cfg, req.uri().path()))
         }
@@ -526,125 +523,48 @@ fn log_ws_splice_end(elapsed: std::time::Duration, end: &WsSpliceClose) {
     }
 }
 
-/// 工作台页面不走这里，票据要留给页面自己验。只有需要登录的地址才会在这里验票后跳转。
-fn alert_ticket_link(state: &AppState, req: &Request) -> Option<Response> {
-    if req.method() != axum::http::Method::GET || state.cfg.ticket_sso.is_none() {
-        return None;
-    }
-    let (client_id, verify_data) = ticket_query(req.uri())?;
-    let sso = state.cfg.ticket_sso.as_ref()?;
-    if !crate::ticket::rate_ok(&state.ticket_rate, sso, &ticket_caller(req)) {
-        return Some(ticket_rejected(
-            StatusCode::TOO_MANY_REQUESTS,
-            crate::ticket::MSG_RATE,
-        ));
-    }
-    let now_ms = chrono::Utc::now().timestamp_millis();
-    let outcome = crate::ticket::verify_ticket(
-        Some(sso),
-        &client_id,
-        &verify_data,
-        now_ms,
-        &state.cfg.ops_user_ids,
-        &state.nonces,
-        false,
-    );
-    let Some(identity) = outcome.identity else {
-        if outcome.code == crate::ticket::CODE_DECRYPT || outcome.code == crate::ticket::CODE_REPLAY
-        {
-            tracing::warn!(code = outcome.code, client_id = %client_id, "alert ticket link rejected");
-        } else {
-            tracing::info!(code = outcome.code, client_id = %client_id, "alert ticket link rejected");
-        }
-        let status = if outcome.code == crate::ticket::CODE_RATE {
-            StatusCode::TOO_MANY_REQUESTS
-        } else {
-            StatusCode::BAD_REQUEST
-        };
-        return Some(ticket_rejected(status, outcome.msg));
-    };
-    tracing::info!(user_id = %identity.user_id, "alert ticket session created from workbench link");
-    let sid = state.sessions.insert(identity, state.cfg.session_ttl);
-    let mut response = ticket_landing_page(&location_without_ticket(req.uri()));
-    append_set_cookie(
-        &mut response,
-        &cookie_header(&sid, state.cfg.session_ttl, state.cfg.cookie_secure),
-    );
-    Some(response)
-}
-
-/// Document on this host, then a same-origin navigation. The session cookie
-/// is committed before the next request, so SameSite=Lax is sent.
-fn ticket_landing_page(next: &str) -> Response {
-    let html = format!(
-        "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta http-equiv=\"refresh\" content=\"0;url={}\"><title>正在进入工作台</title></head><body><script>location.replace({})</script></body></html>",
-        html_attr(next),
-        js_string(next),
-    );
-    (
-        StatusCode::OK,
-        [
-            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
-            (header::CACHE_CONTROL, "no-store"),
-        ],
-        html,
-    )
-        .into_response()
-}
-
-fn html_attr(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    for ch in value.chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '"' => out.push_str("&quot;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            _ => out.push(ch),
-        }
-    }
-    out
-}
-
-fn js_string(value: &str) -> String {
-    let mut out = String::from("\"");
-    for ch in value.chars() {
-        match ch {
-            '\\' | '"' => {
-                out.push('\\');
-                out.push(ch);
-            }
-            c if c.is_control() => out.push_str(&format!("\\u{:04x}", u32::from(c))),
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
-}
-
 /// Workbench HTML that still has `clientId` and `verifyData`. Do not spend
 /// the ticket or redirect: the next request would lose the parameters.
+/// Only `/workbench` and `/workbench/{alias}` qualify. A `..` segment must
+/// not turn this into an unauthenticated proxy of some other path.
 fn is_ticket_document(req: &Request) -> bool {
-    if req.method() != axum::http::Method::GET || requires_login(req.uri().path()) {
+    if req.method() != axum::http::Method::GET {
         return false;
     }
-    ticket_query(req.uri()).is_some()
+    is_workbench_document(req.uri().path()) && ticket_query(req.uri()).is_some()
+}
+
+fn is_workbench_document(path: &str) -> bool {
+    let workbench = Config::workbench_path();
+    if path == workbench {
+        return true;
+    }
+    let Some(alias) = path.strip_prefix(workbench).and_then(|rest| rest.strip_prefix('/')) else {
+        return false;
+    };
+    is_safe_segment(alias)
 }
 
 /// Script and style requests from the framed page have no session yet.
 fn is_anonymous_asset(path: &str) -> bool {
-    path.contains("/_app/") || path.ends_with("/favicon.ico")
+    let prefix = Config::PATH_PREFIX;
+    if path == format!("{prefix}/favicon.ico") {
+        return true;
+    }
+    let Some(rest) = path.strip_prefix(&format!("{prefix}/_app/")) else {
+        return false;
+    };
+    !rest.is_empty()
+        && rest
+            .split('/')
+            .all(|segment| !segment.is_empty() && segment != "." && segment != "..")
 }
 
-fn ticket_caller(req: &Request) -> String {
-    req.headers()
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.split(',').next())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or("direct")
-        .to_string()
+fn is_safe_segment(segment: &str) -> bool {
+    !segment.is_empty()
+        && segment
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
 }
 
 fn ticket_query(uri: &Uri) -> Option<(String, String)> {
@@ -668,24 +588,6 @@ fn ticket_query(uri: &Uri) -> Option<(String, String)> {
     Some((client_id, verify_data))
 }
 
-fn location_without_ticket(uri: &Uri) -> String {
-    let path = uri.path();
-    let rest: Vec<&str> = uri
-        .query()
-        .unwrap_or("")
-        .split('&')
-        .filter(|pair| {
-            let key = pair.split_once('=').map(|(key, _)| key).unwrap_or(pair);
-            !pair.is_empty() && key != "clientId" && key != "verifyData"
-        })
-        .collect();
-    if rest.is_empty() {
-        path.to_string()
-    } else {
-        format!("{path}?{}", rest.join("&"))
-    }
-}
-
 fn percent_decode(raw: &str) -> String {
     let bytes = raw.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -703,18 +605,6 @@ fn percent_decode(raw: &str) -> String {
         index += 1;
     }
     String::from_utf8_lossy(&out).into_owned()
-}
-
-fn ticket_rejected(status: StatusCode, msg: &str) -> Response {
-    let html = format!(
-        "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><title>无法进入工作台</title></head><body><h1>无法进入工作台</h1><p>{msg}</p></body></html>"
-    );
-    (
-        status,
-        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-        html,
-    )
-        .into_response()
 }
 
 fn unauthenticated(cfg: &Config, path: &str) -> Response {

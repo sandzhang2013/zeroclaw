@@ -457,6 +457,15 @@ export function AgentProvider({
     return result;
   }, []);
 
+  // Read the in-flight reasoning before a turn is folded away. Uses refs so a
+  // socket callback does not close over a stale render.
+  const unsavedThinking = () => {
+    const state = turnStreamStateRef.current;
+    const thinking = (state.pendingThinking || state.capturedThinking).trim();
+    const clock = freezeThinkingClock(thinkingClockRef.current, Date.now());
+    return { thinking, pending: state.pendingContent, seconds: clock.seconds };
+  };
+
   // Centralised WebSocket message handler — reused across initial connect and reconnects.
   const handleWsMessage = useCallback((msg: WsMessage) => {
     switch (msg.type) {
@@ -750,9 +759,27 @@ export function AgentProvider({
         // Gateway sends this after a cancelled turn; the parked approval (if
         // any) is no longer valid because its request_id belongs to the old
         // turn. Clear so the banner does not linger across the abort.
-        // The stop button already kept the partial transcript.
+        // The stop button already kept the partial transcript and cleared this
+        // ref, so a second bubble is not added.
+        const partial = unsavedThinking();
         foldTurnStream({ type: 'aborted' });
         publishThinkingClock(idleThinkingClock);
+        if (partial.thinking || partial.pending.trim()) {
+          localMessageMutationVersionRef.current += 1;
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: generateUUID(),
+              role: 'agent',
+              content: interruptedContent(partial.pending, t('agent.interrupted')),
+              ...(partial.thinking
+                ? { thinking: partial.thinking, ...(partial.seconds != null ? { thinkingSeconds: partial.seconds } : {}) }
+                : {}),
+              markdown: true,
+              timestamp: new Date(),
+            },
+          ]);
+        }
         setStreamingContent('');
         setStreamingThinking('');
         setTyping(false);
@@ -779,6 +806,7 @@ export function AgentProvider({
           break;
         }
         const friendlyMessage = friendlyAgentError(msg.message);
+        const partial = unsavedThinking();
         localMessageMutationVersionRef.current += 1;
         setMessages((prev) => [
           ...prev,
@@ -786,6 +814,9 @@ export function AgentProvider({
             id: generateUUID(),
             role: 'agent',
             content: `${t('agent.error_prefix')} ${friendlyMessage}`,
+            ...(partial.thinking
+              ? { thinking: partial.thinking, ...(partial.seconds != null ? { thinkingSeconds: partial.seconds } : {}) }
+              : {}),
             timestamp: new Date(),
           },
         ]);
@@ -1437,8 +1468,9 @@ export function AgentProvider({
       // to round-trip; the user clicked Stop and expects the UI to follow.
       setPendingApproval(null);
       const note = t('agent.interrupted');
-      const thinking = streamingThinking.trim();
-      const thinkingClock = freezeThinkingClock(thinkingClockRef.current, Date.now());
+      const partial = unsavedThinking();
+      const thinking = partial.thinking || streamingThinking.trim();
+      turnStreamStateRef.current = initialTurnStreamState();
       publishThinkingClock(idleThinkingClock);
       const content = interruptedContent(streamingContent, note);
       localMessageMutationVersionRef.current += 1;
@@ -1448,7 +1480,7 @@ export function AgentProvider({
           id: generateUUID(),
           role: 'agent',
           content,
-          ...(thinking ? { thinking, ...(thinkingClock.seconds != null ? { thinkingSeconds: thinkingClock.seconds } : {}) } : {}),
+          ...(thinking ? { thinking, ...(partial.seconds != null ? { thinkingSeconds: partial.seconds } : {}) } : {}),
           markdown: true,
           timestamp: new Date(),
         },
