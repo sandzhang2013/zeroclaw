@@ -1807,13 +1807,51 @@ export interface AgentWorkspaceFileRead {
   mime?: string;
 }
 
-/** Same-origin raw bytes URL. Relies on BFF/cookie identity, not query user_id. */
+/** Same-origin raw bytes URL. Callers must send the embed session header; a
+ *  naked navigation does not, and the BFF then answers `login required`. */
 export function workspaceRawUrl(alias: string, path: string, download = false): string {
   const q = new URLSearchParams({ path });
   if (download) q.set("download", "true");
   return gatewayUrl(
     `/api/agents/${encodeURIComponent(alias)}/workspace/raw?${q.toString()}`,
   );
+}
+
+/** Bytes for preview or download. Uses the same cookie and embed session as
+ *  the rest of the workbench, which `<img>`, `<iframe>`, and `<a>` cannot. */
+export async function fetchWorkspaceRaw(
+  alias: string,
+  path: string,
+  download = false,
+): Promise<Blob> {
+  const headers = new Headers();
+  const token = getToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  applyEmbedSession(headers);
+  const response = await fetch(workspaceRawUrl(alias, path, download), {
+    headers,
+    credentials: "same-origin",
+  });
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new HttpError(response.status, body);
+  }
+  return response.blob();
+}
+
+export async function downloadWorkspaceRaw(
+  alias: string,
+  path: string,
+  filename: string,
+): Promise<void> {
+  const blob = await fetchWorkspaceRaw(alias, path, true);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.rel = "noopener";
+  a.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 export function listAgentWorkspace(

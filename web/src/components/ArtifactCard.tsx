@@ -1,6 +1,7 @@
 import { Download, FileSpreadsheet, FileText, Maximize2, X } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { useAgent } from '@/contexts/AgentContext';
-import { workspaceRawUrl } from '@/lib/api';
+import { downloadWorkspaceRaw, fetchWorkspaceRaw } from '@/lib/api';
 import { artifactKind, type ToolArtifactInfo } from '@/lib/artifactKind';
 import { htmlPreviewSrcDoc, HTML_PREVIEW_SANDBOX } from '@/lib/chatHtmlPreview';
 import { t } from '@/lib/i18n';
@@ -103,6 +104,76 @@ function OfficeIcon({ filename }: { filename: string }) {
   return <FileText className="size-8 text-pc-text-muted" />;
 }
 
+export function WorkspaceDownloadButton({
+  alias,
+  path,
+  filename,
+  labeled = false,
+}: {
+  alias: string;
+  path: string;
+  filename: string;
+  labeled?: boolean;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <span className="inline-flex min-w-0 items-center gap-1">
+      <ArtifactDownloadControl
+        filename={filename}
+        labeled={labeled}
+        onClick={() => {
+          setError(null);
+          void downloadWorkspaceRaw(alias, path, filename).catch((err: unknown) => {
+            setError(err instanceof Error ? err.message : String(err));
+          });
+        }}
+      />
+      {error ? (
+        <span className="max-w-40 truncate text-[11px] text-pc-text-muted" title={error}>
+          {error}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+function useWorkspacePreview(alias: string, path: string, asText: boolean) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [html, setHtml] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    let objectUrl: string | null = null;
+    setUrl(null);
+    setHtml(null);
+    setError(null);
+    void fetchWorkspaceRaw(alias, path)
+      .then(async (blob) => {
+        if (cancelled) return;
+        if (asText) {
+          const text = await blob.text();
+          if (!cancelled) setHtml(text);
+          return;
+        }
+        const next = URL.createObjectURL(blob);
+        if (cancelled) {
+          URL.revokeObjectURL(next);
+          return;
+        }
+        objectUrl = next;
+        setUrl(next);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+      });
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [alias, path, asText]);
+  return { url, html, error };
+}
+
 export function ArtifactCard({
   artifact,
   fill = false,
@@ -116,8 +187,7 @@ export function ArtifactCard({
 }) {
   const { agentAlias } = useAgent();
   const kind = artifactKind(artifact.mime, artifact.filename);
-  const src = workspaceRawUrl(agentAlias, artifact.path);
-  const downloadHref = workspaceRawUrl(agentAlias, artifact.path, true);
+  const preview = useWorkspacePreview(agentAlias, artifact.path, kind === 'html');
   const iframeFill = fill || expanded;
 
   return (
@@ -161,18 +231,22 @@ export function ArtifactCard({
             {expanded ? <X className="size-3.5" /> : <Maximize2 className="size-3.5" />}
           </button>
         )}
-        <ArtifactDownloadControl
-          href={downloadHref}
+        <WorkspaceDownloadButton
+          alias={agentAlias}
+          path={artifact.path}
           filename={artifact.filename}
           labeled={fill || expanded}
         />
       </div>
-      {kind === 'html' && (
+      {preview.error ? (
+        <p className="px-3 py-4 text-xs text-pc-text-muted">{preview.error}</p>
+      ) : null}
+      {kind === 'html' && preview.html != null && (
         iframeFill ? (
           <div className="relative min-h-0 flex-1">
             <iframe
               title={artifact.title}
-              src={src}
+              srcDoc={htmlPreviewSrcDoc(preview.html)}
               sandbox={HTML_PREVIEW_SANDBOX}
               referrerPolicy="no-referrer"
               className="absolute inset-0 h-full w-full border-0 bg-white"
@@ -181,14 +255,14 @@ export function ArtifactCard({
         ) : (
           <iframe
             title={artifact.title}
-            src={src}
+            srcDoc={htmlPreviewSrcDoc(preview.html)}
             sandbox={HTML_PREVIEW_SANDBOX}
             referrerPolicy="no-referrer"
             className="block h-80 w-full border-0 bg-white"
           />
         )
       )}
-      {kind === 'image' && (
+      {kind === 'image' && preview.url && (
         <div
           className={[
             'flex items-center justify-center bg-pc-base p-2',
@@ -197,19 +271,19 @@ export function ArtifactCard({
           onDoubleClick={onToggleExpand}
         >
           <img
-            src={src}
+            src={preview.url}
             alt={artifact.title}
             className={iframeFill ? 'max-h-full max-w-full object-contain' : 'max-h-80 max-w-full object-contain'}
           />
         </div>
       )}
-      {kind === 'pdf' && (
+      {kind === 'pdf' && preview.url && (
         iframeFill ? (
           <div className="relative min-h-0 flex-1">
-            <iframe title={artifact.title} src={src} className="absolute inset-0 h-full w-full border-0 bg-white" />
+            <iframe title={artifact.title} src={preview.url} className="absolute inset-0 h-full w-full border-0 bg-white" />
           </div>
         ) : (
-          <iframe title={artifact.title} src={src} className="block h-96 w-full border-0 bg-white" />
+          <iframe title={artifact.title} src={preview.url} className="block h-96 w-full border-0 bg-white" />
         )
       )}
       {kind === 'office' && (
@@ -217,14 +291,12 @@ export function ArtifactCard({
           <OfficeIcon filename={artifact.filename} />
           <p className="text-sm text-pc-text">{artifact.filename}</p>
           <p className="text-xs text-pc-text-muted">{t('workbench.artifact_office_hint')}</p>
-          <a
-            href={downloadHref}
-            download={artifact.filename}
-            className="mt-1 inline-flex items-center gap-1.5 rounded-full bg-pc-text px-3 py-1.5 text-xs font-medium text-pc-base"
-          >
-            <Download className="size-3.5" />
-            {t('workbench.artifact_download')}
-          </a>
+          <WorkspaceDownloadButton
+            alias={agentAlias}
+            path={artifact.path}
+            filename={artifact.filename}
+            labeled
+          />
         </div>
       )}
     </div>

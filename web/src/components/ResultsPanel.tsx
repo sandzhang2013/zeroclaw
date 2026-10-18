@@ -15,10 +15,9 @@ import {
   ApiError,
   listAgentWorkspace,
   readAgentWorkspaceFile,
-  workspaceRawUrl,
   type BrowseEntry,
 } from '@/lib/api';
-import { ArtifactCard, ArtifactDownloadControl, HtmlSrcDocPreview, downloadUtf8File } from '@/components/ArtifactCard';
+import { ArtifactCard, ArtifactDownloadControl, HtmlSrcDocPreview, WorkspaceDownloadButton, downloadUtf8File } from '@/components/ArtifactCard';
 import { htmlPreviewSrcDoc, splitChatHtmlBlocks } from '@/lib/chatHtmlPreview';
 import { artifactKind, isVisualArtifact, sortArtifactEntries, type ToolArtifactInfo } from '@/lib/artifactKind';
 import type { CanvasFramePreview } from '@/lib/canvasFrame';
@@ -549,12 +548,9 @@ function ArtifactsList({ lastArtifact }: { lastArtifact: ToolArtifactInfo | null
                   )}
                 </button>
                 {entry.kind === 'file' && (
-                  <ArtifactDownloadControl
-                    href={workspaceRawUrl(
-                      agentAlias,
-                      rel ? `${root}/${rel}/${entry.name}` : `${root}/${entry.name}`,
-                      true,
-                    )}
+                  <WorkspaceDownloadButton
+                    alias={agentAlias}
+                    path={rel ? `${root}/${rel}/${entry.name}` : `${root}/${entry.name}`}
                     filename={entry.name}
                   />
                 )}
@@ -575,12 +571,9 @@ function ArtifactsList({ lastArtifact }: { lastArtifact: ToolArtifactInfo | null
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
             <div className="flex shrink-0 items-center gap-2 border-b border-pc-border px-3 py-1.5">
               <p className="min-w-0 flex-1 truncate text-xs font-medium text-pc-text">{previewName}</p>
-              <ArtifactDownloadControl
-                href={workspaceRawUrl(
-                  agentAlias,
-                  rel ? `${root}/${rel}/${previewName}` : `${root}/${previewName}`,
-                  true,
-                )}
+              <WorkspaceDownloadButton
+                alias={agentAlias}
+                path={rel ? `${root}/${rel}/${previewName}` : `${root}/${previewName}`}
                 filename={previewName}
                 labeled
               />

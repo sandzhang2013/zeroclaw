@@ -5,7 +5,7 @@ import App from './App';
 import { alertTicketErrorText, readAlertTicketQuery, stripAlertTicketSearch } from './lib/alertTicket';
 import { applyTicketUser } from './lib/platformUser';
 import { isEmbeddedFrame } from './lib/iframeAsk';
-import { rememberEmbedSession } from './lib/iframeSession';
+import { embedSessionId, rememberEmbedSession } from './lib/iframeSession';
 import { basePath, gatewayUrl } from './lib/basePath';
 import { installStructuredClonePolyfill } from './lib/browserSupport';
 import { installEmbedCounterZoom } from './lib/embedZoom';
@@ -42,6 +42,8 @@ function showTicketError(code: number) {
 }
 
 async function boot() {
+  // A refreshed portal frame has no cookie. Restore the session before any API call.
+  embedSessionId();
   const ticket = readAlertTicketQuery(window.location.search);
   if (!ticket) {
     mountApp();
