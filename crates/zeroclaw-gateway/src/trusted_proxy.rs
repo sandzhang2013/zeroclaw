@@ -20,6 +20,7 @@ pub const HEADER_USER_ID: &str = "x-user-id";
 pub const HEADER_USER_ROLE: &str = "x-user-role";
 pub const HEADER_USER_REGION: &str = "x-user-region";
 pub const HEADER_USER_ORG: &str = "x-user-org";
+pub const HEADER_USER_NAME: &str = "x-user-name";
 
 pub type AuthError = (StatusCode, Json<serde_json::Value>);
 
@@ -103,6 +104,9 @@ pub fn require_trusted_proxy(
     if let Some(organization) = organization {
         attrs = attrs.with_organization(organization);
     }
+    if let Some(name) = header_str(headers, HEADER_USER_NAME) {
+        attrs = attrs.with_display_name(name);
+    }
     let principal = Principal::from_identity(&AuthenticatedIdentity::new(
         IdentitySubject::Roster {
             principal_id: user_id,
@@ -118,14 +122,34 @@ pub fn roster_principal_id(user_id: &str) -> String {
     PrincipalId::for_roster(user_id).as_str().to_string()
 }
 
-/// Write both the legacy platform user id and the roster principal.
+/// Write the roster principal, the platform user id, and the display name.
 pub fn stamp_platform_session_owner(
     backend: &dyn zeroclaw_infra::session_backend::SessionBackend,
     session_key: &str,
     user_id: &str,
+    display_name: Option<&str>,
 ) {
     let _ = backend.set_session_user_id(session_key, user_id);
     let _ = backend.set_session_principal(session_key, &roster_principal_id(user_id));
+    remember_display_name(backend, user_id, display_name);
+}
+
+/// Copy the current login name onto every session this platform user already owns.
+/// Usage reads that label; isolation stays on `user_id`.
+pub fn remember_display_name(
+    backend: &dyn zeroclaw_infra::session_backend::SessionBackend,
+    user_id: &str,
+    display_name: Option<&str>,
+) {
+    let Some(name) = display_name.and_then(zeroclaw_api::clean_display_name) else {
+        return;
+    };
+    for meta in backend.list_sessions_for_user(user_id) {
+        if meta.display_name.as_deref() == Some(name.as_str()) {
+            continue;
+        }
+        let _ = backend.set_session_display_name(&meta.key, &name);
+    }
 }
 
 /// User-facing session / chat APIs.

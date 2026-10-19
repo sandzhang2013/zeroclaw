@@ -491,6 +491,7 @@ export function getTurnFeedbackReview(): Promise<TurnFeedbackReview> {
 export interface UsageDayRow {
   day: string;
   user_id: string;
+  user_name?: string;
   sessions: number;
   asks: number;
   replies: number;

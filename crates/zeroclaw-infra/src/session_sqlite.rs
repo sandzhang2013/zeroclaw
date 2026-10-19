@@ -161,6 +161,10 @@ impl SqliteSessionBackend {
                 "principal_id",
                 "ALTER TABLE session_metadata ADD COLUMN principal_id TEXT",
             ),
+            (
+                "display_name",
+                "ALTER TABLE session_metadata ADD COLUMN display_name TEXT",
+            ),
         ] {
             Self::ensure_metadata_column(&conn, column, ddl)?;
         }
@@ -1090,7 +1094,8 @@ impl SessionBackend for SqliteSessionBackend {
     fn list_sessions_with_metadata(&self) -> Vec<SessionMetadata> {
         let conn = self.conn.lock();
         let mut stmt = match conn.prepare(
-            "SELECT session_key, created_at, last_activity, message_count, name, agent_alias, channel_id, room_id, sender_id, user_id, principal_id
+            "SELECT session_key, created_at, last_activity, message_count, name, agent_alias, channel_id, room_id, sender_id, user_id, principal_id,
+                display_name
              FROM session_metadata ORDER BY last_activity DESC",
         ) {
             Ok(s) => s,
@@ -1109,6 +1114,7 @@ impl SessionBackend for SqliteSessionBackend {
             let sender_id: Option<String> = row.get(8)?;
             let user_id: Option<String> = row.get(9)?;
             let principal_id: Option<String> = row.get(10)?;
+            let display_name: Option<String> = row.get(11)?;
 
             let created = DateTime::parse_from_rfc3339(&created_str)
                 .map(|dt| dt.with_timezone(&Utc))
@@ -1130,6 +1136,7 @@ impl SessionBackend for SqliteSessionBackend {
                 sender_id,
                 user_id,
                 principal_id,
+                display_name,
             })
         }) {
             Ok(r) => r,
@@ -1320,7 +1327,8 @@ impl SessionBackend for SqliteSessionBackend {
     fn get_session_metadata(&self, session_key: &str) -> Option<SessionMetadata> {
         let conn = self.conn.lock();
         conn.query_row(
-            "SELECT session_key, created_at, last_activity, message_count, name, agent_alias, channel_id, room_id, sender_id, user_id, principal_id
+            "SELECT session_key, created_at, last_activity, message_count, name, agent_alias, channel_id, room_id, sender_id, user_id, principal_id,
+                display_name
              FROM session_metadata WHERE session_key = ?1",
             params![session_key],
             |row| {
@@ -1335,6 +1343,7 @@ impl SessionBackend for SqliteSessionBackend {
                 let sender_id: Option<String> = row.get(8)?;
                 let user_id: Option<String> = row.get(9)?;
                 let principal_id: Option<String> = row.get(10)?;
+            let display_name: Option<String> = row.get(11)?;
 
                 let created = DateTime::parse_from_rfc3339(&created_str)
                     .map(|dt| dt.with_timezone(&Utc))
@@ -1356,6 +1365,7 @@ impl SessionBackend for SqliteSessionBackend {
                     sender_id,
                     user_id,
                     principal_id,
+                display_name,
                 })
             },
         )
@@ -1415,7 +1425,8 @@ impl SessionBackend for SqliteSessionBackend {
     fn list_running_sessions(&self) -> Vec<SessionMetadata> {
         let conn = self.conn.lock();
         let mut stmt = match conn.prepare(
-            "SELECT session_key, created_at, last_activity, message_count, name, agent_alias, channel_id, room_id, sender_id, user_id, principal_id
+            "SELECT session_key, created_at, last_activity, message_count, name, agent_alias, channel_id, room_id, sender_id, user_id, principal_id,
+                display_name
              FROM session_metadata WHERE state = 'running' ORDER BY turn_started_at DESC",
         ) {
             Ok(s) => s,
@@ -1434,6 +1445,7 @@ impl SessionBackend for SqliteSessionBackend {
             let sender_id: Option<String> = row.get(8)?;
             let user_id: Option<String> = row.get(9)?;
             let principal_id: Option<String> = row.get(10)?;
+            let display_name: Option<String> = row.get(11)?;
             let created = DateTime::parse_from_rfc3339(&created_str)
                 .map(|dt| dt.with_timezone(&Utc))
                 .unwrap_or_else(|_| Utc::now());
@@ -1453,6 +1465,7 @@ impl SessionBackend for SqliteSessionBackend {
                 sender_id,
                 user_id,
                 principal_id,
+                display_name,
             })
         }) {
             Ok(r) => r,
@@ -1467,7 +1480,8 @@ impl SessionBackend for SqliteSessionBackend {
         #[allow(clippy::cast_possible_wrap)]
         let cutoff = (Utc::now() - chrono::Duration::seconds(threshold_secs as i64)).to_rfc3339();
         let mut stmt = match conn.prepare(
-            "SELECT session_key, created_at, last_activity, message_count, name, agent_alias, channel_id, room_id, sender_id, user_id, principal_id
+            "SELECT session_key, created_at, last_activity, message_count, name, agent_alias, channel_id, room_id, sender_id, user_id, principal_id,
+                display_name
              FROM session_metadata
              WHERE state = 'running' AND turn_started_at < ?1
              ORDER BY turn_started_at ASC",
@@ -1488,6 +1502,7 @@ impl SessionBackend for SqliteSessionBackend {
             let sender_id: Option<String> = row.get(8)?;
             let user_id: Option<String> = row.get(9)?;
             let principal_id: Option<String> = row.get(10)?;
+            let display_name: Option<String> = row.get(11)?;
             let created = DateTime::parse_from_rfc3339(&created_str)
                 .map(|dt| dt.with_timezone(&Utc))
                 .unwrap_or_else(|_| Utc::now());
@@ -1507,6 +1522,7 @@ impl SessionBackend for SqliteSessionBackend {
                 sender_id,
                 user_id,
                 principal_id,
+                display_name,
             })
         }) {
             Ok(r) => r,
@@ -1552,7 +1568,8 @@ impl SessionBackend for SqliteSessionBackend {
         keys.iter()
             .filter_map(|key| {
                 conn.query_row(
-                    "SELECT created_at, last_activity, message_count, name, agent_alias, channel_id, room_id, sender_id, user_id, principal_id FROM session_metadata WHERE session_key = ?1",
+                    "SELECT created_at, last_activity, message_count, name, agent_alias, channel_id, room_id, sender_id, user_id, principal_id,
+                display_name FROM session_metadata WHERE session_key = ?1",
                     params![key],
                     |row| {
                         let created_str: String = row.get(0)?;
@@ -1565,6 +1582,7 @@ impl SessionBackend for SqliteSessionBackend {
                         let sender_id: Option<String> = row.get(7)?;
                         let user_id: Option<String> = row.get(8)?;
                         let principal_id: Option<String> = row.get(9)?;
+                        let display_name: Option<String> = row.get(10)?;
                         Ok(SessionMetadata {
                             key: key.clone(),
                             name,
@@ -1582,6 +1600,7 @@ impl SessionBackend for SqliteSessionBackend {
                             sender_id,
                             user_id,
                             principal_id,
+                display_name,
                         })
                     },
                 )
@@ -1651,6 +1670,24 @@ impl SessionBackend for SqliteSessionBackend {
              VALUES (?1, ?2, ?3, 0, ?4)
              ON CONFLICT(session_key) DO UPDATE SET user_id = excluded.user_id",
             params![session_key, now, now, uid],
+        )
+        .map_err(std::io::Error::other)?;
+        Ok(())
+    }
+
+    fn set_session_display_name(
+        &self,
+        session_key: &str,
+        display_name: &str,
+    ) -> std::io::Result<()> {
+        let name = display_name.trim();
+        if name.is_empty() {
+            return Ok(());
+        }
+        let conn = self.conn.lock();
+        conn.execute(
+            "UPDATE session_metadata SET display_name = ?1 WHERE session_key = ?2",
+            params![name, session_key],
         )
         .map_err(std::io::Error::other)?;
         Ok(())

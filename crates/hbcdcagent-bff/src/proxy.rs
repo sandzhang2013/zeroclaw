@@ -1,8 +1,9 @@
 use crate::config::Config;
 use crate::error_page::{LoginErrorKind, login_error_response};
 use crate::identity::{
-    HEADER_AUTH_SECRET, HEADER_USER_ID, HEADER_USER_ORG, HEADER_USER_REGION, HEADER_USER_ROLE,
-    IDENTITY_HEADERS, Identity, MOCK_COOKIE_NAME, ROLE_OPS, mock_user, normalize_user_id,
+    HEADER_AUTH_SECRET, HEADER_USER_ID, HEADER_USER_NAME, HEADER_USER_ORG, HEADER_USER_REGION,
+    HEADER_USER_ROLE, IDENTITY_HEADERS, Identity, MOCK_COOKIE_NAME, ROLE_OPS, clean_display_name,
+    mock_user, normalize_user_id,
 };
 use crate::session::{
     STATE_TTL, SessionStore, append_clear_mock_cookies, append_set_cookie, cookie_value,
@@ -539,7 +540,10 @@ fn is_workbench_document(path: &str) -> bool {
     if path == workbench {
         return true;
     }
-    let Some(alias) = path.strip_prefix(workbench).and_then(|rest| rest.strip_prefix('/')) else {
+    let Some(alias) = path
+        .strip_prefix(workbench)
+        .and_then(|rest| rest.strip_prefix('/'))
+    else {
         return false;
     };
     is_safe_segment(alias)
@@ -645,6 +649,13 @@ pub fn inject_identity(headers: &mut HeaderMap, secret: &str, identity: &Identit
     headers.insert(HEADER_AUTH_SECRET, header_utf8(secret));
     headers.insert(HEADER_USER_ID, header_utf8(&identity.user_id));
     headers.insert(HEADER_USER_ROLE, header_utf8(&identity.role));
+    if let Some(name) = identity
+        .display_name
+        .as_deref()
+        .and_then(clean_display_name)
+    {
+        headers.insert(HEADER_USER_NAME, header_utf8(&name));
+    }
     if let Some(region) = &identity.region {
         headers.insert(HEADER_USER_REGION, header_utf8(region));
     }
@@ -827,13 +838,17 @@ mod tests {
         strip_identity(&mut headers);
         let id = Identity {
             user_id: "real".into(),
-            display_name: None,
+            display_name: Some("陈敏".into()),
             role: ROLE_NORMAL.into(),
             region: Some("武汉市".into()),
             org: None,
         };
         inject_identity(&mut headers, "secret", &id);
         assert_eq!(headers.get(HEADER_USER_ID).unwrap().as_bytes(), b"real");
+        assert_eq!(
+            std::str::from_utf8(headers.get(HEADER_USER_NAME).unwrap().as_bytes()).unwrap(),
+            "陈敏"
+        );
         assert_eq!(
             headers.get(HEADER_USER_REGION).unwrap().as_bytes(),
             "武汉市".as_bytes()

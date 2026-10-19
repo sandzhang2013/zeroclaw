@@ -5,6 +5,7 @@ pub const HEADER_USER_ID: &str = "x-user-id";
 pub const HEADER_USER_ROLE: &str = "x-user-role";
 pub const HEADER_USER_REGION: &str = "x-user-region";
 pub const HEADER_USER_ORG: &str = "x-user-org";
+pub const HEADER_USER_NAME: &str = "x-user-name";
 
 pub const IDENTITY_HEADERS: &[&str] = &[
     HEADER_AUTH_SECRET,
@@ -12,6 +13,7 @@ pub const IDENTITY_HEADERS: &[&str] = &[
     HEADER_USER_ROLE,
     HEADER_USER_REGION,
     HEADER_USER_ORG,
+    HEADER_USER_NAME,
 ];
 
 pub const ROLE_NORMAL: &str = "普通用户";
@@ -107,6 +109,16 @@ pub fn normalize_user_id(raw: &str) -> Result<String, UserIdError> {
         return Err(UserIdError);
     }
     Ok(trimmed.to_string())
+}
+
+/// Label safe to put on `X-User-Name`. Drops empty values and control characters.
+#[must_use]
+pub fn clean_display_name(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.chars().any(|c| c.is_control()) {
+        return None;
+    }
+    Some(trimmed.chars().take(64).collect())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

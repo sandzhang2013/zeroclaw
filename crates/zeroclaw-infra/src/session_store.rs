@@ -578,6 +578,7 @@ impl SessionBackend for SessionStore {
                     room_id: None,
                     sender_id: None,
                     principal_id: None,
+                    display_name: None,
                 }
             })
             .collect()

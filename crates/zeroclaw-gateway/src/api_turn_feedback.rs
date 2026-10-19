@@ -461,6 +461,8 @@ fn take_utf16_code_units(text: &str, max_units: usize) -> String {
 struct UsageDayRow {
     day: String,
     user_id: String,
+    /// Login name when one has been stored, otherwise the platform user id.
+    user_name: String,
     sessions: u32,
     asks: u32,
     replies: u32,
@@ -480,7 +482,7 @@ fn shanghai_day(instant: DateTime<Utc>) -> String {
 fn usage_from_backend(
     backend: &dyn zeroclaw_infra::session_backend::SessionBackend,
 ) -> Vec<UsageDayRow> {
-    let users: HashMap<String, String> = backend
+    let users: HashMap<String, (String, String)> = backend
         .list_sessions_with_metadata()
         .into_iter()
         .filter_map(|meta| {
@@ -489,7 +491,14 @@ fn usage_from_backend(
                 .as_deref()
                 .map(str::trim)
                 .filter(|id| !id.is_empty())?;
-            Some((meta.key, user_id.to_string()))
+            let user_name = meta
+                .display_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .unwrap_or(user_id)
+                .to_string();
+            Some((meta.key, (user_id.to_string(), user_name)))
         })
         .collect();
     let events = backend
@@ -497,18 +506,24 @@ fn usage_from_backend(
         .into_iter()
         .filter_map(|row| {
             let created_at = row.created_at?;
-            let user_id = users.get(&row.session_key)?.clone();
-            Some((user_id, row.session_key, row.role, created_at))
+            let (user_id, user_name) = users.get(&row.session_key)?.clone();
+            Some((user_id, user_name, row.session_key, row.role, created_at))
         })
         .collect();
     fold_usage(events)
 }
 
-fn fold_usage(events: Vec<(String, String, String, DateTime<Utc>)>) -> Vec<UsageDayRow> {
-    let mut grouped: HashMap<(String, String), (HashSet<String>, u32, u32)> = HashMap::new();
-    for (user_id, session_key, role, created_at) in events {
+fn fold_usage(events: Vec<(String, String, String, String, DateTime<Utc>)>) -> Vec<UsageDayRow> {
+    let mut grouped: HashMap<(String, String), (HashSet<String>, u32, u32, String)> =
+        HashMap::new();
+    for (user_id, user_name, session_key, role, created_at) in events {
         let day = shanghai_day(created_at);
-        let entry = grouped.entry((day, user_id)).or_default();
+        let entry = grouped
+            .entry((day, user_id.clone()))
+            .or_insert_with(|| (HashSet::new(), 0, 0, user_name.clone()));
+        if entry.3 == user_id && user_name != user_id {
+            entry.3 = user_name;
+        }
         entry.0.insert(session_key);
         match role.as_str() {
             "user" => entry.1 += 1,
@@ -518,13 +533,16 @@ fn fold_usage(events: Vec<(String, String, String, DateTime<Utc>)>) -> Vec<Usage
     }
     let mut rows: Vec<UsageDayRow> = grouped
         .into_iter()
-        .map(|((day, user_id), (sessions, asks, replies))| UsageDayRow {
-            day,
-            user_id,
-            sessions: sessions.len() as u32,
-            asks,
-            replies,
-        })
+        .map(
+            |((day, user_id), (sessions, asks, replies, user_name))| UsageDayRow {
+                day,
+                user_id,
+                user_name,
+                sessions: sessions.len() as u32,
+                asks,
+                replies,
+            },
+        )
         .collect();
     rows.sort_by(|left, right| {
         right
@@ -853,11 +871,41 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         let rows = fold_usage(vec![
-            ("alice".into(), "sess-1".into(), "user".into(), evening),
-            ("alice".into(), "sess-1".into(), "assistant".into(), evening),
-            ("alice".into(), "sess-2".into(), "user".into(), evening),
-            ("bob".into(), "sess-3".into(), "user".into(), after_midnight),
-            ("bob".into(), "sess-3".into(), "tool".into(), after_midnight),
+            (
+                "alice".into(),
+                "alice".into(),
+                "sess-1".into(),
+                "user".into(),
+                evening,
+            ),
+            (
+                "alice".into(),
+                "爱丽丝".into(),
+                "sess-1".into(),
+                "assistant".into(),
+                evening,
+            ),
+            (
+                "alice".into(),
+                "alice".into(),
+                "sess-2".into(),
+                "user".into(),
+                evening,
+            ),
+            (
+                "bob".into(),
+                "bob".into(),
+                "sess-3".into(),
+                "user".into(),
+                after_midnight,
+            ),
+            (
+                "bob".into(),
+                "bob".into(),
+                "sess-3".into(),
+                "tool".into(),
+                after_midnight,
+            ),
         ]);
         assert_eq!(
             rows,
@@ -865,6 +913,7 @@ mod tests {
                 UsageDayRow {
                     day: "2026-10-11".into(),
                     user_id: "bob".into(),
+                    user_name: "bob".into(),
                     sessions: 1,
                     asks: 1,
                     replies: 0,
@@ -872,6 +921,7 @@ mod tests {
                 UsageDayRow {
                     day: "2026-10-10".into(),
                     user_id: "alice".into(),
+                    user_name: "爱丽丝".into(),
                     sessions: 2,
                     asks: 2,
                     replies: 1,
@@ -893,6 +943,9 @@ mod tests {
             )
             .unwrap();
         backend.set_session_user_id("gw_sess-1", "chenmin").unwrap();
+        backend
+            .set_session_display_name("gw_sess-1", "陈敏")
+            .unwrap();
         backend
             .append(
                 "gw_sess-2",
@@ -916,6 +969,7 @@ mod tests {
         let rows = body["rows"].as_array().unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["user_id"], "chenmin");
+        assert_eq!(rows[0]["user_name"], "陈敏");
         assert_eq!(rows[0]["asks"], 1);
         assert_eq!(rows[0]["replies"], 0);
         assert_eq!(rows[0]["sessions"], 1);

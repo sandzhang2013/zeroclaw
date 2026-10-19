@@ -189,6 +189,8 @@ export interface Session {
   channel_id: string | null;
   /** Frozen BFF identity that stamped this session. Absent on pre-identity rows. */
   user_id?: string | null;
+  /** Login name stored for that identity. Absent until the user opens the workbench. */
+  user_name?: string | null;
 }
 
 export type ChannelReadinessState = 'ready' | 'missing' | 'unknown';

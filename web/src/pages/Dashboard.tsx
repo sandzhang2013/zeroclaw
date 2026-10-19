@@ -943,6 +943,14 @@ const SESSION_SORT_OPTIONS: { value: SessionSort; labelKey: string }[] = [
   { value: "messages-asc", labelKey: "dashboard.sort.quietest" },
 ];
 
+function sessionHeadline(session: Session): string {
+  const name = session.user_name?.trim();
+  if (!name) return session.session_id;
+  return t("dashboard.session_with_user")
+    .replace("{id}", session.session_id)
+    .replace("{name}", name);
+}
+
 function isSessionSort(v: string): v is SessionSort {
   return SESSION_SORT_OPTIONS.some((o) => o.value === v);
 }
@@ -1032,6 +1040,8 @@ function SessionsTab() {
           s.session_id,
           s.session_key,
           s.name ?? "",
+          s.user_name ?? "",
+          s.user_id ?? "",
           s.agent_alias ?? "",
           s.channel_id ?? "",
         ]
@@ -1258,7 +1268,7 @@ function SessionsTab() {
                     className="text-sm font-medium font-mono break-all"
                     style={{ color: "var(--pc-text-primary)" }}
                   >
-                    {session.session_id}
+                    {sessionHeadline(session)}
                   </span>
                   {session.agent_alias && (
                     <EntityLink
@@ -1348,7 +1358,7 @@ function SessionsTab() {
                   className="text-sm font-mono break-all"
                   style={{ color: "var(--pc-text-primary)" }}
                 >
-                  {inspect.session.session_id}
+                  {sessionHeadline(inspect.session)}
                 </p>
                 <div className="flex items-center gap-2 mt-1 flex-wrap">
                   {inspect.session.agent_alias && (

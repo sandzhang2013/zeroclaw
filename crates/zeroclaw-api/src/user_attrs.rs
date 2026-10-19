@@ -76,6 +76,16 @@ impl std::fmt::Display for UserIdError {
 
 impl std::error::Error for UserIdError {}
 
+/// Label safe to store and show. Control characters and an empty value are dropped.
+#[must_use]
+pub fn clean_display_name(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.chars().any(|c| c.is_control()) {
+        return None;
+    }
+    Some(trimmed.chars().take(64).collect())
+}
+
 /// Normalize a BFF `X-User-Id` before it enters paths or session keys.
 pub fn normalize_user_id(raw: &str) -> Result<String, UserIdError> {
     let trimmed = raw.trim();
@@ -101,6 +111,9 @@ pub struct UserAttrs {
     pub region: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub organization: Option<String>,
+    /// Workbench label (`realName` / `nickName`). Not used for isolation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
 }
 
 impl UserAttrs {
@@ -111,6 +124,7 @@ impl UserAttrs {
             role: None,
             region: None,
             organization: None,
+            display_name: None,
         }
     }
 
@@ -132,6 +146,12 @@ impl UserAttrs {
     pub fn with_organization(mut self, organization: impl Into<String>) -> Self {
         let organization = organization.into();
         self.organization = (!organization.is_empty()).then_some(organization);
+        self
+    }
+
+    #[must_use]
+    pub fn with_display_name(mut self, display_name: impl Into<String>) -> Self {
+        self.display_name = clean_display_name(&display_name.into());
         self
     }
 

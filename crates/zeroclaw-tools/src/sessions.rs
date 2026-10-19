@@ -1177,6 +1177,7 @@ mod tests {
             sender_id: None,
             user_id: None,
             principal_id: None,
+            display_name: None,
         }
     }
 
@@ -2186,6 +2187,7 @@ mod tests {
             sender_id: None,
             user_id: None,
             principal_id: None,
+            display_name: None,
         };
         let backend: Arc<dyn SessionBackend> =
             Arc::new(MetadataBackend::new(inner, vec![old_chat]));

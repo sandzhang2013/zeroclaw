@@ -38,6 +38,9 @@ pub struct SessionMetadata {
     /// (RFC 7141). `None` for sessions persisted before principal-keying
     /// landed, channel-originated sessions, or backends without the column.
     pub principal_id: Option<String>,
+    /// Login display name copied from the BFF. `None` until that user is seen
+    /// again. Usage shows this; isolation still uses `user_id`.
+    pub display_name: Option<String>,
 }
 
 /// A platform user owns a session when its roster principal matches, or when
@@ -199,6 +202,7 @@ pub trait SessionBackend: Send + Sync {
                     sender_id: None,
                     user_id: None,
                     principal_id: None,
+                    display_name: None,
                 }
             })
             .collect()
@@ -276,6 +280,15 @@ pub trait SessionBackend: Send + Sync {
 
     /// Stamp the BFF-frozen user id on a session. Default is a no-op.
     fn set_session_user_id(&self, _session_key: &str, _user_id: &str) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    /// Store the login display name. Default is a no-op.
+    fn set_session_display_name(
+        &self,
+        _session_key: &str,
+        _display_name: &str,
+    ) -> std::io::Result<()> {
         Ok(())
     }
 
@@ -397,6 +410,7 @@ pub trait SessionBackend: Send + Sync {
             sender_id: None,
             user_id: None,
             principal_id: None,
+            display_name: None,
         })
     }
 
@@ -486,6 +500,7 @@ mod tests {
             sender_id: None,
             user_id: None,
             principal_id: None,
+            display_name: None,
         };
         assert_eq!(meta.key, "test");
         assert_eq!(meta.message_count, 5);

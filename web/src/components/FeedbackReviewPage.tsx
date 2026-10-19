@@ -83,7 +83,7 @@ function downloadUsage(report: TurnUsageReport) {
     usageDailyCsv(
       report.rows.map((row) => ({
         day: row.day,
-        userId: row.user_id,
+        userId: row.user_name || row.user_id,
         sessions: row.sessions,
         asks: row.asks,
         replies: row.replies,
@@ -355,7 +355,7 @@ function UsageTable({ report, failed }: { report: TurnUsageReport | null; failed
         {report.rows.map((row) => (
           <tr key={`${row.day}:${row.user_id}`} className="border-t border-pc-border">
             <td className="py-2 pr-3 tabular-nums text-pc-text">{row.day}</td>
-            <td className="py-2 pr-3 text-pc-text">{row.user_id}</td>
+            <td className="py-2 pr-3 text-pc-text">{row.user_name || row.user_id}</td>
             <td className="py-2 pr-3 tabular-nums text-pc-text">{row.sessions}</td>
             <td className="py-2 pr-3 tabular-nums text-pc-text">{row.asks}</td>
             <td className="py-2 tabular-nums text-pc-text">{row.replies}</td>

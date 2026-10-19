@@ -1783,6 +1783,7 @@ fn require_session_access(
                 backend,
                 session_key,
                 &attrs.user_id,
+                attrs.display_name.as_deref(),
             );
             Ok(())
         }
@@ -1817,6 +1818,13 @@ pub async fn handle_api_sessions_list(
     // or a channel_id that resolves to an owning agent).
     // Pre-migration rows with neither set are skipped as orphans.
     let config = state.config.read().clone();
+    if let Some(attrs) = &attrs {
+        crate::trusted_proxy::remember_display_name(
+            backend.as_ref(),
+            &attrs.user_id,
+            attrs.display_name.as_deref(),
+        );
+    }
     let all_metadata = match &attrs {
         Some(a) if !a.is_ops() => backend.list_sessions_for_user(&a.user_id),
         _ => backend.list_sessions_with_metadata(),
@@ -1859,6 +1867,14 @@ pub async fn handle_api_sessions_list(
             }
             if let Some(user_id) = meta.user_id {
                 entry["user_id"] = serde_json::Value::String(user_id);
+            }
+            if let Some(user_name) = meta
+                .display_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+            {
+                entry["user_name"] = serde_json::Value::String(user_name.to_string());
             }
             entry
         })
@@ -3828,6 +3844,9 @@ pub(crate) mod tests {
             .unwrap();
         backend.set_session_agent_alias("gw_bob-s", "web").unwrap();
         backend.set_session_user_id("gw_alice-s", "alice").unwrap();
+        backend
+            .set_session_display_name("gw_alice-s", "爱丽丝")
+            .unwrap();
         backend.set_session_user_id("gw_bob-s", "bob").unwrap();
         let state = test_state_with_session_backend(config, backend);
 
@@ -3840,6 +3859,7 @@ pub(crate) mod tests {
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0]["session_id"], "alice-s");
         assert_eq!(sessions[0]["user_id"], "alice");
+        assert_eq!(sessions[0]["user_name"], "爱丽丝");
     }
 
     #[tokio::test]

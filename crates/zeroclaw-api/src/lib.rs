@@ -31,8 +31,8 @@ pub mod vad;
 pub mod webhook;
 
 pub use user_attrs::{
-    ROLE_ADVANCED, ROLE_NORMAL, ROLE_OPS, UserAttrs, UserIdError, current_user_attrs, mcp_identity,
-    normalize_user_id,
+    ROLE_ADVANCED, ROLE_NORMAL, ROLE_OPS, UserAttrs, UserIdError, clean_display_name,
+    current_user_attrs, mcp_identity, normalize_user_id,
 };
 
 tokio::task_local! {

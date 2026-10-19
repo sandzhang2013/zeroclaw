@@ -536,6 +536,7 @@ async fn handle_socket(
                         backend.as_ref(),
                         &session_key,
                         &attrs.user_id,
+                        attrs.display_name.as_deref(),
                     );
                 }
                 Ok(false) => {
@@ -548,6 +549,11 @@ async fn handle_socket(
                             &crate::trusted_proxy::roster_principal_id(&attrs.user_id),
                         );
                     }
+                    crate::trusted_proxy::remember_display_name(
+                        backend.as_ref(),
+                        &attrs.user_id,
+                        attrs.display_name.as_deref(),
+                    );
                 }
             }
         }
