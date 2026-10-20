@@ -870,7 +870,8 @@ impl BrowserTool {
         }
 
         // Resolve relative / tilde paths against the workspace directory.
-        let full = self.security.resolve_tool_path(raw_path);
+        // Session turns rebase generated files into the session directory.
+        let full = self.security.resolve_session_write_path(raw_path);
 
         // The file does not exist yet, so canonicalize the *parent* directory
         // to verify it is inside the workspace allowlist.

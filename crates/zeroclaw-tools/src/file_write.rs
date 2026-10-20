@@ -172,7 +172,7 @@ impl Tool for FileWriteTool {
             });
         }
 
-        let full_path = self.security.resolve_tool_path(path);
+        let full_path = self.security.resolve_session_write_path(path);
 
         let Some(parent) = full_path.parent() else {
             return Ok(ToolResult {
@@ -282,7 +282,7 @@ impl Tool for FileWriteTool {
         let capability_root = canonical_ancestor;
         let capability_relative = capability_relative.to_path_buf();
         let file_name = file_name.to_os_string();
-        let display_path = path.to_owned();
+        let written_message = format!("Written {} bytes to {written_path}", bytes.len());
         tokio::task::spawn_blocking(move || {
             let parent_dir = match create_dir_beneath(&capability_root, &capability_relative) {
                 Ok(dir) => dir,
@@ -337,7 +337,7 @@ impl Tool for FileWriteTool {
                         "mimeType": mime,
                         "bytes": bytes.len() as u64,
                     }),
-                    format!("Written {} bytes to {display_path}", bytes.len()),
+                    written_message,
                 ),
                 error: None,
             })
@@ -512,6 +512,77 @@ mod tests {
         assert_eq!(content, "written!");
 
         let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn file_write_puts_workspace_root_report_in_the_session_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root
+            .path()
+            .join("agents")
+            .join("deepseek")
+            .join("workspace");
+        let session = workspace.join("sessions").join("s1");
+        tokio::fs::create_dir_all(&session).await.unwrap();
+        tokio::fs::create_dir_all(workspace.join("skills").join("report"))
+            .await
+            .unwrap();
+        let security = Arc::new(SecurityPolicy {
+            autonomy: AutonomyLevel::Supervised,
+            workspace_dir: session.clone(),
+            allowed_roots: vec![workspace.clone()],
+            ..SecurityPolicy::default()
+        });
+        let tool = FileWriteTool::new(security);
+        let report_name = "湖北省武汉市疫情周报_2026W42.html";
+        let requested = workspace.join(report_name);
+        let result = tool
+            .execute(json!({
+                "path": requested.to_str().unwrap(),
+                "content": "<html>ok</html>"
+            }))
+            .await
+            .unwrap();
+        assert!(result.success, "{result:?}");
+        let session_file = session.join(report_name);
+        let body = tokio::fs::read_to_string(&session_file).await.unwrap();
+        assert_eq!(body, "<html>ok</html>");
+        assert!(!requested.exists());
+        let reported = result.output.data().unwrap()["path"]
+            .as_str()
+            .unwrap()
+            .replace('\\', "/");
+        assert!(
+            reported.ends_with(&format!("sessions/s1/{report_name}")),
+            "tool reported {reported}"
+        );
+
+        let relative = tool
+            .execute(json!({"path": "notes.txt", "content": "n"}))
+            .await
+            .unwrap();
+        assert!(relative.success, "{relative:?}");
+        assert_eq!(
+            tokio::fs::read_to_string(session.join("notes.txt"))
+                .await
+                .unwrap(),
+            "n"
+        );
+
+        let skill_note = workspace.join("skills").join("report").join("note.txt");
+        let skill_write = tool
+            .execute(json!({
+                "path": skill_note.to_str().unwrap(),
+                "content": "skill"
+            }))
+            .await
+            .unwrap();
+        assert!(skill_write.success, "{skill_write:?}");
+        assert_eq!(
+            tokio::fs::read_to_string(&skill_note).await.unwrap(),
+            "skill"
+        );
+        assert!(!session.join("note.txt").exists());
     }
 
     #[tokio::test]

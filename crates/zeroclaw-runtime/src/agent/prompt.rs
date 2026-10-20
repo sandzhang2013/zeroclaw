@@ -509,6 +509,7 @@ impl PromptSection for WorkspaceSection {
     fn build(&self, ctx: &PromptContext<'_>) -> Result<String> {
         Ok(format!(
             "## Workspace\n\nWorking directory: `{}`\n\n\
+             Write new files in this directory so they appear as session artifacts.\n\
              Skill files are not in this directory. Read and run them from each skill's `<directory>`.",
             ctx.workspace_dir.display()
         ))

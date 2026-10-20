@@ -916,6 +916,138 @@ pub fn session_parent_workspace(cwd: &Path) -> Option<&Path> {
     sessions_dir.parent()
 }
 
+fn spill_root_is_specific(root: &Path) -> bool {
+    root.components()
+        .filter(|component| matches!(component, std::path::Component::Normal(_)))
+        .count()
+        >= 2
+}
+
+fn collect_spill_files(root: &Path, out: &mut std::collections::HashSet<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with('.') || name == "skills" || name == "sessions" {
+            continue;
+        }
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_symlink() {
+            continue;
+        }
+        if file_type.is_dir() {
+            collect_spill_files(&entry.path(), out);
+        } else if file_type.is_file() {
+            out.insert(entry.path());
+        }
+    }
+}
+
+fn move_spill_file(from: &Path, to: &Path) -> bool {
+    if let Some(parent) = to.parent()
+        && std::fs::create_dir_all(parent).is_err()
+    {
+        return false;
+    }
+    if std::fs::rename(from, to).is_ok() {
+        return true;
+    }
+    if std::fs::copy(from, to).is_ok() {
+        return std::fs::remove_file(from).is_ok();
+    }
+    false
+}
+
+fn remove_empty_spill_dirs(start: Option<&Path>, root: &Path) {
+    let Some(start) = start else {
+        return;
+    };
+    let mut current = start.to_path_buf();
+    while current.as_path() != root {
+        if std::fs::remove_dir(&current).is_err() {
+            break;
+        }
+        let Some(parent) = current.parent().map(Path::to_path_buf) else {
+            break;
+        };
+        current = parent;
+    }
+}
+
+fn replace_generated_root(command: &str, root: &str, session: &str) -> String {
+    let mut out = String::with_capacity(command.len());
+    let bytes = command.as_bytes();
+    let mut index = 0;
+    while index < command.len() {
+        if command[index..].starts_with(root) && path_boundary_before(bytes, index) {
+            let after = &command[index + root.len()..];
+            if is_generated_tail(after) {
+                out.push_str(session);
+                index += root.len();
+                continue;
+            }
+            if is_preserved_spill_tail(after) {
+                out.push_str(root);
+                index += root.len();
+                continue;
+            }
+        }
+        let Some(ch) = command[index..].chars().next() else {
+            break;
+        };
+        out.push(ch);
+        index += ch.len_utf8();
+    }
+    out
+}
+
+fn path_boundary_before(bytes: &[u8], index: usize) -> bool {
+    if index == 0 {
+        return true;
+    }
+    let previous = bytes[index - 1];
+    !previous.is_ascii_alphanumeric()
+        && previous != b'/'
+        && previous != b'\\'
+        && previous != b'_'
+        && previous != b'.'
+        && previous != b'-'
+}
+
+fn is_generated_tail(after: &str) -> bool {
+    let Some(rest) = strip_path_sep(after) else {
+        return false;
+    };
+    !is_skills_or_sessions(rest)
+}
+
+fn is_preserved_spill_tail(after: &str) -> bool {
+    let Some(rest) = strip_path_sep(after) else {
+        return false;
+    };
+    is_skills_or_sessions(rest)
+}
+
+fn strip_path_sep(after: &str) -> Option<&str> {
+    match after.chars().next() {
+        Some('/' | '\\') => Some(&after[1..]),
+        _ => None,
+    }
+}
+
+fn is_skills_or_sessions(rest: &str) -> bool {
+    rest == "skills"
+        || rest.starts_with("skills/")
+        || rest.starts_with("skills\\")
+        || rest == "sessions"
+        || rest.starts_with("sessions/")
+        || rest.starts_with("sessions\\")
+}
+
 fn rootless_path(path: &Path) -> Option<PathBuf> {
     let mut relative = PathBuf::new();
 
@@ -4548,6 +4680,145 @@ impl SecurityPolicy {
             }
         }
         joined
+    }
+
+    /// Write target for a session turn. Relative paths already land in
+    /// `workspace_dir`. Absolute writes under the parent workspace or another
+    /// allowed root (except `skills/` and `sessions/`) are rebased into the
+    /// session directory so the file shows up as a session artifact.
+    pub fn resolve_session_write_path(&self, path: &str) -> PathBuf {
+        let resolved = self.resolve_tool_path(path);
+        self.rebase_generated_write(&resolved).unwrap_or(resolved)
+    }
+
+    /// Rewrite absolute output paths in a shell command the same way as
+    /// [`Self::resolve_session_write_path`]. Skill and session paths stay put.
+    #[must_use]
+    pub fn rewrite_generated_output_paths(&self, command: &str) -> String {
+        if session_parent_workspace(&self.workspace_dir).is_none() {
+            return command.to_string();
+        }
+        let session = self.workspace_dir.to_string_lossy();
+        let session = session.trim_end_matches(['/', '\\']);
+        let mut roots: Vec<String> = self
+            .generated_spill_roots()
+            .into_iter()
+            .map(|root| {
+                root.to_string_lossy()
+                    .trim_end_matches(['/', '\\'])
+                    .to_string()
+            })
+            .filter(|root| !root.is_empty() && root != session)
+            .collect();
+        roots.sort_by_key(|root| std::cmp::Reverse(root.len()));
+        roots.dedup();
+        let mut rewritten = command.to_string();
+        for root in roots {
+            rewritten = replace_generated_root(&rewritten, &root, session);
+        }
+        rewritten
+    }
+
+    /// Files already sitting in spill roots before a shell command.
+    /// `skills/` and `sessions/` are excluded; those trees are not artifacts.
+    #[must_use]
+    pub fn spill_file_snapshot(&self) -> std::collections::HashSet<PathBuf> {
+        let mut existing = std::collections::HashSet::new();
+        for root in self.generated_spill_roots() {
+            collect_spill_files(&root, &mut existing);
+        }
+        existing
+    }
+
+    /// Move files created under a spill root during this turn into the session
+    /// directory, keeping the relative path. Skill trees, the `sessions/` tree,
+    /// and files that already existed stay where they are.
+    pub fn relocate_new_spill_files(
+        &self,
+        before: &std::collections::HashSet<PathBuf>,
+    ) -> Vec<(PathBuf, PathBuf)> {
+        let mut moved = Vec::new();
+        if session_parent_workspace(&self.workspace_dir).is_none() {
+            return moved;
+        }
+        for root in self.generated_spill_roots() {
+            let mut found = std::collections::HashSet::new();
+            collect_spill_files(&root, &mut found);
+            for path in found {
+                if before.contains(&path) {
+                    continue;
+                }
+                let Ok(relative) = path.strip_prefix(&root) else {
+                    continue;
+                };
+                if relative.as_os_str().is_empty() {
+                    continue;
+                }
+                let dest = self.workspace_dir.join(relative);
+                if dest.exists() {
+                    continue;
+                }
+                if move_spill_file(&path, &dest) {
+                    remove_empty_spill_dirs(path.parent(), &root);
+                    moved.push((path, dest));
+                }
+            }
+        }
+        moved
+    }
+
+    fn rebase_generated_write(&self, path: &Path) -> Option<PathBuf> {
+        if session_parent_workspace(&self.workspace_dir).is_none() {
+            return None;
+        }
+        if path.starts_with(&self.workspace_dir) {
+            return None;
+        }
+        let mut best: Option<PathBuf> = None;
+        for root in self.generated_spill_roots() {
+            let Ok(relative) = path.strip_prefix(&root) else {
+                continue;
+            };
+            if relative.as_os_str().is_empty() {
+                continue;
+            }
+            let Some(first) = relative.components().next() else {
+                continue;
+            };
+            if first.as_os_str() == "skills" || first.as_os_str() == "sessions" {
+                continue;
+            }
+            let replace = match &best {
+                Some(current) => relative.components().count() < current.components().count(),
+                None => true,
+            };
+            if replace {
+                best = Some(relative.to_path_buf());
+            }
+        }
+        best.map(|relative| self.workspace_dir.join(relative))
+    }
+
+    /// Directories whose new top-level files belong in the session directory:
+    /// the parent of `…/sessions/<id>`, plus allowed roots that are not
+    /// ancestors of that session.
+    fn generated_spill_roots(&self) -> Vec<PathBuf> {
+        let Some(parent) = session_parent_workspace(&self.workspace_dir) else {
+            return Vec::new();
+        };
+        let mut roots = Vec::new();
+        if spill_root_is_specific(parent) {
+            roots.push(parent.to_path_buf());
+        }
+        for root in &self.allowed_roots {
+            if !spill_root_is_specific(root) || self.workspace_dir.starts_with(root) {
+                continue;
+            }
+            roots.push(root.clone());
+        }
+        roots.sort();
+        roots.dedup();
+        roots
     }
 
     pub fn is_under_allowed_root(&self, path: &str) -> bool {
@@ -9488,6 +9759,101 @@ mod tests {
             ..SecurityPolicy::default()
         };
         assert_eq!(p.resolve_tool_path("skills/report/references"), skill_ref);
+    }
+
+    #[test]
+    fn resolve_session_write_path_moves_workspace_root_file_into_session() {
+        let session = PathBuf::from("/root/.zeroclaw/agents/deepseek/workspace/sessions/s1");
+        let policy = SecurityPolicy {
+            workspace_dir: session.clone(),
+            allowed_roots: vec![PathBuf::from("/root/.zeroclaw/agents/deepseek/workspace")],
+            ..SecurityPolicy::default()
+        };
+        let written = policy.resolve_session_write_path(
+            "/root/.zeroclaw/agents/deepseek/workspace/湖北省武汉市疫情周报_2026W42.html",
+        );
+        assert_eq!(written, session.join("湖北省武汉市疫情周报_2026W42.html"));
+        assert_eq!(
+            policy.resolve_session_write_path(
+                "/root/.zeroclaw/agents/deepseek/workspace/skills/report/run.py"
+            ),
+            PathBuf::from("/root/.zeroclaw/agents/deepseek/workspace/skills/report/run.py")
+        );
+        let existing = session.join("already.html");
+        assert_eq!(
+            policy.resolve_session_write_path(existing.to_str().unwrap()),
+            existing
+        );
+    }
+
+    #[test]
+    fn resolve_session_write_path_moves_shared_agent_workspace_into_user_session() {
+        let session =
+            PathBuf::from("/root/.zeroclaw/users/alice/agents/deepseek/workspace/sessions/s1");
+        let policy = SecurityPolicy {
+            workspace_dir: session.clone(),
+            allowed_roots: vec![PathBuf::from("/root/.zeroclaw/agents/deepseek/workspace")],
+            ..SecurityPolicy::default()
+        };
+        assert_eq!(
+            policy.resolve_session_write_path(
+                "/root/.zeroclaw/agents/deepseek/workspace/report.html"
+            ),
+            session.join("report.html")
+        );
+        assert_eq!(
+            policy.resolve_session_write_path(
+                "/root/.zeroclaw/users/alice/agents/deepseek/workspace/report.html"
+            ),
+            session.join("report.html")
+        );
+    }
+
+    #[test]
+    fn rewrite_generated_output_paths_rewrites_report_and_keeps_skill_path() {
+        let policy = SecurityPolicy {
+            workspace_dir: PathBuf::from("/root/.zeroclaw/agents/deepseek/workspace/sessions/s1"),
+            allowed_roots: vec![PathBuf::from("/root/.zeroclaw/agents/deepseek/workspace")],
+            ..SecurityPolicy::default()
+        };
+        let command = "python3 /root/.zeroclaw/agents/deepseek/workspace/skills/report/run.py > /root/.zeroclaw/agents/deepseek/workspace/report.html";
+        let rewritten = policy.rewrite_generated_output_paths(command);
+        assert!(rewritten.contains("/workspace/skills/report/run.py"));
+        assert!(rewritten.contains("/workspace/sessions/s1/report.html"));
+        assert!(!rewritten.contains("/workspace/report.html"));
+    }
+
+    #[test]
+    fn relocate_new_spill_files_moves_only_new_root_files() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("workspace");
+        let session = workspace.join("sessions").join("s1");
+        std::fs::create_dir_all(&session).unwrap();
+        std::fs::create_dir_all(workspace.join("skills")).unwrap();
+        std::fs::write(workspace.join("old.txt"), b"old").unwrap();
+        let policy = SecurityPolicy {
+            workspace_dir: session.clone(),
+            allowed_roots: vec![workspace.clone()],
+            ..SecurityPolicy::default()
+        };
+        let before = policy.spill_file_snapshot();
+        std::fs::write(workspace.join("report.html"), b"hi").unwrap();
+        std::fs::create_dir_all(workspace.join("output")).unwrap();
+        std::fs::write(workspace.join("output").join("chart.html"), b"chart").unwrap();
+        std::fs::write(workspace.join("skills").join("new.txt"), b"no").unwrap();
+        std::fs::write(session.join("keep.txt"), b"stay").unwrap();
+        let moved = policy.relocate_new_spill_files(&before);
+        assert_eq!(moved.len(), 2);
+        assert_eq!(std::fs::read(session.join("report.html")).unwrap(), b"hi");
+        assert_eq!(
+            std::fs::read(session.join("output").join("chart.html")).unwrap(),
+            b"chart"
+        );
+        assert!(!workspace.join("report.html").exists());
+        assert!(!workspace.join("output").exists());
+        assert!(workspace.join("old.txt").is_file());
+        assert!(workspace.join("skills").join("new.txt").is_file());
+        assert_eq!(std::fs::read(session.join("keep.txt")).unwrap(), b"stay");
     }
 
     #[test]

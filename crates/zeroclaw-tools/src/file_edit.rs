@@ -135,7 +135,7 @@ impl FileEditTool {
         // RateLimitedTool + PathGuardedTool wrappers at registration time
         // (see zeroclaw-runtime::tools::mod).
 
-        let full_path = self.security.resolve_tool_path(path);
+        let full_path = self.security.resolve_session_write_path(path);
 
         // ── 5. Canonicalise parent ─────────────────────────────────
         let Some(parent) = full_path.parent() else {

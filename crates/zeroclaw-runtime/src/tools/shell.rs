@@ -226,6 +226,7 @@ impl Tool for ShellTool {
                 anyhow::Error::msg("Missing 'command' parameter")
             })?;
         let command = crate::skills::rewrite_session_skill_cd(command, &self.security);
+        let command = self.security.rewrite_generated_output_paths(&command);
         let approved = args
             .get("approved")
             .and_then(|v| v.as_bool())
@@ -348,6 +349,7 @@ impl Tool for ShellTool {
         cmd.stderr(std::process::Stdio::piped());
         cmd.stdin(std::process::Stdio::null());
 
+        let spill_before = self.security.spill_file_snapshot();
         let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => {
@@ -416,6 +418,15 @@ impl Tool for ShellTool {
                     }
                 }
             };
+
+        let moved = self.security.relocate_new_spill_files(&spill_before);
+        if !moved.is_empty() {
+            let mut note = String::from("\n[session-output] wrote into the session directory:");
+            for (from, to) in &moved {
+                note.push_str(&format!("\n{} -> {}", from.display(), to.display()));
+            }
+            result.output = format!("{}{note}", result.output.as_str()).into();
+        }
 
         // The command ran inside an ephemeral workspace: any files it wrote are
         // invisible on the host and discarded at session end
@@ -642,6 +653,10 @@ mod tests {
             crate::agent::loop_::scope_session_key(Some(String::new()), async { get_session_id() })
                 .await;
         assert_eq!(got, None);
+    }
+
+    fn shell_single_quote(path: &std::path::Path) -> String {
+        format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
     }
 
     fn test_security(autonomy: AutonomyLevel) -> Arc<SecurityPolicy> {
@@ -892,6 +907,78 @@ mod tests {
         assert!(result.success);
         assert!(result.output.trim().contains("hello"));
         assert!(result.error.is_none());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shell_session_output_lands_in_the_session_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root
+            .path()
+            .join("agents")
+            .join("deepseek")
+            .join("workspace");
+        let session = workspace.join("sessions").join("s1");
+        let skill_dir = workspace.join("skills").join("report");
+        std::fs::create_dir_all(&session).unwrap();
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        let report_name = "湖北省武汉市疫情周报_2026W42.html";
+        let script = skill_dir.join("run.sh");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\n\
+                 here=$(CDPATH= cd -- \"$(dirname \"$0\")\" && pwd)\n\
+                 root=$(CDPATH= cd -- \"$here/../..\" && pwd)\n\
+                 printf weekly > \"$root/{report_name}\"\n\
+                 mkdir -p \"$root/output\"\n\
+                 printf nested > \"$root/output/chart.html\"\n"
+            ),
+        )
+        .unwrap();
+
+        let security = Arc::new(SecurityPolicy {
+            autonomy: AutonomyLevel::Full,
+            workspace_dir: session.clone(),
+            allowed_roots: vec![workspace.clone()],
+            allowed_commands: vec!["*".into()],
+            block_high_risk_commands: false,
+            ..SecurityPolicy::default()
+        });
+        let tool = ShellTool::new(security, test_runtime());
+
+        let direct = workspace.join("direct.html");
+        let redirect = tool
+            .execute(json!({
+                "command": format!("printf direct > {}", shell_single_quote(&direct))
+            }))
+            .await
+            .unwrap();
+        assert!(redirect.success, "{redirect:?}");
+        assert_eq!(
+            std::fs::read_to_string(session.join("direct.html")).unwrap(),
+            "direct"
+        );
+        assert!(!direct.exists());
+
+        let generated = tool
+            .execute(json!({
+                "command": format!("sh {}", shell_single_quote(&script))
+            }))
+            .await
+            .unwrap();
+        assert!(generated.success, "{generated:?}");
+        assert_eq!(
+            std::fs::read_to_string(session.join(report_name)).unwrap(),
+            "weekly"
+        );
+        assert_eq!(
+            std::fs::read_to_string(session.join("output").join("chart.html")).unwrap(),
+            "nested"
+        );
+        assert!(!workspace.join(report_name).exists());
+        assert!(!workspace.join("output").exists());
+        assert!(script.is_file());
     }
 
     #[cfg(windows)]

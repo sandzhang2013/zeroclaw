@@ -1875,6 +1875,7 @@ pub(crate) fn skills_to_prompt_with_mode_and_availability(
              Follow these instructions directly; do not read skill files at runtime unless the user asks.\n\
              Skills are zero-copy: bundled scripts, templates, and references stay in `<directory>`.\n\
              Run them by absolute path under that directory. Relative paths in the skill resolve against `<directory>`, not the session working directory. Do not copy skill files into the workspace.\n\
+             Write generated artifacts (reports, HTML, data files) in the session working directory. Do not write them in `<directory>` or its parent folder.\n\
              Do not `cd` into `<directory>` (`cd` is not an allowed command). Use that absolute path for `file_read`, `content_search`, `ls`, and `grep`. Do not list the skill tree to discover files.\n\n\
              <available_skills>\n",
         )
@@ -1885,6 +1886,7 @@ pub(crate) fn skills_to_prompt_with_mode_and_availability(
              Skill instructions are loaded on demand: call `read_skill(name)` with the skill's `<name>` when you need the full skill file.\n\
              Skills marked `always` include full instructions below even in compact mode.\n\
              `<directory>` is the skill's original folder; run bundled scripts from there by absolute path. Do not copy them into the session working directory.\n\
+             Write generated artifacts (reports, HTML, data files) in the session working directory. Do not write them in `<directory>` or its parent folder.\n\
              Do not `cd` into `<directory>`. Use that absolute path for `file_read`, `content_search`, `grep`, and `python3`. Do not list the skill tree to discover files.\n\
              The `location` field is included for reference.\n\n\
              <available_skills>\n",

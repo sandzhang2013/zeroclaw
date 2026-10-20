@@ -515,7 +515,7 @@ impl Tool for FileDownloadTool {
 
         // The downloaded bytes are attacker-influenceable, so the write target
         // must resolve inside the workspace allowlist before any network call.
-        let full = self.security.resolve_tool_path(dest_path);
+        let full = self.security.resolve_session_write_path(dest_path);
 
         let file_name = match full.file_name().and_then(|s| s.to_str()) {
             Some(name) if name != "." && name != ".." => name.to_string(),
