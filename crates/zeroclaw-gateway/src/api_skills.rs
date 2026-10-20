@@ -467,8 +467,10 @@ pub(crate) fn write_personal_skill_file(
 }
 
 pub(crate) const MAX_SKILL_PACKAGE_FILES: usize = 512;
-pub(crate) const MAX_SKILL_PACKAGE_FILE_BYTES: usize = 8 * 1024 * 1024;
-pub(crate) const MAX_SKILL_PACKAGE_BYTES: usize = 8 * 1024 * 1024;
+pub(crate) const MAX_SKILL_PACKAGE_FILE_BYTES: usize = 32 * 1024 * 1024;
+pub(crate) const MAX_SKILL_PACKAGE_BYTES: usize = 32 * 1024 * 1024;
+/// Import posts the package as base64 JSON. 32 MiB of files is about 43 MiB on the wire.
+pub(crate) const MAX_SKILL_PACKAGE_HTTP_BYTES: usize = 48 * 1024 * 1024;
 
 fn write_skill_package(
     dir: &std::path::Path,
@@ -2556,5 +2558,136 @@ mod tests {
         );
         assert!(skill_dir.join(".disabled").is_file());
         assert!(!skill_dir.join("old.py").exists());
+    }
+
+    #[tokio::test]
+    async fn skill_import_accepts_nine_mib_past_the_old_body_cap() {
+        use crate::api::test_state;
+        use axum::body::Body;
+        use axum::extract::DefaultBodyLimit;
+        use axum::routing::post;
+        use axum::Router;
+        use base64::Engine;
+        use tower::ServiceExt;
+        use tower_http::limit::RequestBodyLimitLayer;
+        use zeroclaw_config::schema::AliasedAgentConfig;
+
+        // Base64 of 32 MiB is ~43 MiB. The HTTP ceiling has to sit above that.
+        assert!(
+            MAX_SKILL_PACKAGE_HTTP_BYTES >= MAX_SKILL_PACKAGE_BYTES.div_ceil(3) * 4,
+            "http ceiling {} cannot carry base64 of {}",
+            MAX_SKILL_PACKAGE_HTTP_BYTES,
+            MAX_SKILL_PACKAGE_BYTES
+        );
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut config = zeroclaw_config::schema::Config {
+            data_dir: tmp.path().join("data"),
+            config_path: tmp.path().join("config.toml"),
+            ..zeroclaw_config::schema::Config::default()
+        };
+        config.gateway.trusted_proxy = true;
+        config.gateway.trusted_proxy_secret = Some("s3cret".into());
+        config
+            .agents
+            .insert("web".into(), AliasedAgentConfig::default());
+        let state = test_state(config);
+
+        let router = Router::new()
+            .route(
+                "/api/user/skills",
+                post(handle_save_personal_skill).layer(DefaultBodyLimit::max(
+                    MAX_SKILL_PACKAGE_HTTP_BYTES,
+                )),
+            )
+            .with_state(state.clone())
+            .layer(RequestBodyLimitLayer::new(MAX_SKILL_PACKAGE_HTTP_BYTES));
+
+        let skill_md = "---\nname: big-skill\ndescription: a large data file\n---\n\n# big\n";
+        let nine = vec![b'a'; 9 * 1024 * 1024];
+        let payload = serde_json::json!({
+            "agent": "web",
+            "name": "big-skill",
+            "files": [
+                {"path": "SKILL.md", "data_base64": base64::engine::general_purpose::STANDARD.encode(skill_md)},
+                {"path": "data.bin", "data_base64": base64::engine::general_purpose::STANDARD.encode(&nine)},
+            ]
+        });
+        let body = serde_json::to_vec(&payload).unwrap();
+        let old_cap = 12 * 1024 * 1024;
+        assert!(
+            body.len() > old_cap,
+            "9 MiB file encodes to {} bytes, which must exceed the old {old_cap} byte cap",
+            body.len()
+        );
+        assert!(body.len() <= MAX_SKILL_PACKAGE_HTTP_BYTES);
+
+        let response = router
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/api/user/skills")
+                    .header("content-type", "application/json")
+                    .header("x-auth-secret", "s3cret")
+                    .header("x-user-id", "alice")
+                    .header("x-user-role", "普通用户")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let text = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            status,
+            StatusCode::CREATED,
+            "{}",
+            String::from_utf8_lossy(&text)
+        );
+        let saved = state
+            .config
+            .read()
+            .user_workspace_dir("alice", "web")
+            .join("skills")
+            .join("big-skill")
+            .join("data.bin");
+        assert_eq!(std::fs::metadata(&saved).unwrap().len(), nine.len() as u64);
+
+        let over = vec![b'b'; MAX_SKILL_PACKAGE_FILE_BYTES + 1];
+        let rejected_file = write_skill_package(
+            &tmp.path().join("over"),
+            &[
+                PersonalSkillPackageFile {
+                    path: "SKILL.md".into(),
+                    data_base64: base64::engine::general_purpose::STANDARD.encode(skill_md),
+                },
+                PersonalSkillPackageFile {
+                    path: "data.bin".into(),
+                    data_base64: base64::engine::general_purpose::STANDARD.encode(&over),
+                },
+            ],
+        );
+        assert_eq!(
+            rejected_file.unwrap_err().status(),
+            StatusCode::BAD_REQUEST
+        );
+        drop(over);
+
+        let too_big = vec![b'x'; MAX_SKILL_PACKAGE_HTTP_BYTES + 1];
+        let rejected = router
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/api/user/skills")
+                    .header("content-type", "application/json")
+                    .body(Body::from(too_big))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 }

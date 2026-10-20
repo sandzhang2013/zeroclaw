@@ -2540,10 +2540,14 @@ pub async fn run_gateway_with_plugin_webhooks(
             "/api/user/skills",
             get(api_skills::handle_list_personal_skills)
                 .post(api_skills::handle_save_personal_skill)
-                .layer(axum::extract::DefaultBodyLimit::max(12 * 1024 * 1024)),
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    api_skills::MAX_SKILL_PACKAGE_HTTP_BYTES,
+                )),
         )
         .with_state(state.clone())
-        .layer(RequestBodyLimitLayer::new(12 * 1024 * 1024))
+        .layer(RequestBodyLimitLayer::new(
+            api_skills::MAX_SKILL_PACKAGE_HTTP_BYTES,
+        ))
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
             Duration::from_secs(gateway_request_timeout_secs(&config.gateway)),

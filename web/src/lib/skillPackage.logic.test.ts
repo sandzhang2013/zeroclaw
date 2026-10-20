@@ -3,6 +3,7 @@ import test from 'node:test';
 import { deflateRawSync } from 'node:zlib';
 
 import {
+  bytesToBase64,
   locateSkillMarkdown,
   parseSkillMarkdown,
   readSkillFromFiles,
@@ -135,6 +136,16 @@ test('readSkillFromZip reads SKILL.md from a stored or deflated archive', async 
   });
 });
 
+test('bytesToBase64 round-trips a buffer larger than one chunk', () => {
+  const bytes = Buffer.alloc(100_000);
+  for (let i = 0; i < bytes.length; i += 1) bytes[i] = i % 256;
+  const encoded = bytesToBase64(bytes);
+  assert.equal(encoded.length % 4, 0);
+  const decoded = Buffer.from(encoded, 'base64');
+  assert.equal(decoded.length, bytes.length);
+  assert.ok(decoded.equals(bytes));
+});
+
 test('readSkillFromZip allows a file over 1 MB and rejects an archive over 8 MB', async () => {
   const skill = Buffer.concat([Buffer.from(VALID), Buffer.alloc(1024 * 1024 + 1, 0x61)]);
   const parsed = await readSkillFromZip(zipBytes([
@@ -144,6 +155,14 @@ test('readSkillFromZip allows a file over 1 MB and rejects an archive over 8 MB'
 
   const over = new ArrayBuffer(8 * 1024 * 1024 + 1);
   assert.deepEqual(await readSkillFromZip(over), { ok: false, error: 'too-large' });
+});
+
+test('readSkillFromZip allows a small archive whose file expands past 8 MB', async () => {
+  const skill = Buffer.concat([Buffer.from(VALID), Buffer.alloc(9 * 1024 * 1024, 0x61)]);
+  const zip = zipBytes([{ name: 'flu-weekly/SKILL.md', data: skill }], 8);
+  assert.ok(zip.byteLength < 8 * 1024 * 1024);
+  const parsed = await readSkillFromZip(zip.buffer);
+  assert.equal(parsed.ok, true);
 });
 
 function packageFile(path: string, text: string) {

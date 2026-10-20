@@ -33,7 +33,8 @@ export type SkillPackageResult =
   | { ok: false; error: SkillPackageError };
 
 const MAX_ZIP_BYTES = 8 * 1024 * 1024;
-const MAX_FILE_BYTES = 8 * 1024 * 1024;
+const MAX_FILE_BYTES = 32 * 1024 * 1024;
+const MAX_PACKAGE_BYTES = 32 * 1024 * 1024;
 const MAX_ZIP_ENTRIES = 512;
 
 export function skillImportErrorKey(error: SkillPackageError): string {
@@ -161,6 +162,7 @@ async function filesUnderSkill(
 ): Promise<{ ok: true; files: SkillPackageFile[] } | { ok: false; error: SkillPackageError }> {
   const root = skillMdPath.includes('/') ? skillMdPath.slice(0, skillMdPath.lastIndexOf('/')) : '';
   const packed: SkillPackageFile[] = [];
+  let total = 0;
   for (const file of files) {
     const normalized = normalizePackagePath(file.path);
     if (!normalized || isIgnoredPackagePath(normalized)) continue;
@@ -168,7 +170,10 @@ async function filesUnderSkill(
     if (!relative || isIgnoredPackagePath(relative)) continue;
     const bytes = await file.bytes();
     if (!(bytes instanceof Uint8Array)) return { ok: false, error: bytes };
-    if (bytes.byteLength > MAX_FILE_BYTES) return { ok: false, error: 'too-large' };
+    total += bytes.byteLength;
+    if (bytes.byteLength > MAX_FILE_BYTES || total > MAX_PACKAGE_BYTES) {
+      return { ok: false, error: 'too-large' };
+    }
     packed.push({ path: relative, bytes });
   }
   if (!packed.some((file) => file.path === 'SKILL.md')) return { ok: false, error: 'missing' };
@@ -325,11 +330,16 @@ async function inflateEntry(
   }
 }
 
+/** Multiple of 3 so each chunk's base64 stands alone. `btoa` of one multi-megabyte string fails in some browsers. */
+const BASE64_CHUNK = 0x7ffe;
+
 export function bytesToBase64(bytes: Uint8Array): string {
   const parts: string[] = [];
-  const chunk = 0x8000;
-  for (let offset = 0; offset < bytes.length; offset += chunk) {
-    parts.push(String.fromCharCode(...bytes.subarray(offset, offset + chunk)));
+  for (let offset = 0; offset < bytes.length; offset += BASE64_CHUNK) {
+    const slice = bytes.subarray(offset, offset + BASE64_CHUNK);
+    const chars = new Array<string>(slice.length);
+    for (let i = 0; i < slice.length; i += 1) chars[i] = String.fromCharCode(slice[i] ?? 0);
+    parts.push(btoa(chars.join('')));
   }
-  return btoa(parts.join(''));
+  return parts.join('');
 }

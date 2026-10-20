@@ -439,7 +439,6 @@ export function MySkillsPage({
         agent,
         title: skill.title,
         description: skill.description,
-        body: skill.body,
         files: skill.files.map((file) => ({
           path: file.path,
           data_base64: bytesToBase64(file.bytes),
