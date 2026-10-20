@@ -136,6 +136,21 @@ test('readSkillFromZip reads SKILL.md from a stored or deflated archive', async 
   });
 });
 
+test('readSkillFromZip skips directory records that would shadow real files', async () => {
+  const parsed = await readSkillFromZip(zipBytes([
+    { name: 'flu-weekly/', data: Buffer.alloc(0) },
+    { name: 'flu-weekly/assets/', data: Buffer.alloc(0) },
+    { name: 'flu-weekly/SKILL.md', data: Buffer.from(VALID) },
+    { name: 'flu-weekly/assets/report.js', data: Buffer.from('ok') },
+  ], 0).buffer);
+  assert.equal(parsed.ok, true);
+  if (!parsed.ok) return;
+  assert.deepEqual(
+    parsed.skill.files.map((file) => file.path).sort(),
+    ['SKILL.md', 'assets/report.js'],
+  );
+});
+
 test('bytesToBase64 round-trips a buffer larger than one chunk', () => {
   const bytes = Buffer.alloc(100_000);
   for (let i = 0; i < bytes.length; i += 1) bytes[i] = i % 256;

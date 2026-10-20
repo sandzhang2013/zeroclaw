@@ -525,6 +525,9 @@ fn write_skill_package(
         }
         decoded.push((rel, bytes));
     }
+    // Zip directories are stored as empty files (`assets/`). After the slash is
+    // removed they collide with the real directory `assets/report.js`.
+    drop_directory_placeholders(&mut decoded);
     let Some(skill_md) = skill_md else {
         return Err(skill_package_error(
             StatusCode::BAD_REQUEST,
@@ -577,6 +580,23 @@ fn write_skill_package(
     }
     zeroclaw_runtime::skills::cache::invalidate();
     Ok(())
+}
+
+fn drop_directory_placeholders(files: &mut Vec<(std::path::PathBuf, Vec<u8>)>) {
+    let placeholders: Vec<std::path::PathBuf> = files
+        .iter()
+        .filter(|(path, bytes)| {
+            bytes.is_empty()
+                && files
+                    .iter()
+                    .any(|(other, _)| other != path && other.starts_with(path))
+        })
+        .map(|(path, _)| path.clone())
+        .collect();
+    if placeholders.is_empty() {
+        return;
+    }
+    files.retain(|(path, _)| !placeholders.iter().any(|placeholder| placeholder == path));
 }
 
 fn skill_package_rel(raw: &str) -> Option<std::path::PathBuf> {
@@ -2563,10 +2583,10 @@ mod tests {
     #[tokio::test]
     async fn skill_import_accepts_nine_mib_past_the_old_body_cap() {
         use crate::api::test_state;
+        use axum::Router;
         use axum::body::Body;
         use axum::extract::DefaultBodyLimit;
         use axum::routing::post;
-        use axum::Router;
         use base64::Engine;
         use tower::ServiceExt;
         use tower_http::limit::RequestBodyLimitLayer;
@@ -2596,9 +2616,8 @@ mod tests {
         let router = Router::new()
             .route(
                 "/api/user/skills",
-                post(handle_save_personal_skill).layer(DefaultBodyLimit::max(
-                    MAX_SKILL_PACKAGE_HTTP_BYTES,
-                )),
+                post(handle_save_personal_skill)
+                    .layer(DefaultBodyLimit::max(MAX_SKILL_PACKAGE_HTTP_BYTES)),
             )
             .with_state(state.clone())
             .layer(RequestBodyLimitLayer::new(MAX_SKILL_PACKAGE_HTTP_BYTES));
@@ -2670,10 +2689,7 @@ mod tests {
                 },
             ],
         );
-        assert_eq!(
-            rejected_file.unwrap_err().status(),
-            StatusCode::BAD_REQUEST
-        );
+        assert_eq!(rejected_file.unwrap_err().status(), StatusCode::BAD_REQUEST);
         drop(over);
 
         let too_big = vec![b'x'; MAX_SKILL_PACKAGE_HTTP_BYTES + 1];
@@ -2689,5 +2705,36 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(rejected.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[test]
+    fn write_skill_package_ignores_zip_directory_placeholders() {
+        use base64::Engine;
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_md = b"---\nname: demo\ndescription: demo skill\n---\n\nbody\n";
+        let written = write_skill_package(
+            &tmp.path().join("skill"),
+            &[
+                PersonalSkillPackageFile {
+                    path: "SKILL.md".into(),
+                    data_base64: base64::engine::general_purpose::STANDARD.encode(skill_md),
+                },
+                PersonalSkillPackageFile {
+                    path: "assets".into(),
+                    data_base64: String::new(),
+                },
+                PersonalSkillPackageFile {
+                    path: "assets/report.js".into(),
+                    data_base64: base64::engine::general_purpose::STANDARD.encode("ok"),
+                },
+            ],
+        );
+        assert!(
+            written.is_ok(),
+            "directory placeholders must not block the write"
+        );
+        let dir = tmp.path().join("skill");
+        assert!(dir.join("assets").is_dir());
+        assert_eq!(std::fs::read(dir.join("assets/report.js")).unwrap(), b"ok");
     }
 }

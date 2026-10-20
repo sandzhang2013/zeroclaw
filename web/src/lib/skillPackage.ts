@@ -276,9 +276,11 @@ function openZip(bytes: Uint8Array): { ok: true; entries: ZipEntry[] } | { ok: f
     const nameEnd = nameStart + nameLen;
     if (nameEnd > bytes.length) return { ok: false, error: 'bad-zip' };
     const name = new TextDecoder('utf-8').decode(bytes.subarray(nameStart, nameEnd));
-    const normalized = normalizePackagePath(name);
     cursor = nameEnd + extraLen + commentLen;
-    if (!normalized || normalized.endsWith('/')) continue;
+    // Directory records end in `/`. Normalize strips that slash, so check the raw name.
+    if (name.endsWith('/') || name.endsWith('\\')) continue;
+    const normalized = normalizePackagePath(name);
+    if (!normalized) continue;
     entries.push({
       name: normalized,
       bytes: async () => {
