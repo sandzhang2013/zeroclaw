@@ -157,8 +157,9 @@ local mock and user-center SSO run `zeroclaw daemon` plus
 off. Do not point those scripts at a Vite source tree.
 
 Opening the workbench with no session renders a self-contained Chinese
-page titled 无法进入工作台. It tells the user to open a ticket URL from
-省统筹平台, or to enter from the 省统筹平台门户 item 「数智疾控」. The
+page titled 无法进入工作台. It tells the user not to open that address
+alone: enter from the 省统筹平台门户 item 「数智疾控」, or open the login
+link issued by the business system. The
 steps are the alert ticket (`clientId` + `verifyData` on the workbench
 URL, or `POST /hbcdcagent/sso/auth/verify`) and the portal callback (`verifyCode` to
 `/hbcdcagent/auth/callback`). It

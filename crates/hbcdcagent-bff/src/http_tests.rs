@@ -582,8 +582,8 @@ async fn workbench_without_sso_config_shows_login_error_page() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert!(content_type.starts_with("text/html"));
     assert!(html.contains("无法进入工作台"));
-    assert!(html.contains("省统筹平台带票据进入"));
-    assert!(html.contains("省统筹平台门户点「数智疾控」"));
+    assert!(html.contains("从业务系统打开登录链接"));
+    assert!(html.contains("从省统筹平台门户点击「数智疾控」"));
     assert!(html.contains("/hbcdcagent/auth/callback"));
     assert!(html.contains("HBCDCAGENT_SSO_CLIENT_ID"));
     assert!(html.contains("未配置"));

@@ -81,7 +81,7 @@ impl LoginErrorKind {
             ),
             Self::NoLoginEntry => (
                 "无法进入工作台",
-                "工作台不能从这里直接登录。请从省统筹平台打开带票据的地址，或从省统筹平台门户点「数智疾控」进入。",
+                "请不要单独打开这个地址。从省统筹平台门户点击「数智疾控」进入，或从业务系统打开本次下发的登录链接。",
             ),
             Self::LoggedOut => (
                 "已退出登录",
@@ -133,34 +133,34 @@ fn callback_url(cfg: &Config) -> String {
 fn entry_checklist(cfg: &Config) -> Vec<Step> {
     let ticket = match cfg.ticket_sso.as_ref() {
         Some(sso) => Step {
-            title: "省统筹平台带票据进入",
+            title: "从业务系统打开登录链接",
             status: StepStatus::Configured,
             detail: format!(
-                "地址需带 clientId={}&verifyData=。直接打开会验票并进入工作台。门户内嵌时页面自己验票，问题由父页面发进来。",
+                "链接里要带 clientId={} 和 verifyData。打开后会自动登录。嵌在门户页面里时，由门户完成验票。",
                 sso.client_id,
             ),
         },
         None => Step {
-            title: "省统筹平台带票据进入",
+            title: "从业务系统打开登录链接",
             status: StepStatus::Missing,
-            detail: "未启用。需要同时配置 HBCDCAGENT_SSO_CLIENT_ID 与 HBCDCAGENT_SSO_KEY_B64"
+            detail: "尚未开通。需要同时配置 HBCDCAGENT_SSO_CLIENT_ID 与 HBCDCAGENT_SSO_KEY_B64"
                 .to_string(),
         },
     };
     vec![
         ticket,
         Step {
-            title: "省统筹平台门户回跳",
+            title: "从门户点击「数智疾控」",
             status: StepStatus::Pending,
             detail: format!(
-                "从省统筹平台门户点「数智疾控」，带着 verifyCode 打开 {}。这一步用已配置的 OpenAPI 换票，不经过登录页跳转",
+                "在省统筹平台门户点击「数智疾控」，登录凭证会回到 {}，然后进入工作台。",
                 callback_url(cfg)
             ),
         },
         Step {
-            title: "建立会话并进入工作台",
+            title: "进入工作台",
             status: StepStatus::Pending,
-            detail: "上述任一入口成功后写入会话，再打开 /hbcdcagent/workbench。直接打开工作台地址不会建立会话"
+            detail: "上面任一方式成功后，才会打开 /hbcdcagent/workbench。把这个地址存成书签再打开，不会登录。"
                 .to_string(),
         },
     ]
@@ -425,11 +425,10 @@ mod tests {
         cfg.login_url = None;
         let html = render(&cfg, LoginErrorKind::NoLoginEntry, None);
         assert!(html.contains("无法进入工作台"));
-        assert!(html.contains("省统筹平台带票据进入"));
-        assert!(html.contains("省统筹平台门户回跳"));
-        assert!(
-            html.contains("请从省统筹平台打开带票据的地址，或从省统筹平台门户点「数智疾控」进入")
-        );
+        assert!(html.contains("从业务系统打开登录链接"));
+        assert!(html.contains("从门户点击「数智疾控」"));
+        assert!(html.contains("请不要单独打开这个地址"));
+        assert!(html.contains("从省统筹平台门户点击「数智疾控」进入"));
         assert!(html.contains("HBCDCAGENT_SSO_CLIENT_ID"));
         assert!(html.contains("未配置"));
         assert!(html.contains("未执行"));
