@@ -3,6 +3,7 @@ import { getToken } from './auth';
 import { apiOrigin, basePath } from './basePath';
 import { isTauri } from './tauri';
 import { generateUUID } from './uuid';
+import { writeLocalStorage } from './localStorageWrite';
 import { SESSION_ID_KEY_PREFIX, getOrCreateSessionId } from './sessionId';
 import { releaseWebSocket } from './ws.release';
 import { embedWsProtocol } from './iframeSession';
@@ -42,6 +43,21 @@ const MAX_RECONNECT_DELAY = 30000;
 const TASK_SESSION_PREFIX = `${SESSION_ID_KEY_PREFIX}.task`;
 const TASK_INDEX_PREFIX = `${SESSION_ID_KEY_PREFIX}.tasks`;
 
+const volatileTaskSessions = new Map<string, string>();
+
+function rememberTaskSession(key: string, sessionId: string): void {
+  if (writeLocalStorage(key, sessionId)) volatileTaskSessions.delete(key);
+  else volatileTaskSessions.set(key, sessionId);
+}
+
+function readTaskSession(key: string): string | null {
+  try {
+    return localStorage.getItem(key) ?? volatileTaskSessions.get(key) ?? null;
+  } catch {
+    return volatileTaskSessions.get(key) ?? null;
+  }
+}
+
 interface TaskSessionEntry {
   taskId: string;
   sessionId: string;
@@ -56,7 +72,7 @@ export function createTaskSessionId(agentAlias: string): string {
   const taskId = generateUUID().slice(0, 8);
   const sessionId = generateUUID();
   const key = `${TASK_SESSION_PREFIX}.${agentAlias}.${taskId}`;
-  localStorage.setItem(key, sessionId);
+  rememberTaskSession(key, sessionId);
 
   // Register in the per-agent task index.
   const index = listTaskSessions(agentAlias);
@@ -67,7 +83,7 @@ export function createTaskSessionId(agentAlias: string): string {
     createdAt: new Date().toISOString(),
   };
   index.push(entry);
-  localStorage.setItem(`${TASK_INDEX_PREFIX}.${agentAlias}`, JSON.stringify(index));
+  writeLocalStorage(`${TASK_INDEX_PREFIX}.${agentAlias}`, JSON.stringify(index));
 
   return taskId;
 }
@@ -79,7 +95,7 @@ export function adoptTaskSession(agentAlias: string, sessionId: string): string 
   const existing = listTaskSessions(agentAlias).find((e) => e.sessionId === sessionId);
   if (existing) return existing.taskId;
   const taskId = generateUUID().slice(0, 8);
-  localStorage.setItem(`${TASK_SESSION_PREFIX}.${agentAlias}.${taskId}`, sessionId);
+  rememberTaskSession(`${TASK_SESSION_PREFIX}.${agentAlias}.${taskId}`, sessionId);
   const index = listTaskSessions(agentAlias);
   index.push({
     taskId,
@@ -87,27 +103,30 @@ export function adoptTaskSession(agentAlias: string, sessionId: string): string 
     agentAlias,
     createdAt: new Date().toISOString(),
   });
-  localStorage.setItem(`${TASK_INDEX_PREFIX}.${agentAlias}`, JSON.stringify(index));
+  writeLocalStorage(`${TASK_INDEX_PREFIX}.${agentAlias}`, JSON.stringify(index));
   return taskId;
 }
 
 /** Resolve the session_id for a given task, or null if the task doesn't
  * exist. */
 export function resolveTaskSessionId(agentAlias: string, taskId: string): string | null {
-  const key = `${TASK_SESSION_PREFIX}.${agentAlias}.${taskId}`;
-  return localStorage.getItem(key);
+  return readTaskSession(`${TASK_SESSION_PREFIX}.${agentAlias}.${taskId}`);
 }
 
 /** List all task sessions for an agent. Returns entries sorted oldest-first. */
 export function listTaskSessions(agentAlias: string): TaskSessionEntry[] {
-  const raw = localStorage.getItem(`${TASK_INDEX_PREFIX}.${agentAlias}`);
+  let raw: string | null = null;
+  try {
+    raw = localStorage.getItem(`${TASK_INDEX_PREFIX}.${agentAlias}`);
+  } catch {
+    return [];
+  }
   if (!raw) return [];
   try {
     const entries = JSON.parse(raw) as TaskSessionEntry[];
     // Filter out entries whose session key no longer exists (cleaned up).
     return entries.filter((e) => {
-      const key = `${TASK_SESSION_PREFIX}.${agentAlias}.${e.taskId}`;
-      return localStorage.getItem(key) !== null;
+      return readTaskSession(`${TASK_SESSION_PREFIX}.${agentAlias}.${e.taskId}`) !== null;
     });
   } catch {
     return [];
@@ -128,7 +147,7 @@ export function removeTaskSession(agentAlias: string, taskId: string): void {
   // Remove from the index.
   const index = listTaskSessions(agentAlias).filter((e) => e.taskId !== taskId);
   if (index.length > 0) {
-    localStorage.setItem(`${TASK_INDEX_PREFIX}.${agentAlias}`, JSON.stringify(index));
+    writeLocalStorage(`${TASK_INDEX_PREFIX}.${agentAlias}`, JSON.stringify(index));
   } else {
     localStorage.removeItem(`${TASK_INDEX_PREFIX}.${agentAlias}`);
   }

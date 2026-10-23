@@ -24,13 +24,27 @@ export function startThinkingClock(clock: ThinkingClock, now: number): ThinkingC
   return { startedAt: now };
 }
 
-/** Stop at the first visible answer, or when the turn ends with only reasoning. */
+/** Stop when the turn ends. Intermediate answer text must not call this:
+ *  a tool round often emits a chunk and then keeps thinking. */
 export function freezeThinkingClock(clock: ThinkingClock, now: number): ThinkingClock {
   if (clock.startedAt == null || clock.seconds != null) return clock;
   return {
     startedAt: clock.startedAt,
     seconds: elapsedThinkingSeconds(clock.startedAt, now),
   };
+}
+
+export type ThinkingClockEvent = 'thinking' | 'chunk' | 'chunk_reset' | 'stop';
+
+/** Keep counting through answer chunks and later thinking. Freeze only on `stop`. */
+export function advanceThinkingClock(
+  clock: ThinkingClock,
+  event: ThinkingClockEvent,
+  now: number,
+): ThinkingClock {
+  if (event === 'thinking') return startThinkingClock(clock, now);
+  if (event === 'stop') return freezeThinkingClock(clock, now);
+  return clock;
 }
 
 /** Pin to the newest thinking line unless the reader scrolled up. */

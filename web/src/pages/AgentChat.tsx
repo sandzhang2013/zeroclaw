@@ -21,6 +21,7 @@ import { ArtifactCard } from '@/components/ArtifactCard';
 import { OutlineEditModal } from '@/components/OutlineEditModal';
 import { ThinkingTranscript } from '@/components/ThinkingTranscript';
 import { thinkingPanelOpen } from '@/lib/thinkingScroll';
+import { collapseChatBlankRuns } from '@/lib/chatDisplay';
 import ApprovalBanner from '@/components/ApprovalBanner';
 import { AutonomySelect } from '@/components/AutonomySelect';
 import { QuickPromptButton, QuickPromptSendHint } from '@/components/QuickPromptButton';
@@ -1002,7 +1003,7 @@ export function AgentChatInner({
       )}
       {/* Messages area. */}
       <div
-        className={`flex-1 overflow-y-auto p-4 pb-8 ${compact ? 'space-y-1.5' : 'space-y-2'}`}
+        className={`flex-1 overflow-y-auto p-4 pb-8 [overflow-anchor:none] ${compact ? 'space-y-1.5' : 'space-y-2'}`}
       >
         {messages.length === 0 && !initialPrompt && (
           <div className="flex flex-col items-center justify-center h-full text-center animate-fade-in text-pc-text-muted">
@@ -1084,7 +1085,7 @@ export function AgentChatInner({
                           seconds={streamingThinkingSeconds}
                         />
                       )}
-                      {streamingContent && <p className="text-sm whitespace-pre-wrap break-words leading-relaxed">{streamingContent}</p>}
+                      <ChatStreamBody text={streamingContent} className="text-sm whitespace-pre-wrap break-words leading-relaxed" />
                     </div>
                   ) : (
                     <div className="rounded-[var(--radius-lg)] px-4 py-3 border border-pc-border bg-pc-elevated flex items-center gap-1.5">
@@ -1409,6 +1410,12 @@ interface MessageItemProps {
   streaming?: { content: string; thinking: string; startedAt?: number; seconds?: number } | null;
 }
 
+function ChatStreamBody({ text, className }: { text: string; className: string }) {
+  const shown = collapseChatBlankRuns(text);
+  if (!shown) return null;
+  return <p className={className}>{shown}</p>;
+}
+
 function ChatMarkdown({ content, compact }: { content: string; compact: boolean }) {
   const { markdown } = splitChatHtmlBlocks(stripImageMarkers(content));
   const images = extractToolImages(content);
@@ -1440,7 +1447,7 @@ function messageDisplayText(msg: ChatMessage | undefined): string {
   const raw = visibleModelText(msg);
   if (msg.role === 'user') return parseHomeSkillDisplay(raw).visible;
   if (msg.role !== 'agent') return raw;
-  return splitChatHtmlBlocks(stripImageMarkers(raw)).markdown;
+  return splitChatHtmlBlocks(stripImageMarkers(collapseChatBlankRuns(raw))).markdown;
 }
 
 function MessageBody({
@@ -1573,9 +1580,10 @@ const MessageItem = memo(function MessageItem({
                     seconds={streaming.seconds}
                   />
                 )}
-                {streaming.content && (
-                  <p className={`${compact ? 'text-xs' : 'text-sm'} whitespace-pre-wrap break-words leading-relaxed`}>{streaming.content}</p>
-                )}
+                <ChatStreamBody
+                  text={streaming.content}
+                  className={`${compact ? 'text-xs' : 'text-sm'} whitespace-pre-wrap break-words leading-relaxed`}
+                />
               </div>
             )}
             {streaming && !streaming.thinking && !streaming.content && (

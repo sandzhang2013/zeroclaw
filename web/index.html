@@ -39,6 +39,25 @@
         } catch (e3) {}
       })();
     </script>
+    <script>
+      (function () {
+        // Transcripts are a cache. A full origin quota makes the session-id
+        // write throw during startup and the workbench renders the error page.
+        try {
+          localStorage.setItem("zeroclaw_quota_probe", "1");
+          localStorage.removeItem("zeroclaw_quota_probe");
+        } catch (e) {
+          var drop = [];
+          try {
+            for (var i = 0; i < localStorage.length; i++) {
+              var key = localStorage.key(i);
+              if (key && key.indexOf("zeroclaw_chat_history_v1:") === 0) drop.push(key);
+            }
+            for (var j = 0; j < drop.length; j++) localStorage.removeItem(drop[j]);
+          } catch (e2) {}
+        }
+      })();
+    </script>
     <link rel="icon" type="image/png" href="/_app/logo.png" />
     <link
       rel="alternate"

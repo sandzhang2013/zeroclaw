@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  CHAT_HISTORY_BUDGET_CHARS,
   clearChatHistory,
+  loadCachedTranscript,
   loadChatHistory,
   mapServerMessagesToPersisted,
   mergePersistedThinking,
@@ -21,6 +23,10 @@ function mockLocalStorage() {
       },
       removeItem: (key: string) => {
         store.delete(key);
+      },
+      key: (index: number) => [...store.keys()][index] ?? null,
+      get length() {
+        return store.size;
       },
     },
     configurable: true,
@@ -127,6 +133,112 @@ test('mergePersistedThinking restores thinking onto the matching assistant row',
   assert.equal(merged[1]?.thinking, '17×20');
   assert.equal(merged[1]?.thinkingSeconds, 4);
   assert.equal(merged[0]?.thinking, undefined);
+});
+
+test('thinking cache drops the report body and still restores reasoning', () => {
+  const store = mockLocalStorage();
+  const report = `结论\n\n\`\`\`html\n${'<div>report</div>'.repeat(200)}\n\`\`\``;
+  saveChatHistory('deep', [
+    { id: 'u', role: 'user', content: '出一份报告', timestamp: '2026-01-01T00:00:00.000Z' },
+    {
+      id: 'a',
+      role: 'agent',
+      content: report,
+      thinking: '先查数据',
+      thinkingSeconds: 3,
+      toolCall: {
+        name: 'file_write',
+        args: { body: 'x'.repeat(8000) },
+        output: 'y'.repeat(8000),
+        artifact: {
+          path: 'sessions/s/a.html',
+          filename: 'a.html',
+          title: '报告',
+          mime: 'text/html',
+          size: 12,
+        },
+      },
+      timestamp: '2026-01-01T00:00:01.000Z',
+    },
+  ], 'thinking');
+
+  const raw = store.get('zeroclaw_chat_history_v1:deep') ?? '';
+  assert.equal(raw.includes('<div>report</div>'), false);
+  assert.equal(raw.includes('出一份报告'), false);
+  assert.equal(raw.includes('x'.repeat(100)), false);
+  const cached = loadChatHistory('deep');
+  assert.equal(cached.length, 1);
+  assert.equal(cached[0]?.content, '');
+  assert.equal(cached[0]?.thinking, '先查数据');
+  assert.equal(cached[0]?.thinkingSeconds, 3);
+  assert.equal(cached[0]?.toolCall?.name, 'file_write');
+  assert.equal(cached[0]?.toolCall?.output, undefined);
+  assert.equal(cached[0]?.toolCall?.artifact, undefined);
+  assert.deepEqual(loadCachedTranscript('deep'), []);
+
+  const merged = mergePersistedThinking(
+    [{ id: 'srv', role: 'agent', content: report, markdown: true, timestamp: '2026-01-01T00:00:01.000Z' }],
+    cached,
+  );
+  assert.equal(merged[0]?.thinking, '先查数据');
+  assert.equal(merged[0]?.thinkingSeconds, 3);
+  assert.equal(merged[0]?.content, report);
+});
+
+test('transcript cache strips html fences and caps tool output', () => {
+  mockLocalStorage();
+  saveChatHistory('offline', [{
+    id: 'a',
+    role: 'agent',
+    content: `说明\n\n\`\`\`html\n${'<p>body</p>'.repeat(300)}\n\`\`\`\n\n结束`,
+    thinking: '想一下',
+    toolCall: {
+      name: 'file_write',
+      args: { body: 'z'.repeat(9000) },
+      output: 'o'.repeat(8000),
+      artifact: {
+        path: 'sessions/s/a.html',
+        filename: 'a.html',
+        title: '报告',
+        mime: 'text/html',
+        size: 10,
+      },
+    },
+    timestamp: '2026-01-01T00:00:00.000Z',
+  }]);
+  const row = loadChatHistory('offline')[0];
+  assert.match(row?.content ?? '', /说明/);
+  assert.match(row?.content ?? '', /结束/);
+  assert.equal(row?.content.includes('<p>body</p>'), false);
+  assert.equal(row?.toolCall?.args, undefined);
+  assert.equal(row?.toolCall?.output?.length, 4096);
+  assert.equal(row?.toolCall?.artifact?.path, 'sessions/s/a.html');
+  assert.equal(row?.thinking, '想一下');
+  assert.ok((row?.contentPreview?.length ?? 0) <= 400);
+  assert.equal(loadCachedTranscript('offline').length, 1);
+});
+
+test('saveChatHistory drops the oldest conversation once the cache budget is full', () => {
+  const store = mockLocalStorage();
+  const fat = 'z'.repeat(CHAT_HISTORY_BUDGET_CHARS - 50_000);
+  store.set('zeroclaw_chat_history_v1:old', JSON.stringify({
+    messages: [{ id: 'old', role: 'user', content: fat, timestamp: '2020-01-01T00:00:00.000Z' }],
+  }));
+  store.set('zeroclaw_chat_history_v1:keep', JSON.stringify({
+    messages: [{ id: 'keep', role: 'user', content: 'stay', timestamp: '2026-01-01T00:00:00.000Z' }],
+  }));
+  saveChatHistory('new', [{
+    id: 'n',
+    role: 'user',
+    content: 'y'.repeat(80_000),
+    timestamp: '2026-06-01T00:00:00.000Z',
+  }]);
+  assert.equal(store.has('zeroclaw_chat_history_v1:old'), false);
+  assert.equal(store.has('zeroclaw_chat_history_v1:keep'), true);
+  assert.equal(loadChatHistory('new')[0]?.id, 'n');
+  let total = 0;
+  for (const value of store.values()) total += value.length;
+  assert.ok(total <= CHAT_HISTORY_BUDGET_CHARS);
 });
 
 test('clearChatHistory removes the persisted transcript', () => {

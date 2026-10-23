@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useState, useRef } from 'react';
 import { t } from '@/lib/i18n';
+import { collapseChatBlankRuns } from '@/lib/chatDisplay';
 import { elapsedThinkingSeconds, shouldFollowThinkingScroll } from '@/lib/thinkingScroll';
 
 function useThinkingSeconds(startedAt: number | undefined, frozen: number | undefined): number | undefined {
@@ -45,10 +46,12 @@ export function ThinkingTranscript({
   open?: boolean;
   /** Wall clock of the first thinking frame. The live label counts up from here. */
   startedAt?: number;
-  /** Frozen whole seconds once the answer starts or the turn ends. */
+  /** Frozen whole seconds for a finished turn. Ignored while `live` is set. */
   seconds?: number;
 }) {
-  const shownSeconds = useThinkingSeconds(live ? startedAt : undefined, seconds);
+  // While the turn is live, ignore a frozen snapshot so the label keeps moving.
+  const shownSeconds = useThinkingSeconds(live ? startedAt : undefined, live ? undefined : seconds);
+  const shownText = collapseChatBlankRuns(text);
   const detailsRef = useRef<HTMLDetailsElement>(null);
   const ref = useRef<HTMLPreElement>(null);
   const followRef = useRef(true);
@@ -74,7 +77,7 @@ export function ThinkingTranscript({
     const el = ref.current;
     if (!el || !live || !followRef.current) return;
     el.scrollTop = el.scrollHeight;
-  }, [text, live, open]);
+  }, [shownText, live, open]);
 
   return (
     <details
@@ -100,7 +103,7 @@ export function ThinkingTranscript({
         }}
         className="text-xs mt-1 max-h-60 overflow-auto whitespace-pre-wrap break-words leading-relaxed [overflow-anchor:none] p-2 rounded-[var(--radius-sm)] text-pc-text-muted bg-pc-code"
       >
-        {text}
+        {shownText}
       </pre>
     </details>
   );

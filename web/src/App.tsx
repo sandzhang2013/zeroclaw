@@ -19,6 +19,7 @@ import { ConfigDraftProvider } from "./lib/draftStore";
 import { resolveStoredLocale, setLocale } from "./lib/i18n";
 import { shouldSkipPairing } from "./lib/skipPairing";
 import { Router } from "./router/router";
+import { dropChatHistoryCache } from "./lib/localStorageWrite";
 
 // Locale context
 interface LocaleContextType {
@@ -55,6 +56,14 @@ export class ErrorBoundary extends Component<
     return { error };
   }
 
+  componentDidMount() {
+    if (!this.state.error) sessionStorage.removeItem("zeroclaw-quota-cleared");
+  }
+
+  componentDidUpdate() {
+    if (!this.state.error) sessionStorage.removeItem("zeroclaw-quota-cleared");
+  }
+
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error("[ZeroClaw] Render error:", error, info.componentStack);
     // Stale-chunk recovery: when Vite rebuilds, the loaded index.html
@@ -68,6 +77,12 @@ export class ErrorBoundary extends Component<
       !sessionStorage.getItem("zeroclaw-chunk-reloaded")
     ) {
       sessionStorage.setItem("zeroclaw-chunk-reloaded", "1");
+      window.location.reload();
+      return;
+    }
+    if (isStorageQuotaError(error) && !sessionStorage.getItem("zeroclaw-quota-cleared")) {
+      sessionStorage.setItem("zeroclaw-quota-cleared", "1");
+      dropChatHistoryCache();
       window.location.reload();
     }
   }
@@ -104,7 +119,8 @@ export class ErrorBoundary extends Component<
             <button
               onClick={() => {
                 sessionStorage.removeItem("zeroclaw-chunk-reloaded");
-                if (this.state.error && isChunkLoadError(this.state.error)) {
+                if (this.state.error && (isChunkLoadError(this.state.error) || isStorageQuotaError(this.state.error))) {
+                  if (isStorageQuotaError(this.state.error)) dropChatHistoryCache();
                   // Chrome caches a failed `import()` for the page lifetime.
                   // Clearing React state is not enough; refetch the module.
                   window.location.reload();
@@ -122,6 +138,13 @@ export class ErrorBoundary extends Component<
     }
     return this.props.children;
   }
+}
+
+function isStorageQuotaError(error: Error): boolean {
+  const message = error?.message ?? "";
+  return error?.name === "QuotaExceededError"
+    || error?.name === "NS_ERROR_DOM_QUOTA_REACHED"
+    || message.includes("exceeded the quota");
 }
 
 function isChunkLoadError(error: Error): boolean {

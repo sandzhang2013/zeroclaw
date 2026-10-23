@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  advanceThinkingClock,
   elapsedThinkingSeconds,
   freezeThinkingClock,
   idleThinkingClock,
@@ -50,6 +51,21 @@ test('thinking clock starts once and freezes on the first stop', () => {
   assert.equal(frozen.seconds, 4);
   assert.deepEqual(freezeThinkingClock(frozen, 9_000), frozen);
   assert.equal(freezeThinkingClock(idleThinkingClock, 9_000), idleThinkingClock);
+});
+
+test('answer chunks leave the thinking clock running until the turn stops', () => {
+  let clock = advanceThinkingClock(idleThinkingClock, 'thinking', 1_000);
+  clock = advanceThinkingClock(clock, 'chunk', 2_000);
+  assert.equal(clock.startedAt, 1_000);
+  assert.equal(clock.seconds, undefined);
+  clock = advanceThinkingClock(clock, 'chunk_reset', 5_000);
+  assert.equal(clock.seconds, undefined);
+  clock = advanceThinkingClock(clock, 'thinking', 6_000);
+  assert.equal(clock.startedAt, 1_000);
+  assert.equal(clock.seconds, undefined);
+  const stopped = advanceThinkingClock(clock, 'stop', 8_200);
+  assert.equal(stopped.seconds, 8);
+  assert.equal(advanceThinkingClock(stopped, 'chunk', 9_000).seconds, 8);
 });
 
 test('shouldFollowThinkingScroll releases after the reader scrolls up', () => {

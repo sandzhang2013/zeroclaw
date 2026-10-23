@@ -1,3 +1,4 @@
+import { writeLocalStorage } from './localStorageWrite.ts';
 import { workspaceStorageId } from './platformUser.ts';
 
 /** Workbench conversation titles. Local UI state — not a gateway session key. */
@@ -98,9 +99,14 @@ export function readWorkspaceSnapshot(userId?: string): string | null {
   const scoped = localStorage.getItem(scopedKey);
   if (!legacy) return scoped;
   const merged = mergeWorkspaceSnapshots(scoped, legacy);
-  localStorage.setItem(scopedKey, merged);
-  localStorage.removeItem(WORKSPACE_STORAGE_KEY);
-  localStorage.removeItem(WORKSPACE_STORAGE_KEY_V2);
+  if (writeLocalStorage(scopedKey, merged)) {
+    try {
+      localStorage.removeItem(WORKSPACE_STORAGE_KEY);
+      localStorage.removeItem(WORKSPACE_STORAGE_KEY_V2);
+    } catch {
+      // The scoped copy is already stored. A failed delete only leaves a duplicate.
+    }
+  }
   return merged;
 }
 

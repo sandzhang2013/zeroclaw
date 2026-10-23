@@ -220,6 +220,8 @@ export default function ChatWorkspace({
     const stored = persisted.current.sessions ?? [];
     return dedupeSessions(stored.map(withUpdatedAt));
   });
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
   // Login / user switch always lands on the composer. Auto-opening a stored
   // task reconnects its gateway UUID and trips SESSION_FORBIDDEN when that
   // UUID was stamped by the previous user.
@@ -267,7 +269,15 @@ export default function ChatWorkspace({
     for (const session of sessions) {
       const gatewayId = gatewayIdFor(session, userId);
       if (!gatewayId) continue;
-      const verdict = latestTurnVerdict(gatewayId, loadChatHistory(gatewayId), feedbackEntries);
+      const verdict = latestTurnVerdict(
+        gatewayId,
+        loadChatHistory(gatewayId).map((row) => ({
+          role: row.role,
+          content: row.contentPreview ?? row.content,
+          toolCall: row.toolCall,
+        })),
+        feedbackEntries,
+      );
       if (verdict) out[session.id] = verdict;
     }
     return out;
@@ -410,27 +420,28 @@ export default function ChatWorkspace({
           if (name) nameByGid.set(row.session_id, name);
         }
 
+        const known = new Set<string>();
+        for (const session of sessionsRef.current) {
+          const gid = gatewayIdOf(session);
+          if (gid) known.add(gid);
+        }
+        const added: WorkbenchSession[] = [];
+        for (const row of recovered) {
+          if (known.has(row.sessionId)) continue;
+          known.add(row.sessionId);
+          const taskId = adoptTaskSession(row.agentAlias, row.sessionId);
+          added.push({
+            id: makeSessionId(row.agentAlias, taskId),
+            agentAlias: row.agentAlias,
+            taskId,
+            folderId: DEFAULT_FOLDER_ID,
+            updatedAt: row.lastActivity || stampNow(),
+            title: row.title,
+          });
+        }
+
         let snapshot: WorkbenchSession[] = [];
         setSessions((prev) => {
-          const known = new Set<string>();
-          for (const session of prev) {
-            const gid = gatewayIdOf(session);
-            if (gid) known.add(gid);
-          }
-          const added: WorkbenchSession[] = [];
-          for (const row of recovered) {
-            if (known.has(row.sessionId)) continue;
-            known.add(row.sessionId);
-            const taskId = adoptTaskSession(row.agentAlias, row.sessionId);
-            added.push({
-              id: makeSessionId(row.agentAlias, taskId),
-              agentAlias: row.agentAlias,
-              taskId,
-              folderId: DEFAULT_FOLDER_ID,
-              updatedAt: row.lastActivity || stampNow(),
-              title: row.title,
-            });
-          }
           const merged = added.length ? dedupeSessions([...prev, ...added]) : prev;
           const fromGateway = new Map<string, string>();
           for (const session of merged) {
@@ -578,7 +589,12 @@ export default function ChatWorkspace({
 
   useLayoutEffect(() => {
     if (!chatEmbed || dialogSessionIdRef.current) return;
-    const taskId = createTaskSessionId(initialAlias);
+    let taskId: string;
+    try {
+      taskId = createTaskSessionId(initialAlias);
+    } catch {
+      return;
+    }
     const session: WorkbenchSession = {
       id: makeSessionId(initialAlias, taskId),
       agentAlias: initialAlias,

@@ -1,14 +1,26 @@
+import { writeLocalStorage } from './localStorageWrite.ts';
 import type { SessionMessageRow } from '../types/api.ts';
 import { generateUUID } from './uuid.ts';
 import type { ToolArtifactInfo } from './artifactKind.ts';
+import { splitChatHtmlBlocks } from './chatHtmlPreview.ts';
+import { normalizeTurnContent } from './turnFeedback.ts';
 
 const MAX_MESSAGES = 100;
 const PREFIX = 'zeroclaw_chat_history_v1:';
+/** All `zeroclaw_chat_history_v1:` values together. The origin quota is about 5MB. */
+export const CHAT_HISTORY_BUDGET_CHARS = 1_000_000;
+const TOOL_OUTPUT_CAP = 4_096;
+
+export type ChatHistoryCacheMode = 'transcript' | 'thinking';
 
 export interface PersistedChatBubble {
   id: string;
   role: 'user' | 'agent';
   content: string;
+  /** Set on a thinking sidecar. The body stays on the server. */
+  contentHash?: string;
+  /** First 400 collapsed characters of the original reply, for like/dislike keys. */
+  contentPreview?: string;
   thinking?: string;
   /** Whole seconds the thinking stream ran, measured in the browser. */
   thinkingSeconds?: number;
@@ -36,13 +48,29 @@ export function loadChatHistory(sessionId: string): PersistedChatBubble[] {
   }
 }
 
-export function saveChatHistory(sessionId: string, messages: PersistedChatBubble[]): void {
-  try {
-    const slice = messages.slice(-MAX_MESSAGES);
-    localStorage.setItem(storageKey(sessionId), JSON.stringify({ messages: slice }));
-  } catch {
-    // QuotaExceeded or private mode
-  }
+/** Rows that can paint a conversation. Thinking sidecars carry no body. */
+export function loadCachedTranscript(sessionId: string): PersistedChatBubble[] {
+  return loadChatHistory(sessionId).filter((row) => !row.contentHash && Boolean(row.content.trim() || row.toolCall));
+}
+
+/**
+ * Mirror a conversation into localStorage.
+ *
+ * `thinking` keeps the reasoning stream the server does not store, plus a short
+ * reply preview for ratings. `transcript` is the offline copy: HTML report
+ * fences and bulky tool payloads are left out. Either way the keys stay inside
+ * `CHAT_HISTORY_BUDGET_CHARS`, oldest conversation first.
+ */
+export function saveChatHistory(
+  sessionId: string,
+  messages: PersistedChatBubble[],
+  mode: ChatHistoryCacheMode = 'transcript',
+): void {
+  const prepared = fitToBudget(cacheRows(messages, mode));
+  const key = storageKey(sessionId);
+  const raw = JSON.stringify({ messages: prepared });
+  evictUntilFit(key, raw);
+  writeLocalStorage(key, raw);
 }
 
 /**
@@ -103,10 +131,19 @@ export function mapServerMessagesToPersisted(rows: SessionMessageRow[]): Persist
   return out;
 }
 
-/**
- * Server transcripts do not store the thinking stream. Copy it back from the
- * browser cache when the assistant text still matches, so a reload can reopen it.
- */
+/** Fingerprint a reply so the thinking sidecar can find it without storing the body. */
+export function contentFingerprint(text: string): string {
+  let a = 2166136261;
+  let b = 2166136261 ^ 0x9e3779b9;
+  for (let i = 0; i < text.length; i += 1) {
+    const code = text.charCodeAt(i);
+    a = Math.imul(a ^ code, 16777619);
+    b = Math.imul(b ^ code, 2246822519);
+  }
+  return (a >>> 0).toString(16).padStart(8, '0') + (b >>> 0).toString(16).padStart(8, '0');
+}
+
+/** Copy thinking back onto the server row with the same reply. The gateway does not store it. */
 export function mergePersistedThinking(
   server: PersistedChatBubble[],
   local: PersistedChatBubble[],
@@ -114,7 +151,10 @@ export function mergePersistedThinking(
   const pool = local.filter((row) => row.role === 'agent' && row.thinking);
   return server.map((row) => {
     if (row.role !== 'agent' || row.thinking) return row;
-    const index = pool.findIndex((cached) => cached.content === row.content);
+    const fingerprint = contentFingerprint(row.content);
+    const index = pool.findIndex((cached) =>
+      (cached.contentHash !== undefined && cached.contentHash === fingerprint)
+      || (cached.content.length > 0 && cached.content === row.content));
     const match = index < 0 ? undefined : pool.splice(index, 1)[0];
     if (!match?.thinking) return row;
     return {
@@ -123,6 +163,144 @@ export function mergePersistedThinking(
       thinkingSeconds: match.thinkingSeconds,
     };
   });
+}
+
+function cacheRows(messages: PersistedChatBubble[], mode: ChatHistoryCacheMode): PersistedChatBubble[] {
+  const slice = messages.slice(-MAX_MESSAGES);
+  if (mode === 'thinking') return thinkingSidecar(slice);
+  return slice.flatMap((row) => {
+    const slim = slimTranscriptRow(row);
+    return slim ? [slim] : [];
+  });
+}
+
+function thinkingSidecar(messages: PersistedChatBubble[]): PersistedChatBubble[] {
+  const out: PersistedChatBubble[] = [];
+  for (const row of messages) {
+    if (row.role !== 'agent') continue;
+    const thinking = row.thinking?.trim();
+    const preview = row.toolCall ? '' : normalizeTurnContent(row.content);
+    if (!thinking && !preview) continue;
+    out.push({
+      id: row.id,
+      role: 'agent',
+      content: '',
+      contentHash: contentFingerprint(row.content),
+      ...(preview ? { contentPreview: preview } : {}),
+      ...(thinking ? { thinking: row.thinking } : {}),
+      ...(thinking && row.thinkingSeconds != null ? { thinkingSeconds: row.thinkingSeconds } : {}),
+      ...(row.toolCall ? { toolCall: { name: row.toolCall.name } } : {}),
+      timestamp: row.timestamp,
+    });
+  }
+  return out;
+}
+
+function slimTranscriptRow(row: PersistedChatBubble): PersistedChatBubble | null {
+  const content = splitChatHtmlBlocks(row.content).markdown;
+  const preview = normalizeTurnContent(row.content);
+  const thinking = row.thinking?.trim() ? row.thinking : undefined;
+  const toolCall = row.toolCall ? slimToolCall(row.toolCall) : undefined;
+  if (!content && !thinking && !toolCall) return null;
+  return {
+    id: row.id,
+    role: row.role,
+    content,
+    ...(preview ? { contentPreview: preview } : {}),
+    ...(thinking ? { thinking: row.thinking } : {}),
+    ...(thinking && row.thinkingSeconds != null ? { thinkingSeconds: row.thinkingSeconds } : {}),
+    ...(row.markdown != null ? { markdown: row.markdown } : {}),
+    ...(row.local ? { local: true } : {}),
+    ...(toolCall ? { toolCall } : {}),
+    timestamp: row.timestamp,
+  };
+}
+
+function slimToolCall(
+  toolCall: NonNullable<PersistedChatBubble['toolCall']>,
+): NonNullable<PersistedChatBubble['toolCall']> {
+  const output = toolCall.output ? toolCall.output.slice(0, TOOL_OUTPUT_CAP) : undefined;
+  return {
+    name: toolCall.name,
+    ...(output ? { output } : {}),
+    ...(toolCall.artifact ? { artifact: toolCall.artifact } : {}),
+  };
+}
+
+function envelope(messages: PersistedChatBubble[]): string {
+  return JSON.stringify({ messages });
+}
+
+function fitToBudget(messages: PersistedChatBubble[]): PersistedChatBubble[] {
+  let rows = messages;
+  while (rows.length > 1 && envelope(rows).length > CHAT_HISTORY_BUDGET_CHARS) {
+    rows = rows.slice(1);
+  }
+  const only = rows[0];
+  if (!only || envelope(rows).length <= CHAT_HISTORY_BUDGET_CHARS) return rows;
+  const capped: PersistedChatBubble = {
+    ...only,
+    content: only.content.slice(0, 32_000),
+    ...(only.thinking ? { thinking: only.thinking.slice(0, 32_000) } : {}),
+    toolCall: only.toolCall
+      ? {
+          name: only.toolCall.name,
+          ...(only.toolCall.artifact ? { artifact: only.toolCall.artifact } : {}),
+          ...(only.toolCall.output ? { output: only.toolCall.output.slice(0, TOOL_OUTPUT_CAP) } : {}),
+        }
+      : undefined,
+  };
+  return [capped];
+}
+
+function historySavedAt(raw: string | null): string {
+  if (!raw) return '';
+  try {
+    const parsed = JSON.parse(raw) as { messages?: PersistedChatBubble[] };
+    const last = parsed.messages?.at(-1)?.timestamp;
+    return typeof last === 'string' ? last : '';
+  } catch {
+    return '';
+  }
+}
+
+function historyKeyList(): string[] {
+  try {
+    if (typeof localStorage.key !== 'function' || typeof localStorage.length !== 'number') return [];
+    const keys: string[] = [];
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i);
+      if (key?.startsWith(PREFIX)) keys.push(key);
+    }
+    return keys;
+  } catch {
+    return [];
+  }
+}
+
+function evictUntilFit(nextKey: string, nextRaw: string): void {
+  const others = historyKeyList()
+    .filter((key) => key !== nextKey)
+    .map((key) => {
+      let raw: string | null = null;
+      try {
+        raw = localStorage.getItem(key);
+      } catch {
+        raw = null;
+      }
+      return { key, size: raw?.length ?? 0, savedAt: historySavedAt(raw) };
+    })
+    .sort((a, b) => a.savedAt.localeCompare(b.savedAt) || a.key.localeCompare(b.key));
+  let total = nextRaw.length + others.reduce((sum, item) => sum + item.size, 0);
+  for (const item of others) {
+    if (total <= CHAT_HISTORY_BUDGET_CHARS) return;
+    try {
+      localStorage.removeItem(item.key);
+    } catch {
+      // A locked key stays. The write below still has to succeed or be ignored.
+    }
+    total -= item.size;
+  }
 }
 
 export function persistedToUiMessages(

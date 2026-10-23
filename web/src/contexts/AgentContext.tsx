@@ -39,9 +39,8 @@ import {
 } from '@/contexts/turnStream.logic';
 import { buildHistoryTrimmedNotice } from '@/contexts/historyTrimNotices.logic';
 import {
-  freezeThinkingClock,
+  advanceThinkingClock,
   idleThinkingClock,
-  startThinkingClock,
   type ThinkingClock,
 } from '@/lib/thinkingScroll';
 import {
@@ -53,6 +52,7 @@ import {
   type ContextMeterSnapshot,
 } from '@/contexts/contextLimits.logic';
 import {
+  loadCachedTranscript,
   loadChatHistory,
   mapServerMessagesToPersisted,
   mergePersistedThinking,
@@ -277,7 +277,7 @@ export function AgentProvider({
     return getActiveSessionId(agentAlias);
   });
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
-    const persisted = loadChatHistory(sessionId);
+    const persisted = loadCachedTranscript(sessionId);
     return persisted.length > 0 ? persistedToUiMessages(persisted) : [];
   });
   // Session whose transcript has finished hydrating into `messages`. Null until
@@ -402,7 +402,7 @@ export function AgentProvider({
         } else if (!res.session_persistence) {
           setMessages((prev) => {
             if (prev.length > 0) return prev;
-            const ls = loadChatHistory(sid);
+            const ls = loadCachedTranscript(sid);
             return ls.length ? persistedToUiMessages(ls) : prev;
           });
         }
@@ -411,7 +411,7 @@ export function AgentProvider({
           setSessionPersistence(null);
           setMessages((prev) => {
             if (prev.length > 0) return prev;
-            const ls = loadChatHistory(sid);
+            const ls = loadCachedTranscript(sid);
             return ls.length ? persistedToUiMessages(ls) : prev;
           });
         }
@@ -425,11 +425,16 @@ export function AgentProvider({
     };
   }, [sessionId, sessionRuntime]);
 
-  // Mirror transcript to localStorage (bounded); server remains source of truth when persistence is on
+  // Server transcripts stay on the gateway. The browser keeps the thinking
+  // stream when persistence is on, and a slim offline copy otherwise.
   useEffect(() => {
     if (hydratedSessionId !== sessionId) return;
-    saveChatHistory(sessionId, uiMessagesToPersisted(messages));
-  }, [messages, hydratedSessionId, sessionId]);
+    saveChatHistory(
+      sessionId,
+      uiMessagesToPersisted(messages),
+      sessionPersistence === true ? 'thinking' : 'transcript',
+    );
+  }, [messages, hydratedSessionId, sessionId, sessionPersistence]);
 
   // Auto-clear a pending approval when its timeout elapses on the backend.
   // The gateway auto-denies after `timeout_secs`; without this effect the
@@ -462,7 +467,7 @@ export function AgentProvider({
   const unsavedThinking = () => {
     const state = turnStreamStateRef.current;
     const thinking = (state.pendingThinking || state.capturedThinking).trim();
-    const clock = freezeThinkingClock(thinkingClockRef.current, Date.now());
+    const clock = advanceThinkingClock(thinkingClockRef.current, 'stop', Date.now());
     return { thinking, pending: state.pendingContent, seconds: clock.seconds };
   };
 
@@ -484,7 +489,7 @@ export function AgentProvider({
         setTyping(true);
         const { state } = foldTurnStream({ type: 'thinking', content: msg.content });
         setStreamingThinking(state.pendingThinking);
-        publishThinkingClock(startThinkingClock(thinkingClockRef.current, Date.now()));
+        publishThinkingClock(advanceThinkingClock(thinkingClockRef.current, 'thinking', Date.now()));
         break;
       }
 
@@ -492,17 +497,15 @@ export function AgentProvider({
         setTyping(true);
         const { state } = foldTurnStream({ type: 'chunk', content: msg.content });
         setStreamingContent(state.pendingContent);
-        if (state.pendingContent.trim()) {
-          publishThinkingClock(freezeThinkingClock(thinkingClockRef.current, Date.now()));
-        }
+        // A narration chunk often arrives before the next thinking frame or
+        // tool round. Freezing here leaves the seconds label stuck.
         break;
       }
 
       case 'chunk_reset':
         // Server signals that the authoritative done message follows.
-        // Snapshot thinking before clearing display state. The answer is about
-        // to arrive as one frame, so the thinking clock stops here.
-        publishThinkingClock(freezeThinkingClock(thinkingClockRef.current, Date.now()));
+        // Snapshot thinking before clearing display state. The clock keeps
+        // running until that done frame actually commits the turn.
         foldTurnStream({ type: 'chunk_reset' });
         setStreamingContent('');
         setStreamingThinking('');
@@ -515,7 +518,7 @@ export function AgentProvider({
           full_response: msg.full_response,
           content: msg.content,
         });
-        const thinkingClock = freezeThinkingClock(thinkingClockRef.current, Date.now());
+        const thinkingClock = advanceThinkingClock(thinkingClockRef.current, 'stop', Date.now());
         publishThinkingClock(idleThinkingClock);
         if (outcome?.kind === 'commit') {
           // `commit` includes reasoning-only turns: empty content but present

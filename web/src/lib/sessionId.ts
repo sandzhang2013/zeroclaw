@@ -1,3 +1,4 @@
+import { writeLocalStorage } from './localStorageWrite.ts';
 import { generateUUID } from './uuid.ts';
 
 export const SESSION_ID_KEY_PREFIX = 'zeroclaw_session_id';
@@ -19,8 +20,27 @@ export function sessionIdStorageKey(agentAlias: string, userId?: string): string
     : `${SESSION_ID_KEY_PREFIX}.${agentAlias}`;
 }
 
+const volatileSessionIds = new Map<string, string>();
+
+function readStored(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function rememberSessionId(key: string, id: string): void {
+  if (writeLocalStorage(key, id)) volatileSessionIds.delete(key);
+  else volatileSessionIds.set(key, id);
+}
+
+function readSessionId(key: string): string | null {
+  return readStored(key) ?? volatileSessionIds.get(key) ?? null;
+}
+
 export function persistSessionId(agentAlias: string, id: string, userId?: string): void {
-  localStorage.setItem(sessionIdStorageKey(agentAlias, userId), id);
+  rememberSessionId(sessionIdStorageKey(agentAlias, userId), id);
 }
 
 /** Return a stable session ID for the given agent alias, persisted in
@@ -37,28 +57,32 @@ export function getOrCreateSessionId(agentAlias: string, userId?: string): strin
   const key = sessionIdStorageKey(agentAlias, userId);
   if (userId) {
     const legacyKey = sessionIdStorageKey(agentAlias);
-    const inherited = localStorage.getItem(legacyKey);
+    const inherited = readStored(legacyKey);
     const flagKey = inheritFlagKey(agentAlias);
-    const alreadyClaimed = localStorage.getItem(flagKey) === '1';
-    const existing = localStorage.getItem(key);
+    const alreadyClaimed = readStored(flagKey) === '1';
+    const existing = readSessionId(key);
     if (existing) {
-      localStorage.setItem(flagKey, '1');
-      if (inherited) localStorage.removeItem(legacyKey);
+      writeLocalStorage(flagKey, '1');
+      if (inherited) {
+        try { localStorage.removeItem(legacyKey); } catch { /* storage unavailable */ }
+      }
       return existing;
     }
     if (inherited && !alreadyClaimed) {
-      localStorage.setItem(key, inherited);
-      localStorage.removeItem(legacyKey);
-      localStorage.setItem(flagKey, '1');
+      rememberSessionId(key, inherited);
+      try { localStorage.removeItem(legacyKey); } catch { /* storage unavailable */ }
+      writeLocalStorage(flagKey, '1');
       return inherited;
     }
-    if (inherited) localStorage.removeItem(legacyKey);
-    localStorage.setItem(flagKey, '1');
+    if (inherited) {
+      try { localStorage.removeItem(legacyKey); } catch { /* storage unavailable */ }
+    }
+    writeLocalStorage(flagKey, '1');
   }
-  let id = localStorage.getItem(key);
+  let id = readSessionId(key);
   if (!id) {
     id = generateUUID();
-    localStorage.setItem(key, id);
+    rememberSessionId(key, id);
   }
   return id;
 }
