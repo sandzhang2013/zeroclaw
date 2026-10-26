@@ -16,6 +16,7 @@ import { fuzzyFilter } from "../../lib/fuzzy";
 import { ApiError, getSectionPicker, type PickerItem } from "../../lib/api";
 import { Badge, Button } from "@/components/ui";
 import type { BadgeTone } from "@/components/ui";
+import { configBadgeLabel, configPickerItemLabel, configPickerNote } from "@/lib/configLabels";
 import { t } from "@/lib/i18n";
 
 interface SectionPickerProps {
@@ -80,8 +81,11 @@ export default function SectionPicker({
   }, [sectionKey]);
 
   const filtered = useMemo(
-    () => fuzzyFilter(items, filter, (i) => `${i.key} ${i.label}`),
-    [items, filter],
+    () =>
+      fuzzyFilter(items, filter, (i) =>
+        `${i.key} ${i.label} ${configPickerItemLabel(sectionKey, i.key, i.label)}`,
+      ),
+    [items, filter, sectionKey],
   );
 
   const handleKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -159,7 +163,7 @@ export default function SectionPicker({
             >
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium text-pc-text">
-                  {item.label}
+                  {configPickerItemLabel(sectionKey, item.key, item.label)}
                   {item.label !== item.key && (
                     <code className="ml-2 text-xs text-pc-text-faint">
                       {item.key}
@@ -168,14 +172,14 @@ export default function SectionPicker({
                 </div>
                 {item.description && (
                   <div className="text-xs mt-0.5 text-pc-text-muted">
-                    {item.description}
+                    {configPickerNote(item.description)}
                   </div>
                 )}
               </div>
               {item.badge && (
                 <Badge tone={badgeTone(item.badge)}>
                   {badgeIsGood(item.badge) && <Check className="h-3 w-3" />}
-                  {item.badge}
+                  {configBadgeLabel(item.badge)}
                 </Badge>
               )}
             </button>

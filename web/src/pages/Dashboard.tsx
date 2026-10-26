@@ -523,7 +523,7 @@ function OverviewTab({
         <ProcessCpuCard process={status.process} />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 stagger-children">
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(18rem,1.25fr)_minmax(0,1fr)_minmax(0,1fr)] gap-6 stagger-children">
         {/* Cost Widget */}
         <div className="card p-5 animate-slide-in-up">
           <div className="flex items-center gap-2 mb-5">
@@ -582,28 +582,30 @@ function OverviewTab({
             ))}
           </div>
           <div
-            className="mt-5 pt-4 border-t flex justify-between text-sm"
+            className="mt-5 pt-4 border-t flex items-baseline justify-between gap-6 whitespace-nowrap text-sm"
             style={{ borderColor: "var(--pc-border)" }}
           >
-            <span style={{ color: "var(--pc-text-muted)" }}>
-              {t("dashboard.total_tokens_label")}
+            <span className="flex items-baseline gap-2 shrink-0">
+              <span style={{ color: "var(--pc-text-muted)" }}>
+                {t("dashboard.total_tokens_label")}
+              </span>
+              <span
+                className="font-mono tabular-nums"
+                style={{ color: "var(--pc-text-primary)" }}
+              >
+                {cost.total_tokens.toLocaleString()}
+              </span>
             </span>
-            <span
-              className="font-mono"
-              style={{ color: "var(--pc-text-primary)" }}
-            >
-              {cost.total_tokens.toLocaleString()}
-            </span>
-          </div>
-          <div className="flex justify-between text-sm mt-1">
-            <span style={{ color: "var(--pc-text-muted)" }}>
-              {t("dashboard.requests_label")}
-            </span>
-            <span
-              className="font-mono"
-              style={{ color: "var(--pc-text-primary)" }}
-            >
-              {cost.request_count.toLocaleString()}
+            <span className="flex items-baseline gap-2 shrink-0">
+              <span style={{ color: "var(--pc-text-muted)" }}>
+                {t("dashboard.requests_label")}
+              </span>
+              <span
+                className="font-mono tabular-nums"
+                style={{ color: "var(--pc-text-primary)" }}
+              >
+                {cost.request_count.toLocaleString()}
+              </span>
             </span>
           </div>
         </div>

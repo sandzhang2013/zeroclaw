@@ -54,6 +54,7 @@ import CostRatesEditor, {
   type CostRatesCategory,
 } from "../components/sections/CostRatesEditor";
 import { Badge, Button, Card, PageHeader } from "@/components/ui";
+import { configBadgeLabel, configSectionHelp, configSectionLabel, configTabLabel } from "@/lib/configLabels";
 import { t } from "@/lib/i18n";
 
 // Display order for the curated sidebar groups. Each `SectionInfo.group`
@@ -257,7 +258,7 @@ export default function Config() {
         <WireTabForm
           key={`${reloadKey}-${activeSection.key}`}
           prefix={activeSection.key}
-          title={activeSection.label}
+          title={configSectionLabel(activeSection.key, activeSection.label)}
           reloadKey={reloadKey}
           onSaved={fetchDrift}
           drift={drifted}
@@ -282,7 +283,7 @@ export default function Config() {
       ) {
         channelExtraTabs.push({
           key: "bind",
-          label: "Bind identity",
+          label: t("config.channels.tab_bind"),
           render: () => (
             <BindChannelForm
               key={`${reloadKey}-${typeParam}-${aliasParam}-bind`}
@@ -378,7 +379,7 @@ export default function Config() {
               className="self-start"
             >
               <ArrowLeft className="h-4 w-4" />
-              {t("config.back_to")}{activeSection.label}
+              {t("config.back_to")}{configSectionLabel(activeSection.key, activeSection.label)}
             </Button>
             {isAgent && (
               <Link to={`/agent/${encodeURIComponent(typeParam)}`}>
@@ -408,7 +409,7 @@ export default function Config() {
         <AliasListView
           sectionKey={activeSection.key}
           typeKey={typeParam}
-          sectionHelp={activeSection.help}
+          sectionHelp={configSectionHelp(activeSection.key, activeSection.help)}
           onSelectAlias={async (alias) => {
             await selectSectionItem(activeSection.key, typeParam, alias);
             navigate(
@@ -459,7 +460,7 @@ export default function Config() {
             className="self-start"
           >
             <ArrowLeft className="h-4 w-4" />
-            {t("config.back_to")}{activeSection.label}
+            {t("config.back_to")}{configSectionLabel(activeSection.key, activeSection.label)}
           </Button>
           <FieldForm
             key={`${reloadKey}-${typeParam}`}
@@ -479,7 +480,7 @@ export default function Config() {
       return (
         <AliasListView
           sectionKey={activeSection.key}
-          sectionHelp={activeSection.help}
+          sectionHelp={configSectionHelp(activeSection.key, activeSection.help)}
           onSelectAlias={async (alias) => {
             await selectSectionItem(activeSection.key, alias);
             navigate(
@@ -540,17 +541,17 @@ export default function Config() {
           tabs={[
             {
               key: "types",
-              label: "Channel types",
+              label: t("config.channels.tab_types"),
               render: () => sectionOverview,
             },
             {
               key: "global",
-              label: "Global settings",
+              label: t("config.channels.tab_global"),
               render: () => (
                 <FieldForm
                   key={`${reloadKey}-channels-global`}
                   prefix="channels"
-                  title="Global channel settings"
+                  title={t("config.channels.global_title")}
                   onSaved={fetchDrift}
                   drift={drifted}
                   includePath={isDirectChannelSetting}
@@ -560,7 +561,7 @@ export default function Config() {
             },
             {
               key: "bind",
-              label: "Bind identity",
+              label: t("config.channels.tab_bind"),
               render: () => (
                 <BindChannelForm
                   key={`${reloadKey}-channels-bind`}
@@ -581,7 +582,9 @@ export default function Config() {
   const crumbs: Array<{ label: string; url?: string }> = [
     { label: t("config.breadcrumb"), url: "/config" },
     {
-      label: activeSection?.label ?? "",
+      label: activeSection
+        ? configSectionLabel(activeSection.key, activeSection.label)
+        : "",
       url: activeSection
         ? `/config/${encodeURIComponent(activeSection.key)}`
         : undefined,
@@ -678,7 +681,7 @@ export default function Config() {
             </Button>
             {activeSection.key !== "workbench.home.caps" && (
             <PageHeader
-              title={activeSection.label}
+              title={configSectionLabel(activeSection.key, activeSection.label)}
               description={
                 <span className="flex items-center gap-1.5 flex-wrap text-pc-text-muted">
                   {crumbs.map((crumb, i) => (
@@ -1012,7 +1015,7 @@ function wireTabSpecs(
     const paths = tabPaths.get(tab)!;
     return {
       key: tab.toLowerCase().replace(/\s+/g, "-"),
-      label: tab,
+      label: configTabLabel(tab),
       render: () => (
         <FieldForm
           key={`${ctx.reloadKey}-${prefix}-${tab}`}
@@ -1542,13 +1545,13 @@ function SectionOverview({
       <div className="flex flex-col gap-4">
         <SectionPicker
           sectionKey={section.key}
-          help={section.help}
+          help={configSectionHelp(section.key, section.help)}
           onPick={(item) => onPickType(item.key)}
         />
         <FieldForm
           key={`${section.key}-fields`}
           prefix={section.key}
-          title={`${section.label}${t("config.settings_suffix")}`}
+          title={`${configSectionLabel(section.key, section.label)}${t("config.settings_suffix")}`}
           includePath={excludePicker}
         />
       </div>
@@ -1565,11 +1568,11 @@ function SectionOverview({
           className="self-start"
         >
           <ArrowLeft className="h-4 w-4" />
-          {t("config.back_to")}{section.label}
+          {t("config.back_to")}{configSectionLabel(section.key, section.label)}
         </Button>
         <SectionPicker
           sectionKey={section.key}
-          help={section.help}
+          help={configSectionHelp(section.key, section.help)}
           onPick={(item) => {
             setShowPicker(false);
             onPickType(item.key);
@@ -1583,7 +1586,7 @@ function SectionOverview({
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between gap-3">
-        <p className="text-sm text-pc-text-secondary">{section.help}</p>
+        <p className="text-sm text-pc-text-secondary">{configSectionHelp(section.key, section.help)}</p>
         <Button
           variant="primary"
           size="md"
@@ -1673,7 +1676,7 @@ function ConfiguredOnlyPicker({
   if (items.length === 0) {
     return (
       <Card className="p-8 text-center text-sm text-pc-text-muted">
-        {t("config.nothing_configured_pre")} <strong>{section.label}</strong>{" "}
+        {t("config.nothing_configured_pre")} <strong>{configSectionLabel(section.key, section.label)}</strong>{" "}
         {t("config.nothing_configured_mid")}{" "}
         <strong>{t("config.add_with_plus")}</strong>{" "}
         {t("config.nothing_configured_post")}
@@ -1701,7 +1704,7 @@ function ConfiguredOnlyPicker({
           <div className="flex items-center gap-2 flex-shrink-0">
             {item.badge && (
               <Badge tone={badgeTone(item.badge)}>
-                {item.badge}
+                {configBadgeLabel(item.badge)}
               </Badge>
             )}
             <ChevronRight className="h-4 w-4 text-pc-text-muted" />

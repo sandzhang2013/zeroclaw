@@ -48,6 +48,7 @@ import ToolPermissionGrid, {
 import { profileLevelFromDraft, parseOptionalAllowedTools, parseDenyAllToolsDraft, serializeAllowedTools } from "@/components/ToolPermissionGrid.logic";
 import { Badge, Button, ComboBox, Select } from "@/components/ui";
 import type { BadgeTone } from "@/components/ui";
+import { configEnumLabel, configFieldHelp, configFieldLabel, configSectionLabel } from "@/lib/configLabels";
 import { t } from "@/lib/i18n";
 import {
   ApiError,
@@ -791,7 +792,7 @@ function AgentEmptyAliasFallback({
   fieldKind: keyof AgentOptionsResponse;
 }) {
   const path = AGENT_ALIAS_SOURCE_PATH[fieldKind];
-  const label = fieldKind.replace(/_/g, " ");
+  const label = configSectionLabel(fieldKind, fieldKind.replace(/_/g, " "));
   return (
     <div
       className="text-xs px-3 py-2 rounded border"
@@ -1509,7 +1510,7 @@ const FieldForm = forwardRef<FieldFormHandle, FieldFormProps>(
                 onUndoTombstone={() => configDraft.unstageTombstone(f.path)}
                 error={fieldErrors[f.path]}
                 onDelete={showDelete ? () => handleDelete(f.path) : undefined}
-                description={descriptionForPath(schema, f.path)}
+                description={configFieldHelp(f.path, descriptionForPath(schema, f.path))}
                 elementProps={
                   f.kind === "object-array"
                     ? objectArrayElementProps(schema, f.path)
@@ -1924,7 +1925,7 @@ function FieldRow({
             htmlFor={entry.path}
             title={`${entry.path}${entry.type_hint ? ` — ${entry.type_hint}` : ""}`}
           >
-            {humanizeFieldLabel(entry.path)}
+            {configFieldLabel(entry.path, humanizeFieldLabel(entry.path))}
             {requirement && (
               <Badge
                 tone={requirementBadgeTone(requirement.tone)}
@@ -1996,7 +1997,7 @@ function FieldRow({
               { value: "", label: "—" },
               ...(entry.enum_variants ?? []).map((v) => ({
                 value: v,
-                label: v,
+                label: configEnumLabel(entry.path, v),
               })),
             ]}
           />
@@ -2593,6 +2594,7 @@ function ObjectArrayEditor({
               {elementProps.map((p) => (
                 <ObjectArrayField
                   key={p.key}
+                  parentPath={inputId}
                   meta={p}
                   rawValue={row[p.key]}
                   onChange={(v) => setField(rowIdx, p.key, v)}
@@ -2607,14 +2609,18 @@ function ObjectArrayEditor({
 }
 
 function ObjectArrayField({
+  parentPath,
   meta,
   rawValue,
   onChange,
 }: {
+  parentPath: string;
   meta: ObjectArrayPropMeta;
   rawValue: unknown;
   onChange: (next: unknown) => void;
 }) {
+  const fieldPath = `${parentPath}.${meta.key}`;
+  const help = configFieldHelp(fieldPath, meta.description ?? null);
   const display = (() => {
     if (rawValue === null || rawValue === undefined) return "";
     if (typeof rawValue === "string") return rawValue;
@@ -2628,7 +2634,7 @@ function ObjectArrayField({
         className="block text-xs font-mono"
         style={{ color: "var(--pc-text-secondary)" }}
       >
-        {meta.key}
+        {configFieldLabel(fieldPath, meta.key)}
         {meta.optional && (
           <span
             className="ml-1.5 text-[10px]"
@@ -2638,12 +2644,12 @@ function ObjectArrayField({
           </span>
         )}
       </label>
-      {meta.description && (
+      {help && (
         <p
           className="text-[11px] mt-0.5"
           style={{ color: "var(--pc-text-muted)" }}
         >
-          {meta.description}
+          {help}
         </p>
       )}
       {meta.kind === "bool" ? (
@@ -2662,7 +2668,7 @@ function ObjectArrayField({
           <option value="">—</option>
           {meta.enumVariants.map((v) => (
             <option key={v} value={v}>
-              {v}
+              {configEnumLabel(fieldPath, v)}
             </option>
           ))}
         </select>

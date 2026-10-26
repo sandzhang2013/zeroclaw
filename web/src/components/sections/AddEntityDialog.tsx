@@ -24,6 +24,7 @@ import {
 } from "../../lib/api";
 import SectionPicker from "./SectionPicker";
 import { Button } from "@/components/ui";
+import { configSectionHelp, configSectionLabel } from "@/lib/configLabels";
 import { t } from "@/lib/i18n";
 
 function suggestAlias(aliases: string[]): string {
@@ -138,7 +139,7 @@ export default function AddEntityDialog({
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-base font-semibold text-pc-text">
             {t("add_entity.add_to_prefix")}
-            {section.label}
+            {configSectionLabel(section.key, section.label)}
           </h2>
           <button
             type="button"
@@ -160,7 +161,7 @@ export default function AddEntityDialog({
           // Step 1 (typed sections): choose the type via the shared picker.
           <SectionPicker
             sectionKey={section.key}
-            help={section.help}
+            help={configSectionHelp(section.key, section.help)}
             onPick={(item) => {
               setType(item.key);
               setAlias("");
