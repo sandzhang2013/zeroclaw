@@ -4,6 +4,7 @@ pub mod a2a_wire;
 pub mod agent;
 pub mod attribution;
 pub mod channel;
+pub mod conversation_binding;
 pub mod elicitation;
 pub mod grants;
 pub mod hook;
@@ -26,6 +27,8 @@ pub mod runtime_traits;
 pub mod schema;
 pub mod session_keys;
 pub mod tool;
+pub mod tool_carrier;
+pub mod turn_stop;
 pub mod user_attrs;
 pub mod vad;
 pub mod webhook;
@@ -56,6 +59,12 @@ tokio::task_local! {
     /// ops MCP geo binding can tell "湖北省" (default 全省) from an explicit
     /// city name like "武汉".
     pub static TOOL_LOOP_TURN_USER_TEXT: Option<String>;
+
+    /// The conversation the current turn is serving, when its surface
+    /// supports conversation binding. Scoped beside `TOOL_LOOP_SESSION_KEY`
+    /// by that surface; read by tools that record a binding.
+    pub static TOOL_LOOP_ACTIVE_CONVERSATION:
+        Option<crate::conversation_binding::ActiveConversation>;
 
     /// Native extended thinking parameters, set by the outer orchestration
     /// functions and read by `run_tool_call_loop` when building `ChatRequest`.

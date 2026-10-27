@@ -4,8 +4,6 @@
 //! `GET`/`PUT /api/workbench/home/catalog` — ops nested editor (both locales).
 //! Canonical storage remains `workbench.home.caps`.
 
-use std::sync::Arc;
-
 use axum::extract::{Json, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
@@ -93,11 +91,22 @@ pub async fn handle_workbench_home_catalog_put(
         }
     };
 
-    let _cfg_guard = Arc::clone(&state.config_write_lock).lock_owned().await;
-    let mut working = state.config.read().clone();
+    let _cfg_guard = match state.begin_config_commit().await {
+        Ok(commit) => commit,
+        Err(e) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                axum::Json(serde_json::json!({
+                    "error": format!("config commit refused without any change: {e}")
+                })),
+            )
+                .into_response();
+        }
+    };
+    let before = _cfg_guard.current_config();
+    let mut working = before.clone();
     working.workbench.home.caps = caps.clone();
     working.mark_dirty("workbench.home.caps");
-    let before = state.config.read().clone();
     let authorization = match authorize_config_write(
         &principal,
         ConfigWriteSet::by_effect(&before, &working, ["workbench.home.caps"]),
