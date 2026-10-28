@@ -165,6 +165,8 @@ test("ChannelAddForm preserves edited fields across real mode interactions", asy
     const module = await jiti.import<typeof import("./ChannelAddForm.tsx")>(
       "./ChannelAddForm.tsx",
     );
+    const createNew = "新建";
+    const useExisting = "使用现有";
     const ChannelAddForm = module.ChannelAddForm as React.ComponentType<
       ChannelAddFormProps
     >;
@@ -195,7 +197,7 @@ test("ChannelAddForm preserves edited fields across real mode interactions", asy
     });
 
     await act(async () => {
-      findButton(domWindow.document, "Create new").click();
+      findButton(domWindow.document, createNew).click();
     });
 
     const typeSelect = domWindow.document.querySelector(
@@ -216,7 +218,7 @@ test("ChannelAddForm preserves edited fields across real mode interactions", asy
     });
 
     await act(async () => {
-      findButton(domWindow.document, "Use existing").click();
+      findButton(domWindow.document, useExisting).click();
       await flushEffects();
     });
 
@@ -236,7 +238,7 @@ test("ChannelAddForm preserves edited fields across real mode interactions", asy
     );
 
     await act(async () => {
-      findButton(domWindow.document, "Create new").click();
+      findButton(domWindow.document, createNew).click();
       await flushEffects();
     });
 

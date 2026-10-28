@@ -3370,20 +3370,27 @@ data: {\"type\":\"message_stop\"}\n\n",
             .await
             .expect("chat message");
 
-        let mut terminal_error = None;
-        for _ in 0..8 {
-            let frame = tokio::time::timeout(Duration::from_secs(3), client.next())
-                .await
-                .expect("gateway response deadline")
-                .expect("gateway stays connected")
-                .expect("gateway frame");
-            let text = frame.into_text().expect("text gateway frame");
-            let json: serde_json::Value = serde_json::from_str(&text).expect("JSON gateway frame");
-            if json["type"] == "error" {
-                terminal_error = Some(json);
-                break;
+        // One deadline for the whole projection, not 8 × a long per-frame wait.
+        let terminal_error = tokio::time::timeout(Duration::from_secs(15), async {
+            let mut terminal_error = None;
+            for _ in 0..8 {
+                let frame = client
+                    .next()
+                    .await
+                    .expect("gateway stays connected")
+                    .expect("gateway frame");
+                let text = frame.into_text().expect("text gateway frame");
+                let json: serde_json::Value =
+                    serde_json::from_str(&text).expect("JSON gateway frame");
+                if json["type"] == "error" {
+                    terminal_error = Some(json);
+                    break;
+                }
             }
-        }
+            terminal_error
+        })
+        .await
+        .expect("empty terminal response must arrive within 15s");
 
         let error = terminal_error.expect("empty terminal response reaches WebSocket client");
         assert_eq!(error["code"], "PROVIDER_ERROR");

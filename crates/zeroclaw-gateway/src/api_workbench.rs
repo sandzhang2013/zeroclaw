@@ -200,7 +200,7 @@ mod tests {
     async fn home_empty_caps_fall_back_to_builtin() {
         let tmp = tempfile::TempDir::new().unwrap();
         let state = pairing_on_bff_state(&tmp);
-        state.config.write().workbench.home.caps.clear();
+        state.publish_test_config(|config| config.workbench.home.caps.clear());
         let response = handle_workbench_home(
             State(state),
             bff_headers("alice", "普通用户"),
@@ -223,16 +223,18 @@ mod tests {
     async fn home_uses_configured_caps() {
         let tmp = tempfile::TempDir::new().unwrap();
         let state = pairing_on_bff_state(&tmp);
-        state.config.write().workbench.home.caps = vec![WorkbenchHomeCap {
-            id: "hello".into(),
-            tab: "query".into(),
-            tab_label_zh: "问数".into(),
-            icon: "search".into(),
-            kind: "chat".into(),
-            label_zh: "问好".into(),
-            prompt_zh: "你好".into(),
-            ..Default::default()
-        }];
+        state.publish_test_config(|config| {
+            config.workbench.home.caps = vec![WorkbenchHomeCap {
+                id: "hello".into(),
+                tab: "query".into(),
+                tab_label_zh: "问数".into(),
+                icon: "search".into(),
+                kind: "chat".into(),
+                label_zh: "问好".into(),
+                prompt_zh: "你好".into(),
+                ..Default::default()
+            }];
+        });
         let response = handle_workbench_home(
             State(state),
             bff_headers("alice", "普通用户"),
@@ -317,13 +319,15 @@ mod tests {
     async fn catalog_put_empty_resets_to_builtin() {
         let tmp = tempfile::TempDir::new().unwrap();
         let state = pairing_on_bff_state(&tmp);
-        state.config.write().workbench.home.caps = vec![WorkbenchHomeCap {
-            id: "hello".into(),
-            tab: "query".into(),
-            label_zh: "问好".into(),
-            prompt_zh: "你好".into(),
-            ..Default::default()
-        }];
+        state.publish_test_config(|config| {
+            config.workbench.home.caps = vec![WorkbenchHomeCap {
+                id: "hello".into(),
+                tab: "query".into(),
+                label_zh: "问好".into(),
+                prompt_zh: "你好".into(),
+                ..Default::default()
+            }];
+        });
         let response = handle_workbench_home_catalog_put(
             State(state.clone()),
             None,

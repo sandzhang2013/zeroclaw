@@ -9086,19 +9086,25 @@ mod tests {
             (r"\\.\NUL", &outside),
         ] {
             let alias = workspace.join(name);
-            symlink(target, &alias).unwrap();
-            assert_eq!(
-                policy.resolve_policy_target(&alias),
-                Some(target.clone()),
-                "{name:?} is an ordinary Unix filename and must resolve to its target"
-            );
+            // APFS and other case-insensitive volumes already have the
+            // uppercase spelling: it is the lowercase symlink, which points at
+            // `secret` rather than `outside`. Skip creation and the target
+            // equality check, but still require the existing alias to be denied.
+            if std::fs::symlink_metadata(&alias).is_err() {
+                symlink(target, &alias).unwrap();
+                assert_eq!(
+                    policy.resolve_policy_target(&alias),
+                    Some(target.clone()),
+                    "{name:?} is an ordinary Unix filename and must resolve to its target"
+                );
+            }
             assert!(
                 !policy.is_resolved_path_readable(&alias),
-                "{name:?} alias to {target:?} must not be readable"
+                "{name:?} must not be readable"
             );
             assert!(
                 !policy.is_resolved_path_allowed(&alias),
-                "{name:?} alias to {target:?} must not be writable"
+                "{name:?} must not be writable"
             );
         }
 
