@@ -329,6 +329,10 @@ export default function ChatWorkspace({
       }
       const visible = visibleSessionIdsRef.current.has(sessionId);
       const grew = s.messageCount > prev.lastSeenCount;
+      // The first non-empty count is history loading, not a new turn.
+      // Stamping updatedAt here sorts the opened row to the top of the list.
+      const openingHistory = grew && prev.liveCount === 0;
+      const activity = grew && !openingHistory;
       statusRef.current[sessionId] = {
         lastSeenCount: visible ? s.messageCount : prev.lastSeenCount,
         liveCount: s.messageCount,
@@ -346,18 +350,18 @@ export default function ChatWorkspace({
             skillLabel: current.homeSkill?.label,
           });
           if (!nextTitle) {
-            if (!grew) return list;
+            if (!activity) return list;
             return list.map((sess) => (
               sess.id === sessionId ? { ...sess, updatedAt: stampNow() } : sess
             ));
           }
-          if (!grew && nextTitle === current.title) return list;
+          if (!activity && nextTitle === current.title) return list;
           if (nextTitle !== current.title) {
             queueMicrotask(() => persistGatewayTitle(current, nextTitle, userIdRef.current));
           }
           return list.map((sess) => (
             sess.id === sessionId
-              ? { ...sess, title: nextTitle, updatedAt: grew ? stampNow() : sess.updatedAt }
+              ? { ...sess, title: nextTitle, updatedAt: activity ? stampNow() : sess.updatedAt }
               : sess
           ));
         });

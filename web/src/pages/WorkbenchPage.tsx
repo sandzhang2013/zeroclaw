@@ -82,8 +82,10 @@ export default function WorkbenchPage() {
   return (
     <div className="flex h-full w-full flex-col overflow-hidden bg-pc-base text-pc-text">
       <ErrorBoundary>
+        {/* User switch remounts. The URL alias must not: selecting a session
+            rewrites it, and a new key would drop that session and show home. */}
         <ChatWorkspace
-          key={`${user.userId}:${agentAlias}`}
+          key={user.userId}
           initialAlias={agentAlias}
           userId={user.userId}
           userName={user.displayName}
