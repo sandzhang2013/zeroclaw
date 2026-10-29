@@ -1,6 +1,61 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# One patch per commit, recorded in web/WORKBENCH_VERSION. Packaging reads that
+# file, so a shallow clone still shows the same badge. Merge and amend commits
+# keep the version the staged tree already has. ZEROCLAW_SKIP_VERSION_BUMP=1
+# skips the bump.
+bump_workbench_version() {
+  if [[ "${ZEROCLAW_SKIP_VERSION_BUMP:-}" == "1" ]]; then
+    return 0
+  fi
+  if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+    return 0
+  fi
+  case "${GIT_REFLOG_ACTION:-}" in
+    *amend*) return 0 ;;
+  esac
+
+  local others head_ver file_ver index_ver base next
+  others="$(git diff --cached --name-only | grep -v '^web/WORKBENCH_VERSION$' || true)"
+  if [[ -z "${others}" ]]; then
+    return 0
+  fi
+
+  head_ver="$(git show "HEAD:web/WORKBENCH_VERSION" 2>/dev/null | tr -d '[:space:]' || true)"
+  file_ver="$(tr -d '[:space:]' < web/WORKBENCH_VERSION)"
+  index_ver="$(git show ":web/WORKBENCH_VERSION" 2>/dev/null | tr -d '[:space:]' || true)"
+  if [[ -n "${head_ver}" && -n "${index_ver}" && "${index_ver}" != "${head_ver}" ]]; then
+    return 0
+  fi
+
+  if [[ -n "${head_ver}" ]]; then
+    base="${head_ver}"
+  else
+    base="${file_ver}"
+  fi
+  next="$(bump_workbench_patch "${base}")"
+  if [[ "${file_ver}" == "${next}" && "${index_ver}" == "${next}" ]]; then
+    return 0
+  fi
+  printf '%s\n' "${next}" > web/WORKBENCH_VERSION
+  git add -- web/WORKBENCH_VERSION
+}
+
+bump_workbench_patch() {
+  local version="$1" major minor patch
+  IFS=. read -r major minor patch <<<"${version}"
+  if [[ ! "${major}" =~ ^[0-9]+$ || ! "${minor}" =~ ^[0-9]+$ || ! "${patch}" =~ ^[0-9]+$ ]]; then
+    echo "workbench version: web/WORKBENCH_VERSION must be MAJOR.MINOR.PATCH, got '${version}'" >&2
+    return 1
+  fi
+  printf '%s.%s.%s\n' "${major}" "${minor}" "$((patch + 1))"
+}
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "${repo_root}"
+bump_workbench_version
+
 if command -v gitleaks >/dev/null 2>&1; then
   gitleaks protect --staged --redact
 else

@@ -1,5 +1,4 @@
 import { Buffer } from "node:buffer";
-import { execFileSync } from "node:child_process";
 import { copyFileSync, readFileSync, watch, type FSWatcher } from "node:fs";
 import type { IncomingMessage, ClientRequest } from "node:http";
 import path from "path";
@@ -36,21 +35,6 @@ const IDENTITY_HEADERS = [
   "x-user-region",
   "x-user-org",
 ] as const;
-
-/** Default Vite public prefix. Empty `ZEROCLAW_WEB_BASE` opts back to `/`. */
-function gitCommitCount(): number | null {
-  try {
-    const out = execFileSync("git", ["rev-list", "--count", "HEAD"], {
-      cwd: path.resolve(__dirname, ".."),
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    const count = Number(out);
-    return Number.isInteger(count) && count >= 0 ? count : null;
-  } catch {
-    return null;
-  }
-}
 
 function servePrefix(): string {
   const raw = process.env.ZEROCLAW_WEB_BASE;
@@ -181,11 +165,15 @@ function copyIframeBridge(): Plugin {
 function workbenchVersionPlugin(): Plugin {
   const virtualId = "virtual:workbench-version";
   const resolvedId = `\0${virtualId}`;
-  const gitDir = path.resolve(__dirname, "..", ".git");
-  const refFile = (): string => {
-    const head = readFileSync(path.join(gitDir, "HEAD"), "utf8").trim();
-    const ref = head.match(/^ref: (.+)$/)?.[1];
-    return ref ? path.join(gitDir, ref) : path.join(gitDir, "HEAD");
+  const versionFile = path.resolve(__dirname, "WORKBENCH_VERSION");
+  const readVersion = (): string => {
+    try {
+      const text = readFileSync(versionFile, "utf8").trim();
+      if (/^\d+\.\d+\.\d+$/.test(text)) return text;
+    } catch {
+      /* missing file falls through */
+    }
+    return "0.6.2";
   };
   return {
     name: "workbench-version",
@@ -194,19 +182,17 @@ function workbenchVersionPlugin(): Plugin {
     },
     load(source) {
       if (source !== resolvedId) return;
-      const count = gitCommitCount();
-      return `export const workbenchCommitCount = ${count ?? "null"};\n`;
+      return `export const workbenchVersion = ${JSON.stringify(readVersion())};\n`;
     },
     configureServer(server) {
       let current: FSWatcher | undefined;
       const arm = () => {
         current?.close();
         try {
-          current = watch(refFile(), () => {
+          current = watch(versionFile, () => {
             const mod = server.moduleGraph.getModuleById(resolvedId);
             if (mod) server.moduleGraph.invalidateModule(mod);
             server.ws.send({ type: "full-reload" });
-            arm();
           });
         } catch {
           current = undefined;

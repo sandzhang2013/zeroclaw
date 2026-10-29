@@ -27,7 +27,7 @@ import {
   type FolderNavState,
 } from '@/lib/workbenchFolderNav';
 import { workbenchVersionLabel } from '@/lib/workbenchVersion';
-import { workbenchCommitCount } from 'virtual:workbench-version';
+import { workbenchVersion } from 'virtual:workbench-version';
 import type { TurnVerdict } from '@/lib/turnFeedback';
 
 export interface SessionIndicator {
@@ -61,7 +61,7 @@ export interface WorkbenchSidebarProps {
   userId?: string;
 }
 
-const WORKBENCH_VERSION = workbenchVersionLabel(workbenchCommitCount);
+const WORKBENCH_VERSION = workbenchVersionLabel(workbenchVersion);
 
 const CARD =
   'h-9 min-w-0 w-full justify-start gap-3 rounded-[10px] px-3 py-[7.5px] text-left text-sm text-pc-text-muted transition-colors hover:bg-[var(--pc-hover)] hover:text-pc-text';

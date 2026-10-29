@@ -1,22 +1,18 @@
-/** Sidebar badge. `0.6.2` is this commit count; each later commit adds 1 to the last number. */
-export const WORKBENCH_VERSION_BASE = "0.6.2";
-export const WORKBENCH_VERSION_BASE_COMMITS = 5140;
+/** Sidebar badge. `web/WORKBENCH_VERSION` is the source of truth. */
+export const WORKBENCH_VERSION_FALLBACK = "0.6.2";
 
-/** `commitCount` is `git rev-list --count HEAD`. Missing git stays on the base. */
-export function workbenchVersionLabel(commitCount: number | null | undefined): string {
-  const parts = WORKBENCH_VERSION_BASE.split(".");
-  const major = parts[0];
-  const minor = parts[1];
-  const patch = Number(parts[2]);
-  if (
-    major === undefined ||
-    minor === undefined ||
-    !Number.isInteger(patch) ||
-    commitCount == null ||
-    !Number.isInteger(commitCount) ||
-    commitCount < WORKBENCH_VERSION_BASE_COMMITS
-  ) {
-    return WORKBENCH_VERSION_BASE;
-  }
-  return `${major}.${minor}.${patch + (commitCount - WORKBENCH_VERSION_BASE_COMMITS)}`;
+const VERSION_RE = /^(\d+)\.(\d+)\.(\d+)$/;
+
+/** Keep a `MAJOR.MINOR.PATCH` string. Anything else falls back to `0.6.2`. */
+export function workbenchVersionLabel(raw: string | null | undefined): string {
+  const text = raw?.trim() ?? "";
+  if (!VERSION_RE.test(text)) return WORKBENCH_VERSION_FALLBACK;
+  return text;
+}
+
+/** Next patch, or null when `raw` is not `MAJOR.MINOR.PATCH`. */
+export function bumpWorkbenchVersion(raw: string): string | null {
+  const match = VERSION_RE.exec(raw.trim());
+  if (!match) return null;
+  return `${match[1]}.${match[2]}.${Number(match[3]) + 1}`;
 }

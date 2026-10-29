@@ -94,6 +94,33 @@ cargo web build
 
 本机只改 UI、不打交付包时，用 `cargo web dev`（或 `cd web && npm run dev`）即可，不必每次 `cargo web build`。
 
+### 工作台角标版本
+
+侧栏左下角的 `v0.6.x` 不是内核版本，也不是 `web/package.json` 的 `0.1.0`。内核版本在仓库根 `Cargo.toml` 的 `[workspace.package] version`。
+
+角标只读 `web/WORKBENCH_VERSION`。文件里一行 `MAJOR.MINOR.PATCH`，例如 `0.6.704`。`npm run build` / `cargo web build` 把这一行写进 `web/dist` 的 JS。页面打开时不再计算。浅克隆、历史中断都不影响结果：同一个提交里的文件内容相同，打出来的角标就相同。
+
+不要再用 `git rev-list --count HEAD` 推算这个号。那条命令数的是打包机上当时能走完的历史。历史在中间断开时，同一个提交会算出两个数。
+
+版本在提交时加，不在打包时加。`.githooks/pre-commit` 在这次提交除版本文件外还有改动时，把最后一位加 1，并放进同一次提交。下面这些情况不加：
+
+| 情况 | 结果 |
+|---|---|
+| 合并提交 | 保持各自分支已经写好的号 |
+| `git commit --amend` | 不再加 |
+| 暂存区里只有 `web/WORKBENCH_VERSION` | 不再加，避免钩子跑第二遍 |
+| `ZEROCLAW_SKIP_VERSION_BUMP=1` | 这次提交不加 |
+
+钩子要生效，仓库需要把钩子目录指到 `.githooks`（每个克隆设一次）：
+
+```bash
+git config core.hooksPath .githooks
+```
+
+没设这个目录时，提交不会改版本文件，打包就一直显示文件里的旧号。`--no-verify` 同样会跳过。
+
+当前文件从完整历史的 `0.6.704` 起算。引入这套规则的那次提交若走了钩子，会把它加成 `0.6.705`。之后每有一次普通提交就再加 1。
+
 ## 五、编译二进制
 
 ### 交付（Linux x86-64，必须用 `ci` profile）
