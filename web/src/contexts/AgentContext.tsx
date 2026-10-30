@@ -38,6 +38,7 @@ import {
   type TurnStreamState,
 } from '@/contexts/turnStream.logic';
 import { buildHistoryTrimmedNotice } from '@/contexts/historyTrimNotices.logic';
+import { uncommittedLocalTail } from '@/contexts/chatHydration.logic';
 import {
   advanceThinkingClock,
   idleThinkingClock,
@@ -380,6 +381,15 @@ export function AgentProvider({
     const sid = sessionId;
     const hydrationStartedAtMutationVersion = localMessageMutationVersionRef.current;
     let cancelled = false;
+    // This conversation's browser copy, read before the mirror effect can
+    // overwrite it: the mirror stays idle until `hydratedSessionId` matches
+    // `sid`. Unlike `messages`, which a session switch has just emptied, it
+    // still holds a prompt the gateway has not committed yet.
+    // Thinking sidecars carry a content hash and an empty body. They restore
+    // reasoning onto server rows below, and must not become bubbles of their own.
+    const browserCopy = persistedToUiMessages(
+      loadChatHistory(sid).filter((row) => !row.contentHash),
+    );
 
     // Session management is a capability, not an optimistic default. Every
     // hydration starts unknown and only an affirmative gateway response opens
@@ -395,9 +405,18 @@ export function AgentProvider({
         if (res.session_persistence) {
           if (localMessageMutationVersionRef.current === hydrationStartedAtMutationVersion) {
             const fromServer = mapServerMessagesToPersisted(res.messages);
-            setMessages(persistedToUiMessages(
+            const hydrated = persistedToUiMessages(
               mergePersistedThinking(fromServer, loadChatHistory(sid)),
-            ));
+            );
+            const snapshotUsers = res.messages
+              .filter((row) => row.role === 'user')
+              .map((row) => row.content);
+            // The gateway commits a turn's prompt only when the turn ends, so a
+            // reload or a round trip to another conversation mid-turn fetches a
+            // snapshot that predates the prompt this browser already showed.
+            // Keep that uncommitted tail instead of replacing it. Thinking is
+            // restored onto the server rows first; the gateway does not store it.
+            setMessages([...hydrated, ...uncommittedLocalTail(snapshotUsers, browserCopy)]);
           }
         } else if (!res.session_persistence) {
           setMessages((prev) => {

@@ -185,6 +185,17 @@ test('thinking cache drops the report body and still restores reasoning', () => 
   assert.equal(merged[0]?.content, report);
 });
 
+test('thinking cache keeps a locally composed prompt and drops a server user row', () => {
+  mockLocalStorage();
+  saveChatHistory('live', [
+    { id: 'u', role: 'user', content: 'long task', local: true, timestamp: '2026-01-01T00:00:00.000Z' },
+    { id: 's', role: 'user', content: 'already stored', timestamp: '2026-01-01T00:00:01.000Z' },
+  ], 'thinking');
+  const cached = loadChatHistory('live');
+  assert.deepEqual(cached.map((row) => row.content), ['long task']);
+  assert.equal(cached[0]?.local, true);
+});
+
 test('transcript cache strips html fences and caps tool output', () => {
   mockLocalStorage();
   saveChatHistory('offline', [{

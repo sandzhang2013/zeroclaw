@@ -56,8 +56,9 @@ export function loadCachedTranscript(sessionId: string): PersistedChatBubble[] {
 /**
  * Mirror a conversation into localStorage.
  *
- * `thinking` keeps the reasoning stream the server does not store, plus a short
- * reply preview for ratings. `transcript` is the offline copy: HTML report
+ * `thinking` keeps the reasoning stream the server does not store, a short
+ * reply preview for ratings, and locally composed prompts the server has not
+ * committed yet. Reply bodies stay on the gateway. `transcript` is the offline copy: HTML report
  * fences and bulky tool payloads are left out. Either way the keys stay inside
  * `CHAT_HISTORY_BUDGET_CHARS`, oldest conversation first.
  */
@@ -177,6 +178,19 @@ function cacheRows(messages: PersistedChatBubble[], mode: ChatHistoryCacheMode):
 function thinkingSidecar(messages: PersistedChatBubble[]): PersistedChatBubble[] {
   const out: PersistedChatBubble[] = [];
   for (const row of messages) {
+    // A prompt the browser composed is not on the server until the turn ends.
+    // Keep it so a reload during that turn can put it back. Other user rows
+    // are already in the gateway transcript and are not copied here.
+    if (row.role === 'user' && row.local === true && row.content.trim()) {
+      out.push({
+        id: row.id,
+        role: 'user',
+        content: row.content,
+        local: true,
+        timestamp: row.timestamp,
+      });
+      continue;
+    }
     if (row.role !== 'agent') continue;
     const thinking = row.thinking?.trim();
     const preview = row.toolCall ? '' : normalizeTurnContent(row.content);
