@@ -394,22 +394,24 @@ export default function PersonalityEditor({ agent }: Props) {
 
           {preview ? (
             <div
-              className="prose prose-invert max-w-none rounded-md border px-4 py-3 text-sm overflow-y-auto"
+              className="overflow-y-auto rounded-xl border"
               style={{
                 borderColor: 'var(--pc-border)',
-                background: 'var(--pc-bg-base)',
-                minHeight: '20rem',
+                background: 'var(--pc-bg-surface)',
+                height: '32rem',
               }}
             >
               {(activeBuf?.draft ?? '').trim().length > 0 ? (
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
-                  rehypePlugins={[[rehypeHighlight, { detect: true, ignoreMissing: true }]]}
-                >
-                  {activeBuf?.draft ?? ''}
-                </ReactMarkdown>
+                <div className="chat-markdown mx-auto max-w-2xl px-8 py-6 text-sm leading-relaxed text-[var(--pc-text-primary)]">
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    rehypePlugins={[[rehypeHighlight, { detect: true, ignoreMissing: true }]]}
+                  >
+                    {activeBuf?.draft ?? ''}
+                  </ReactMarkdown>
+                </div>
               ) : (
-                <p style={{ color: 'var(--pc-text-muted)' }}>
+                <p className="px-6 py-5 text-sm" style={{ color: 'var(--pc-text-muted)' }}>
                   {t('personality.nothing_to_preview')}
                 </p>
               )}
