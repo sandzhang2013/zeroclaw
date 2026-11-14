@@ -5188,35 +5188,12 @@ impl RpcDispatcher {
                                     agent.set_history_has_trim_breadcrumb(opt.unwrap_or(false));
                                     seed_event = agent.seed_history_with_event(&stored);
                                     message_count = stored.len();
-                                    // Seed-time trim only fires when the
-                                    // restored history exceeded the structured
-                                    // cap, so it dropped rows, not just
-                                    // relabeled them. Mirror the ACP restore
-                                    // contract: persist the retained
-                                    // projection and corrected breadcrumb
-                                    // before the session goes live, or a
-                                    // reconnect before the next prompt
-                                    // reloads the untrimmed durable prefix
-                                    // and repeats the trim, leaving the live
-                                    // agent and the durable session
-                                    // disagreeing.
-                                    if seed_event.is_some() {
-                                        let durable = zeroclaw_providers::durable_chat_messages(
-                                            agent.history(),
-                                        );
-                                        if !replace_rpc_chat_conversation_state(
-                                            backend.as_ref(),
-                                            &session_id,
-                                            &session_key,
-                                            &durable,
-                                            agent.history_has_trim_breadcrumb(),
-                                        ) {
-                                            return Err(rpc_err(
-                                                INTERNAL_ERROR,
-                                                "session restore unavailable; retry the connection",
-                                            ));
-                                        }
-                                    }
+                                    // Seed-time trim only changes the
+                                    // in-memory window the next model call
+                                    // sees. The durable transcript keeps
+                                    // every saved turn, so a reconnect
+                                    // reloads the full record and trims
+                                    // again in memory.
                                 }
                                 Err(e) => {
                                     ::zeroclaw_log::record!(
@@ -7173,14 +7150,12 @@ impl RpcDispatcher {
                     && let Some(agent) = self.ctx.sessions.get_agent(sid).await
                 {
                     let key = format!("rpc_{sid}");
-                    // Replace the durable transcript and breadcrumb flag with
-                    // the agent's own authoritative post-turn history, as one
-                    // state, rather than appending this turn's prompt/response
-                    // delta on top of a transcript the agent's loop may have
-                    // already trimmed underneath it.
+                    // Append only the messages the store does not already
+                    // end with. Older turns the agent trimmed out of its
+                    // in-memory window stay in the transcript.
                     let agent = agent.lock().await;
                     let durable = zeroclaw_providers::durable_chat_messages(agent.history());
-                    replace_rpc_chat_conversation_state(
+                    append_rpc_chat_conversation_state(
                         backend.as_ref(),
                         sid,
                         &key,
@@ -13826,30 +13801,50 @@ pub(super) async fn forward_turn_event(
     }
 }
 
-/// Replace the RPC chat session's durable transcript and breadcrumb flag
-/// with the agent's own authoritative post-turn history. A durable write
-/// failure here must not be silently swallowed: the turn is still reported
-/// to the RPC client as completed, but the durable store then disagrees
-/// with what the caller claims was persisted, so failures are logged with
-/// session context for operators to notice.
+/// Append the RPC chat window's unsaved tail onto the durable transcript.
+/// Older turns already saved stay put even when the in-memory window has
+/// dropped them. A durable write failure is logged: the turn is still
+/// reported to the RPC client as completed, but the store is then missing
+/// the new messages.
 ///
-/// Returns `true` when the row was committed or there was nothing left to
-/// persist (session already deleted), and `false` when the durable write
-/// itself failed, so a restore-time caller can fail closed instead of
-/// letting the session go live against a store that still has the
-/// untrimmed prefix.
-fn replace_rpc_chat_conversation_state(
+/// Returns `true` when the new messages were committed, there was nothing
+/// new to write, or the session was already deleted. Returns `false` when
+/// the transcript could not be read or the append itself failed.
+fn append_rpc_chat_conversation_state(
     backend: &dyn zeroclaw_infra::session_backend::SessionBackend,
     session_id: &str,
     session_key: &str,
-    durable: &[zeroclaw_providers::ChatMessage],
-    breadcrumb_present: bool,
+    window: &[zeroclaw_providers::ChatMessage],
+    skip_leading_breadcrumb: bool,
 ) -> bool {
-    // Guarded replacement, not check-then-act: a delete committing between a
-    // separate existence probe and the write would be silently undone by the
-    // replace recreating the session row/files. When deletion already won
-    // (`Ok(false)`) there is nothing left to persist, so skip quietly.
-    match backend.replace_conversation_state_if_exists(session_key, durable, breadcrumb_present) {
+    let stored = match backend.try_load(session_key) {
+        Ok(stored) => stored,
+        Err(e) => {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
+                    .with_attrs(::serde_json::json!({
+                        "session_id": session_id,
+                        "error": format!("{}", e),
+                    })),
+                "Failed to read conversation transcript before appending"
+            );
+            return false;
+        }
+    };
+    let delta = zeroclaw_api::model_provider::unpersisted_transcript_suffix(
+        &stored,
+        window,
+        skip_leading_breadcrumb,
+    );
+    if delta.is_empty() {
+        return true;
+    }
+    // Existence is checked inside the append, under the same lock as
+    // deletion, so a delete that already won is not undone by recreating
+    // the session row or file.
+    match backend.append_messages_if_exists(session_key, delta) {
         Ok(_) => true,
         Err(e) => {
             ::zeroclaw_log::record!(
@@ -13860,7 +13855,7 @@ fn replace_rpc_chat_conversation_state(
                         "session_id": session_id,
                         "error": format!("{}", e),
                     })),
-                "Failed to persist authoritative post-turn conversation state"
+                "Failed to persist new conversation messages"
             );
             false
         }
@@ -14963,7 +14958,9 @@ mod tests {
             _session_key: &str,
             _message: &zeroclaw_providers::ChatMessage,
         ) -> std::io::Result<()> {
-            Ok(())
+            Err(std::io::Error::other(
+                "simulated durable replacement failure",
+            ))
         }
         fn remove_last(&self, _session_key: &str) -> std::io::Result<bool> {
             Ok(false)
@@ -14990,26 +14987,26 @@ mod tests {
     }
 
     #[test]
-    fn replace_rpc_chat_conversation_state_logs_and_does_not_panic_on_durable_failure() {
+    fn append_rpc_chat_conversation_state_logs_and_does_not_panic_on_durable_failure() {
         // The RPC chat completion path must not crash or hang when the
-        // durable replacement fails; it logs and returns so the turn's
-        // completion notification still reaches the client. There is no
-        // return value to assert on directly (the caller's contract is
-        // "best-effort, logged"), so this pins that the call completes
-        // without panicking against a backend that always fails the write.
+        // durable append fails; it logs and returns so the turn's
+        // completion notification still reaches the client.
         let backend = FailingReplaceBackend;
         let durable = vec![zeroclaw_providers::ChatMessage::user("hi")];
 
-        replace_rpc_chat_conversation_state(&backend, "sess-1", "rpc_sess-1", &durable, false);
+        assert!(
+            !append_rpc_chat_conversation_state(&backend, "sess-1", "rpc_sess-1", &durable, false),
+            "a failed durable append must be reported to the caller"
+        );
     }
 
     #[test]
-    fn replace_rpc_chat_conversation_state_does_not_recreate_a_deleted_session() {
+    fn append_rpc_chat_conversation_state_does_not_recreate_a_deleted_session() {
         // Deterministic delete-versus-completion ordering: the deleter has
         // already won (`session_exists` is false), so the post-turn write
         // must become a no-op instead of recreating durable state.
         struct DeletedBackend {
-            rewrites: std::sync::Mutex<usize>,
+            writes: std::sync::Mutex<usize>,
         }
         impl zeroclaw_infra::session_backend::SessionBackend for DeletedBackend {
             fn load(&self, _session_key: &str) -> Vec<zeroclaw_providers::ChatMessage> {
@@ -15020,6 +15017,7 @@ mod tests {
                 _session_key: &str,
                 _message: &zeroclaw_providers::ChatMessage,
             ) -> std::io::Result<()> {
+                *self.writes.lock().unwrap() += 1;
                 Ok(())
             }
             fn remove_last(&self, _session_key: &str) -> std::io::Result<bool> {
@@ -15036,25 +15034,25 @@ mod tests {
                 _session_key: &str,
                 _messages: &[zeroclaw_providers::ChatMessage],
             ) -> std::io::Result<()> {
-                *self.rewrites.lock().unwrap() += 1;
+                *self.writes.lock().unwrap() += 1;
                 Ok(())
             }
         }
         let backend = DeletedBackend {
-            rewrites: std::sync::Mutex::new(0),
+            writes: std::sync::Mutex::new(0),
         };
         let durable = vec![zeroclaw_providers::ChatMessage::user("late turn")];
 
-        replace_rpc_chat_conversation_state(
+        assert!(append_rpc_chat_conversation_state(
             &backend,
             "sess-gone",
             "rpc_sess-gone",
             &durable,
             false,
-        );
+        ));
 
         assert_eq!(
-            *backend.rewrites.lock().unwrap(),
+            *backend.writes.lock().unwrap(),
             0,
             "a post-turn write must not touch the store once deletion wins"
         );
@@ -29516,13 +29514,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn session_new_persists_a_restore_time_trim_before_going_live_for_chat_mode() {
-        // Same contract as ACP's `session_load_persists_a_restore_time_trim_before_going_live`:
-        // an over-cap restored transcript trims in memory as soon as it is
-        // seeded, before the session ever goes live. That retained
-        // projection and its corrected breadcrumb must already be durable at
-        // that point, so a reconnect that never sends another prompt does
-        // not reload the untrimmed prefix and repeat the trim.
+    async fn session_new_keeps_the_full_transcript_when_chat_restore_trims_in_memory() {
+        // An over-cap restored transcript trims in memory as soon as it is
+        // seeded, before the session ever goes live. That trim is only the
+        // model window: the durable transcript keeps every saved turn, and
+        // the stored breadcrumb flag is left as it was.
         let tmp = tempfile::TempDir::new().unwrap();
         let mut config = make_acp_test_config(&tmp);
         config.agents.get_mut("test-agent").unwrap().runtime_profile = "default".into();
@@ -29534,7 +29530,7 @@ mod tests {
             },
         );
         let data_dir = config.data_dir.clone();
-        let (dispatcher, _sessions, chat_backend, _acp_store) =
+        let (dispatcher, sessions, chat_backend, _acp_store) =
             make_persistence_test_dispatcher(config, &data_dir);
 
         let sid = "session-new-restore-trim";
@@ -29560,26 +29556,90 @@ mod tests {
             .await
             .expect("session/new must succeed");
 
-        // No further prompt is issued: the durable record must already
-        // reflect the restore-time trim.
-        let stored = chat_backend.load(&session_key);
+        // The model window dropped the oldest turn. The store did not.
+        let agent = sessions
+            .get_agent(sid)
+            .await
+            .expect("session/new leaves a live agent");
+        let agent = agent.lock().await;
+        let window = zeroclaw_providers::durable_chat_messages(agent.history());
+        let window_text: Vec<&str> = window
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect();
         assert!(
-            stored.len() < over_cap.len(),
-            "restore-time trim must persist the retained (capped) transcript, not the \
-             untrimmed rows it was seeded from: {stored:?}"
+            agent.history_has_trim_breadcrumb(),
+            "seeding over the turn cap must trim the in-memory window"
         );
         assert!(
-            !stored
-                .iter()
-                .any(|message| message.content == "turn one request"),
-            "the oldest trimmed turn must not survive in the durable store: {stored:?}"
+            !window_text.contains(&"turn one request"),
+            "the oldest turn must leave the model window: {window_text:?}"
+        );
+        assert!(
+            window_text.contains(&"turn two request") && window_text.contains(&"turn three answer"),
+            "the newest turns stay in the model window: {window_text:?}"
+        );
+
+        let stored_before = chat_backend.load_with_timestamps(&session_key);
+        assert_eq!(stored_before.len(), over_cap.len());
+        assert_eq!(
+            stored_before[0].message.content, "turn one request",
+            "the oldest turn must survive in the durable store"
         );
         assert_eq!(
             chat_backend
                 .get_session_trim_breadcrumb(&session_key)
                 .unwrap(),
-            Some(true),
-            "restore-time trim must persist the corrected breadcrumb"
+            Some(false),
+            "restore-time trim must not rewrite the stored breadcrumb flag"
+        );
+        let first_created_at = stored_before[0].created_at;
+        assert!(
+            first_created_at.is_some(),
+            "saved rows carry the time they were written"
+        );
+
+        // Persisting the already-saved window adds nothing.
+        assert!(append_rpc_chat_conversation_state(
+            chat_backend.as_ref(),
+            sid,
+            &session_key,
+            &window,
+            agent.history_has_trim_breadcrumb(),
+        ));
+        assert_eq!(chat_backend.load(&session_key).len(), over_cap.len());
+
+        // The next turn appends once. Older rows stay, and their timestamps stay.
+        let mut next_window = window.clone();
+        next_window.push(ChatMessage::user("turn four request"));
+        assert!(append_rpc_chat_conversation_state(
+            chat_backend.as_ref(),
+            sid,
+            &session_key,
+            &next_window,
+            agent.history_has_trim_breadcrumb(),
+        ));
+        let stored = chat_backend.load_with_timestamps(&session_key);
+        let stored_text: Vec<&str> = stored
+            .iter()
+            .map(|row| row.message.content.as_str())
+            .collect();
+        assert_eq!(
+            stored_text,
+            vec![
+                "turn one request",
+                "turn one answer",
+                "turn two request",
+                "turn two answer",
+                "turn three request",
+                "turn three answer",
+                "turn four request",
+            ],
+            "new turn appends after the full saved transcript: {stored_text:?}"
+        );
+        assert_eq!(
+            stored[0].created_at, first_created_at,
+            "appending must not restamp the rows already saved"
         );
     }
 

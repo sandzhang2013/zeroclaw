@@ -323,10 +323,11 @@ pub trait SessionBackend: Send + Sync {
         Ok(None)
     }
 
-    /// Replace a session's durable transcript and its breadcrumb provenance
-    /// with the agent's authoritative post-turn state. Callers that own a
-    /// trimmed in-memory history must use this instead of appending only the
-    /// turn's delta. The default implementation performs two separate writes
+    /// Replace a session's durable transcript and its breadcrumb provenance.
+    /// Chat and gateway turns do not use this: they append the unsaved tail
+    /// with [`append_messages_if_exists`](Self::append_messages_if_exists) so
+    /// a trimmed in-memory window does not delete older saved turns. The
+    /// default implementation performs two separate writes
     /// (`rewrite_messages` then `set_session_trim_breadcrumb`); they are
     /// serialized under the caller's lock (channel per-sender lock or the
     /// store's mutation guard) so concurrent turns cannot interleave, but the
@@ -357,13 +358,13 @@ pub trait SessionBackend: Send + Sync {
     /// nothing is written and, in particular, no fresh session row or file is
     /// recreated for the deleted key.
     ///
-    /// Post-turn persistence must use this instead of
-    /// [`replace_conversation_state`](Self::replace_conversation_state):
-    /// a bare existence check followed by a separate replace is a
-    /// check-then-act race — a `DELETE /api/sessions/{id}` (or any other
-    /// deleter) committing between the two recreates durable state the user
-    /// just wiped, since both the SQLite breadcrumb upsert and the JSONL
-    /// rewrite recreate their rows/files unconditionally.
+    /// A wholesale rewrite that must not recreate a deleted session. A bare
+    /// existence check followed by a separate replace is a check-then-act
+    /// race — a `DELETE /api/sessions/{id}` (or any other deleter) committing
+    /// between the two recreates durable state the user just wiped, since
+    /// both the SQLite breadcrumb upsert and the JSONL rewrite recreate
+    /// their rows/files unconditionally. Chat and gateway turns append with
+    /// [`append_messages_if_exists`](Self::append_messages_if_exists) instead.
     ///
     /// The default implementation is check-then-act and therefore only
     /// best-effort. Backends with a serializing primitive close the race by
@@ -382,6 +383,30 @@ pub trait SessionBackend: Send + Sync {
             return Ok(false);
         }
         self.replace_conversation_state(session_key, messages, breadcrumb_present)?;
+        Ok(true)
+    }
+
+    /// Append `messages` onto the durable transcript when the session still
+    /// exists. Does not delete older rows and does not create a session a
+    /// concurrent delete already removed. An empty slice is a no-op success.
+    ///
+    /// History trimming stays in the in-memory window sent to the model. The
+    /// stored transcript keeps every previously saved turn; callers pass only
+    /// the unsaved tail from [`zeroclaw_api::model_provider::unpersisted_transcript_suffix`].
+    fn append_messages_if_exists(
+        &self,
+        session_key: &str,
+        messages: &[ChatMessage],
+    ) -> std::io::Result<bool> {
+        if messages.is_empty() {
+            return Ok(true);
+        }
+        if !self.session_exists(session_key) {
+            return Ok(false);
+        }
+        for message in messages {
+            self.append(session_key, message)?;
+        }
         Ok(true)
     }
 

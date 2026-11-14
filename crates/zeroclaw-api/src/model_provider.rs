@@ -306,10 +306,10 @@ pub enum ConversationMessage {
 /// `ToolResults` are tool-loop plumbing that durable session transcripts have
 /// never persisted; only the visible chat turns are kept.
 ///
-/// Callers that own the agent's authoritative post-turn history (after
-/// budget-enforcement trimming) should use this to replace a durable
-/// transcript wholesale rather than appending the turn's delta on top of a
-/// transcript the agent may have already trimmed underneath it.
+/// The projection is the in-memory window after history trimming. The durable
+/// transcript keeps every saved turn. Callers persist with
+/// [`unpersisted_transcript_suffix`] rather than replacing the store with
+/// this window.
 pub fn durable_chat_messages(history: &[ConversationMessage]) -> Vec<ChatMessage> {
     history
         .iter()
@@ -318,6 +318,42 @@ pub fn durable_chat_messages(history: &[ConversationMessage]) -> Vec<ChatMessage
             _ => None,
         })
         .collect()
+}
+
+/// Messages in `window` that are not already the tail of `stored`.
+///
+/// `window` is the trimmed in-memory transcript. When
+/// `skip_leading_breadcrumb` is set, its first message is the synthetic trim
+/// marker and is never written. A shared tail means the window continues the
+/// store, and only the unmatched end is new. No shared tail means the window
+/// is entirely this turn (the previous turns were trimmed out of memory) and
+/// the whole window is new. An empty store likewise takes the whole window.
+pub fn unpersisted_transcript_suffix<'a>(
+    stored: &[ChatMessage],
+    window: &'a [ChatMessage],
+    skip_leading_breadcrumb: bool,
+) -> &'a [ChatMessage] {
+    let window = if skip_leading_breadcrumb && !window.is_empty() {
+        &window[1..]
+    } else {
+        window
+    };
+    if window.is_empty() || stored.is_empty() {
+        return window;
+    }
+    let max = stored.len().min(window.len());
+    for k in (1..=max).rev() {
+        let same = stored[stored.len() - k..].iter().zip(&window[..k]).all(
+            |(stored_message, window_message)| {
+                stored_message.role == window_message.role
+                    && stored_message.content == window_message.content
+            },
+        );
+        if same {
+            return &window[k..];
+        }
+    }
+    window
 }
 
 /// Count the conversation entries a transcript projects into, without
@@ -1516,5 +1552,59 @@ mod thinking_display_tests {
             !json.contains("display"),
             "expected display field to be omitted, got: {json}"
         );
+    }
+}
+
+#[cfg(test)]
+mod unpersisted_suffix_tests {
+    use super::{ChatMessage, unpersisted_transcript_suffix};
+
+    #[test]
+    fn suffix_appends_only_the_new_turn_and_keeps_a_trimmed_overlap() {
+        let stored = vec![
+            ChatMessage::user("turn one"),
+            ChatMessage::assistant("answer one"),
+            ChatMessage::user("turn two"),
+            ChatMessage::assistant("answer two"),
+        ];
+        let window = vec![
+            ChatMessage::user("earlier context omitted"),
+            ChatMessage::user("turn two"),
+            ChatMessage::assistant("answer two"),
+            ChatMessage::user("turn three"),
+            ChatMessage::assistant("answer three"),
+        ];
+        let delta = unpersisted_transcript_suffix(&stored, &window, true);
+        assert_eq!(
+            delta
+                .iter()
+                .map(|message| message.content.as_str())
+                .collect::<Vec<_>>(),
+            vec!["turn three", "answer three"]
+        );
+    }
+
+    #[test]
+    fn suffix_appends_a_window_that_no_longer_overlaps_the_store() {
+        let stored = vec![
+            ChatMessage::user("turn one"),
+            ChatMessage::assistant("answer one"),
+        ];
+        let window = vec![
+            ChatMessage::user("turn two"),
+            ChatMessage::assistant("answer two"),
+        ];
+        let delta = unpersisted_transcript_suffix(&stored, &window, false);
+        assert_eq!(delta.len(), 2);
+    }
+
+    #[test]
+    fn suffix_is_empty_when_the_window_is_already_stored() {
+        let stored = vec![
+            ChatMessage::user("turn one"),
+            ChatMessage::assistant("answer one"),
+        ];
+        let delta = unpersisted_transcript_suffix(&stored, &stored, false);
+        assert!(delta.is_empty());
     }
 }

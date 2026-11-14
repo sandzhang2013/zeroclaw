@@ -1,7 +1,7 @@
 use crate::model_provider::ConversationMessage;
-use std::path::Path;
 use crate::plan::PlanEntry;
 use std::fmt;
+use std::path::Path;
 
 /// Guess a MIME type from a filename. Used for workspace file cards and the
 /// raw-file HTTP response. Unknown extensions stay `application/octet-stream`.

@@ -918,13 +918,11 @@ async fn handle_socket(
         }
     };
     let restore_trim_event = restored.trim_event;
-    let mut persisted_watermark = if restored.persisted {
-        note_own_transcript_write(&state.session_queue, &session_key, &agent)
-    } else {
-        PersistedWatermark {
-            generation: connect_generation,
-            len: stored_messages.len(),
-        }
+    // Seeding trims only in memory, so this connection's watermark is the
+    // transcript it just loaded, not a write of its own.
+    let mut persisted_watermark = PersistedWatermark {
+        generation: connect_generation,
+        len: stored_messages.len(),
     };
 
     let (approval_event_tx, mut approval_event_rx) =
@@ -1424,29 +1422,45 @@ fn session_queue_ws_error_code(error: &crate::session_queue::SessionQueueError) 
     }
 }
 
-/// Replace the session's durable transcript and breadcrumb flag with
-/// `durable`/`breadcrumb_present`, unless the session was deleted between the
-/// turn starting and this post-turn persistence — in which case the
-/// `aborted` / `done` / `error` frames are still sent to the client, but the
-/// row `DELETE /api/sessions/{id}` just wiped is not re-created.
-///
-/// The existence probe and the replacement run inside the backend's guarded
-/// `replace_conversation_state_if_exists`, not as two separate operations: a
-/// bare `session_exists` check followed by a replace is a check-then-act
-/// race, and a delete committing between the two would be silently undone by
-/// the replace recreating the session row/files.
+/// Append the part of `window` that the durable transcript does not already
+/// end with. Older saved turns stay. A session deleted before this write is
+/// left deleted: `append_messages_if_exists` does not recreate it, and the
+/// `aborted` / `done` / `error` frames are still sent to the client.
 ///
 /// Returns `false` when the durable write itself failed (logged with session
-/// context), so the caller does not report the turn as durably persisted
-/// when the store disagrees. A skipped write (session already gone) returns
-/// `true`: there is nothing left to persist.
-fn replace_conversation_state_unless_deleted(
+/// context). A skipped write (session already gone, or nothing new) returns
+/// `true`.
+fn append_unpersisted_window(
     backend: &dyn zeroclaw_infra::session_backend::SessionBackend,
     session_key: &str,
-    durable: &[zeroclaw_providers::ChatMessage],
-    breadcrumb_present: bool,
+    window: &[zeroclaw_providers::ChatMessage],
+    skip_leading_breadcrumb: bool,
 ) -> bool {
-    match backend.replace_conversation_state_if_exists(session_key, durable, breadcrumb_present) {
+    let stored = match backend.try_load(session_key) {
+        Ok(stored) => stored,
+        Err(e) => {
+            ::zeroclaw_log::record!(
+                WARN,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
+                    .with_attrs(::serde_json::json!({
+                        "session_key": session_key,
+                        "error": format!("{}", e),
+                    })),
+                "Failed to read conversation transcript before appending"
+            );
+            return false;
+        }
+    };
+    let delta = zeroclaw_api::model_provider::unpersisted_transcript_suffix(
+        &stored,
+        window,
+        skip_leading_breadcrumb,
+    );
+    if delta.is_empty() {
+        return true;
+    }
+    match backend.append_messages_if_exists(session_key, delta) {
         Ok(_) => true,
         Err(e) => {
             ::zeroclaw_log::record!(
@@ -1457,26 +1471,23 @@ fn replace_conversation_state_unless_deleted(
                         "session_key": session_key,
                         "error": format!("{}", e),
                     })),
-                "Failed to persist authoritative post-turn conversation state"
+                "Failed to persist new conversation messages"
             );
             false
         }
     }
 }
 
-/// Replace the session's durable transcript and breadcrumb flag with the
-/// agent's own authoritative post-turn history, as one state. Appending only
-/// the turn's delta on top of a transcript the agent's loop already trimmed
-/// underneath it can resurrect turns the live agent dropped; replacing with
-/// `agent.history()` keeps the store in sync with what the agent actually
-/// retains.
+/// Append this turn's new chat messages onto the durable transcript. The
+/// agent's history may already have dropped older turns for the model; those
+/// turns stay in the store. The synthetic trim breadcrumb is not written.
 fn persist_agent_conversation_state(
     backend: &dyn zeroclaw_infra::session_backend::SessionBackend,
     session_key: &str,
     agent: &zeroclaw_runtime::agent::Agent,
 ) -> bool {
     let durable = zeroclaw_providers::durable_chat_messages(agent.history());
-    replace_conversation_state_unless_deleted(
+    append_unpersisted_window(
         backend,
         session_key,
         &durable,
@@ -1492,16 +1503,17 @@ struct PersistedWatermark {
     len: usize,
 }
 
-/// Record that this connection just wrote `agent`'s history as the session's
-/// transcript, and return the watermark that write leaves behind.
+/// Record that this connection just wrote the session transcript, and return
+/// the watermark that write leaves behind. `len` is the durable row count,
+/// which stays larger than the trimmed in-memory window.
 fn note_own_transcript_write(
     queue: &crate::session_queue::SessionActorQueue,
+    backend: &dyn zeroclaw_infra::session_backend::SessionBackend,
     session_key: &str,
-    agent: &zeroclaw_runtime::agent::Agent,
 ) -> PersistedWatermark {
     PersistedWatermark {
         generation: queue.advance_generation(session_key),
-        len: zeroclaw_providers::durable_chat_messages(agent.history()).len(),
+        len: backend.load(session_key).len(),
     }
 }
 
@@ -1509,8 +1521,6 @@ fn note_own_transcript_write(
 struct RestoredHistory {
     /// Trim notice produced by seeding, to forward to the client.
     trim_event: Option<zeroclaw_api::agent::TurnEvent>,
-    /// Whether seeding trimmed and the retained projection was written back.
-    persisted: bool,
 }
 
 /// Seed `agent` from a persisted transcript the way a fresh connection does.
@@ -1523,10 +1533,7 @@ fn restore_agent_history(
     messages: &[zeroclaw_providers::ChatMessage],
 ) -> Result<RestoredHistory, ()> {
     if messages.is_empty() {
-        return Ok(RestoredHistory {
-            trim_event: None,
-            persisted: false,
-        });
+        return Ok(RestoredHistory { trim_event: None });
     }
     // Breadcrumb provenance is the backend's own canonical record alongside
     // the transcript, never inferred from message text: a genuine first user
@@ -1561,26 +1568,10 @@ fn restore_agent_history(
             agent.seed_history_with_event(messages)
         }
     };
-    // Seed-time trim only fires when the restored history exceeded the
-    // structured cap, so it dropped rows, not just relabeled them. Mirror the
-    // ACP restore contract: persist the retained projection and corrected
-    // breadcrumb before the session goes live, or a reconnect/restart before
-    // the next prompt reloads the untrimmed durable prefix and repeats the
-    // trim, leaving the live agent and the durable session disagreeing.
-    let mut persisted = false;
-    if trim_event.is_some()
-        && let Some(backend) = backend
-        && backend.session_exists(session_key)
-    {
-        if !persist_agent_conversation_state(backend, session_key, agent) {
-            return Err(());
-        }
-        persisted = true;
-    }
-    Ok(RestoredHistory {
-        trim_event,
-        persisted,
-    })
+    // The trim applies only to the in-memory window the next model call sees.
+    // The durable transcript keeps every saved turn, so a reconnect reloads
+    // the full record and trims again in memory instead of deleting rows.
+    Ok(RestoredHistory { trim_event })
 }
 
 /// Rebuild a connection's execution history from the persisted transcript
@@ -1621,11 +1612,7 @@ fn refresh_history_if_advanced(
     );
     agent.clear_history();
     let restored = restore_agent_history(Some(backend), agent, session_key, &persisted)?;
-    *persisted_watermark = if restored.persisted {
-        note_own_transcript_write(queue, session_key, agent)
-    } else {
-        current
-    };
+    *persisted_watermark = current;
     Ok(restored.trim_event)
 }
 
@@ -2665,16 +2652,9 @@ async fn process_chat_message(
                 zeroclaw_providers::durable_chat_messages(agent.history())
             };
             let crumb = agent.history_has_trim_breadcrumb();
-            replace_conversation_state_unless_deleted(
-                backend.as_ref(),
-                session_key,
-                &durable,
-                crumb,
-            );
-            *persisted_watermark = PersistedWatermark {
-                generation: state.session_queue.advance_generation(session_key),
-                len: durable.len(),
-            };
+            append_unpersisted_window(backend.as_ref(), session_key, &durable, crumb);
+            *persisted_watermark =
+                note_own_transcript_write(&state.session_queue, backend.as_ref(), session_key);
         }
 
         // Inform the client the turn was aborted
@@ -2726,7 +2706,7 @@ async fn process_chat_message(
             if let Some(ref backend) = state.session_backend {
                 persist_agent_conversation_state(backend.as_ref(), session_key, agent);
                 *persisted_watermark =
-                    note_own_transcript_write(&state.session_queue, session_key, agent);
+                    note_own_transcript_write(&state.session_queue, backend.as_ref(), session_key);
             }
 
             // Fire-and-forget memory consolidation so facts from WS sessions
@@ -2901,7 +2881,7 @@ async fn process_chat_message(
             if let Some(ref backend) = state.session_backend {
                 persist_agent_conversation_state(backend.as_ref(), session_key, agent);
                 *persisted_watermark =
-                    note_own_transcript_write(&state.session_queue, session_key, agent);
+                    note_own_transcript_write(&state.session_queue, backend.as_ref(), session_key);
             }
 
             // Set session state to error
@@ -3408,16 +3388,13 @@ data: {\"type\":\"message_stop\"}\n\n",
     }
 
     #[test]
-    fn websocket_connect_persists_a_restore_time_trim_before_going_live() {
-        // Same contract as the ACP/RPC restore-persistence regressions: an
-        // over-cap restored transcript trims in memory as soon as the socket
-        // upgrade seeds it, before the session ever goes live. That retained
-        // projection and its corrected breadcrumb must already be durable at
-        // that point, so a reconnect that never sends a `message` frame does
-        // not reload the untrimmed prefix and repeat the trim. Runs on a
-        // larger-stack thread for the same reason as the sibling WebSocket
-        // regression above: real agent construction exceeds the default test
-        // harness stack.
+    fn websocket_connect_keeps_the_full_transcript_when_restore_trims_in_memory() {
+        // An over-cap restored transcript trims in memory as soon as the
+        // socket upgrade seeds it. That trim is only the model window: a
+        // reconnect that never sends a `message` frame must still find every
+        // saved turn in the store. Runs on a larger-stack thread for the
+        // same reason as the sibling WebSocket regression above: real agent
+        // construction exceeds the default test harness stack.
         std::thread::Builder::new()
             .name("ws-restore-trim-regression".to_string())
             .stack_size(8 * 1024 * 1024)
@@ -3427,7 +3404,7 @@ data: {\"type\":\"message_stop\"}\n\n",
                     .build()
                     .expect("test runtime")
                     .block_on(
-                        websocket_connect_persists_a_restore_time_trim_before_going_live_inner(),
+                        websocket_connect_keeps_the_full_transcript_when_restore_trims_in_memory_inner(),
                     );
             })
             .expect("spawn WebSocket regression thread")
@@ -3435,7 +3412,7 @@ data: {\"type\":\"message_stop\"}\n\n",
             .expect("WebSocket regression thread must not panic");
     }
 
-    async fn websocket_connect_persists_a_restore_time_trim_before_going_live_inner() {
+    async fn websocket_connect_keeps_the_full_transcript_when_restore_trims_in_memory_inner() {
         use zeroclaw_infra::session_backend::SessionBackend;
 
         let tmp = tempfile::tempdir().expect("temporary gateway workspace");
@@ -3558,27 +3535,27 @@ data: {\"type\":\"message_stop\"}\n\n",
         );
         drop(client);
 
-        // Give the server task a moment to finish the restore-time
-        // persistence that runs before it starts waiting on the socket for
-        // more frames.
+        // Give the server task a moment to finish seeding before we read
+        // the store back. Connect must not rewrite that store.
         tokio::time::sleep(Duration::from_millis(200)).await;
 
         let stored = backend.load(&session_key);
-        assert!(
-            stored.len() < over_cap.len(),
-            "restore-time trim must persist the retained (capped) transcript, not the \
-             untrimmed rows it was seeded from: {stored:?}"
+        assert_eq!(
+            stored.len(),
+            over_cap.len(),
+            "restore-time trim stays in memory; the durable transcript keeps every \
+             saved turn: {stored:?}"
         );
         assert!(
-            !stored
+            stored
                 .iter()
                 .any(|message| message.content == "turn one request"),
-            "the oldest trimmed turn must not survive in the durable store: {stored:?}"
+            "the oldest turn must survive in the durable store: {stored:?}"
         );
         assert_eq!(
             backend.get_session_trim_breadcrumb(&session_key).unwrap(),
-            Some(true),
-            "restore-time trim must persist the corrected breadcrumb"
+            Some(false),
+            "restore-time trim must not rewrite the stored breadcrumb flag"
         );
 
         gateway_server.abort();
@@ -5523,11 +5500,11 @@ data: {{\"type\":\"message_stop\"}}\n\n"
             zeroclaw_providers::ChatMessage::assistant("[interrupted by user]"),
         ];
 
-        replace_conversation_state_unless_deleted(&backend, "gw_deleted", &durable, false);
+        append_unpersisted_window(&backend, "gw_deleted", &durable, false);
 
         assert!(
-            backend.rewrite_calls.lock().unwrap().is_empty(),
-            "replacing durable state must not resurrect a session whose \
+            backend.append_calls.lock().unwrap().is_empty(),
+            "appending new messages must not resurrect a session whose \
              session_exists() returned false"
         );
     }
@@ -5558,27 +5535,28 @@ data: {{\"type\":\"message_stop\"}}\n\n"
         fn list_sessions(&self) -> Vec<String> {
             Vec::new()
         }
+        fn session_exists(&self, _session_key: &str) -> bool {
+            true
+        }
     }
 
     #[test]
-    fn append_only_backend_durably_replaces_state_through_the_websocket_persistence_boundary() {
-        // A production `SessionBackend` that only implements the required
-        // append/remove_last primitives must still durably persist the
-        // agent's authoritative post-turn history through the WebSocket
-        // completion path — the default `rewrite_messages` must not
-        // silently no-op and drop the caller's replacement.
+    fn append_only_backend_keeps_saved_turns_and_appends_the_new_window() {
+        // Older saved turns stay in the store. The in-memory window may
+        // already have dropped them; persisting that window must add only
+        // the messages the store does not already end with.
         let backend = AppendOnlyBackend {
             messages: std::sync::Mutex::new(vec![
                 zeroclaw_providers::ChatMessage::user("stale first turn"),
                 zeroclaw_providers::ChatMessage::assistant("stale reply"),
             ]),
         };
-        let authoritative = vec![
+        let window = vec![
             zeroclaw_providers::ChatMessage::user("trimmed second turn"),
             zeroclaw_providers::ChatMessage::assistant("final reply"),
         ];
 
-        replace_conversation_state_unless_deleted(&backend, "gw_append_only", &authoritative, true);
+        append_unpersisted_window(&backend, "gw_append_only", &window, false);
 
         let persisted = backend.messages.lock().unwrap().clone();
         assert_eq!(
@@ -5586,11 +5564,13 @@ data: {{\"type\":\"message_stop\"}}\n\n"
                 .iter()
                 .map(|m| m.content.clone())
                 .collect::<Vec<_>>(),
-            authoritative
-                .iter()
-                .map(|m| m.content.clone())
-                .collect::<Vec<_>>(),
-            "replacement must durably overwrite the stale transcript, not silently no-op"
+            vec![
+                "stale first turn".to_string(),
+                "stale reply".to_string(),
+                "trimmed second turn".to_string(),
+                "final reply".to_string(),
+            ],
+            "new messages append after the saved transcript: {persisted:?}"
         );
     }
 
@@ -5608,7 +5588,9 @@ data: {{\"type\":\"message_stop\"}}\n\n"
             _session_key: &str,
             _message: &zeroclaw_providers::ChatMessage,
         ) -> std::io::Result<()> {
-            Ok(())
+            Err(std::io::Error::other(
+                "simulated durable replacement failure",
+            ))
         }
         fn remove_last(&self, _session_key: &str) -> std::io::Result<bool> {
             Ok(false)
@@ -5633,7 +5615,7 @@ data: {{\"type\":\"message_stop\"}}\n\n"
     }
 
     #[test]
-    fn replace_conversation_state_unless_deleted_reports_durable_failure() {
+    fn append_unpersisted_window_reports_durable_failure() {
         // The WebSocket completion path must not claim the turn's history
         // was durably persisted when the backend actually failed the write:
         // the caller uses this to decide whether the authoritative-history
@@ -5642,8 +5624,8 @@ data: {{\"type\":\"message_stop\"}}\n\n"
         let durable = vec![zeroclaw_providers::ChatMessage::user("hi")];
 
         assert!(
-            !replace_conversation_state_unless_deleted(&backend, "gw_failing", &durable, false),
-            "a failed durable replacement must be reported to the caller, not swallowed"
+            !append_unpersisted_window(&backend, "gw_failing", &durable, false),
+            "a failed durable append must be reported to the caller, not swallowed"
         );
     }
 

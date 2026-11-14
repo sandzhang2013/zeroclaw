@@ -120,6 +120,10 @@ The event is surfaced through the active client transport and through the
 observer path used by dashboards and event subscribers. Trimming is therefore
 not log-only and is not silent to either the model or connected clients.
 
+The drop applies only to the in-memory window sent to the model. The durable
+session transcript keeps every saved turn; trimming does not delete older rows.
+A later reconnect reloads the full transcript and trims again in memory.
+
 The legacy `agent::run` path in `loop_.rs` reports count-based trimming through
 logs only, without the breadcrumb or `HistoryTrimmed` event. This path serves
 interactive use as well as one-shot and non-interactive daemon, cron, subagent,

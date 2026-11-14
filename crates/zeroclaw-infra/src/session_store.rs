@@ -572,6 +572,27 @@ impl SessionBackend for SessionStore {
         Ok(true)
     }
 
+    fn append_messages_if_exists(
+        &self,
+        session_key: &str,
+        messages: &[ChatMessage],
+    ) -> std::io::Result<bool> {
+        if messages.is_empty() {
+            return Ok(true);
+        }
+        // Hold the same guard `delete_session` holds, and do not create a
+        // file for a key that is already gone. `append_unlocked` would
+        // otherwise create one.
+        let _guard = self.mutation_guard()?;
+        if !is_regular_jsonl_session_file(&self.session_path(session_key)) {
+            return Ok(false);
+        }
+        for message in messages {
+            self.append_unlocked(session_key, message)?;
+        }
+        Ok(true)
+    }
+
     fn get_session_trim_breadcrumb(&self, session_key: &str) -> std::io::Result<Option<bool>> {
         self.get_trim_breadcrumb(session_key)
     }
@@ -1375,6 +1396,46 @@ mod tests {
             backend.get_session_trim_breadcrumb("live").unwrap(),
             Some(true)
         );
+    }
+
+    #[test]
+    fn append_messages_if_exists_keeps_saved_turns_and_skips_a_deleted_session() {
+        let tmp = TempDir::new().unwrap();
+        let store = SessionStore::new(tmp.path()).unwrap();
+        let backend: &dyn SessionBackend = &store;
+
+        backend
+            .append("live", &ChatMessage::user("turn one"))
+            .unwrap();
+        backend
+            .append("live", &ChatMessage::assistant("answer one"))
+            .unwrap();
+
+        let written = backend
+            .append_messages_if_exists("live", &[ChatMessage::user("turn two")])
+            .unwrap();
+        assert!(written);
+        assert_eq!(
+            backend
+                .load("live")
+                .iter()
+                .map(|message| message.content.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                "turn one".to_string(),
+                "answer one".to_string(),
+                "turn two".to_string(),
+            ]
+        );
+
+        backend.append("gone", &ChatMessage::user("turn")).unwrap();
+        assert!(backend.delete_session("gone").unwrap());
+        let written = backend
+            .append_messages_if_exists("gone", &[ChatMessage::user("late turn")])
+            .unwrap();
+        assert!(!written);
+        assert!(!backend.session_exists("gone"));
+        assert!(backend.load("gone").is_empty());
     }
 
     // ── get_session_metadata (trait default) tests ──────────────────

@@ -1101,6 +1101,39 @@ impl SessionBackend for SqliteSessionBackend {
         Ok(true)
     }
 
+    /// Append without deleting existing rows. The existence check and the
+    /// inserts share one transaction, so a delete that already removed the
+    /// metadata row cannot be undone by `append_on`'s metadata upsert.
+    fn append_messages_if_exists(
+        &self,
+        session_key: &str,
+        messages: &[ChatMessage],
+    ) -> std::io::Result<bool> {
+        if messages.is_empty() {
+            return Ok(true);
+        }
+        let mut conn = self.conn.lock();
+        let tx = conn.transaction().map_err(std::io::Error::other)?;
+        let exists = tx
+            .query_row(
+                "SELECT 1 FROM session_metadata WHERE session_key = ?1 LIMIT 1",
+                params![session_key],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(std::io::Error::other)?
+            .is_some();
+        if !exists {
+            return Ok(false);
+        }
+        let now = Utc::now().to_rfc3339();
+        for message in messages {
+            Self::append_on(&tx, session_key, message, &now).map_err(std::io::Error::other)?;
+        }
+        tx.commit().map_err(std::io::Error::other)?;
+        Ok(true)
+    }
+
     fn remove_last(&self, session_key: &str) -> std::io::Result<bool> {
         let conn = self.conn.lock();
 
@@ -3650,6 +3683,46 @@ mod tests {
             backend.get_session_trim_breadcrumb("live").unwrap(),
             Some(true)
         );
+    }
+
+    #[test]
+    fn append_messages_if_exists_keeps_saved_turns_and_skips_a_deleted_session() {
+        let tmp = TempDir::new().unwrap();
+        let backend = SqliteSessionBackend::new(tmp.path()).unwrap();
+
+        backend
+            .append("live", &ChatMessage::user("turn one"))
+            .unwrap();
+        backend
+            .append("live", &ChatMessage::assistant("answer one"))
+            .unwrap();
+        backend.set_session_trim_breadcrumb("live", false).unwrap();
+
+        let written = backend
+            .append_messages_if_exists("live", &[ChatMessage::user("turn two")])
+            .unwrap();
+        assert!(written);
+        let stored = backend.load("live");
+        assert_eq!(
+            stored
+                .iter()
+                .map(|message| message.content.as_str())
+                .collect::<Vec<_>>(),
+            vec!["turn one", "answer one", "turn two"]
+        );
+        assert_eq!(
+            backend.get_session_trim_breadcrumb("live").unwrap(),
+            Some(false)
+        );
+
+        backend.append("gone", &ChatMessage::user("turn")).unwrap();
+        assert!(backend.delete_session("gone").unwrap());
+        let written = backend
+            .append_messages_if_exists("gone", &[ChatMessage::user("late turn")])
+            .unwrap();
+        assert!(!written);
+        assert!(!backend.session_exists("gone"));
+        assert!(backend.load("gone").is_empty());
     }
 
     #[test]
