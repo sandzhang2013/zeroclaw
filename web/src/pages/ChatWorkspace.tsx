@@ -192,6 +192,8 @@ export interface ChatWorkspaceProps {
   userRole?: string;
   userRegion?: string;
   onSwitchUser?: () => void;
+  /** When set, only these agents may be open. */
+  allowedAliases?: ReadonlySet<string>;
 }
 
 /**

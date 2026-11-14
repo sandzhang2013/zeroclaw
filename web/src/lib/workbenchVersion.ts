@@ -1,5 +1,5 @@
 /** Sidebar badge. `web/WORKBENCH_VERSION` is the source of truth. */
-export const WORKBENCH_VERSION_FALLBACK = "0.8.700";
+export const WORKBENCH_VERSION_FALLBACK = "0.9.000";
 
 const VERSION_RE = /^(\d+)\.(\d+)\.(\d+)$/;
 

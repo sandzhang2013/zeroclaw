@@ -550,7 +550,10 @@ mod tests {
                     .store("note", "alice-private", MemoryCategory::Core, None)
                     .await
                     .unwrap();
-                let hits = alice.recall("alice-private", 10, None, None, None).await.unwrap();
+                let hits = alice
+                    .recall("alice-private", 10, None, None, None)
+                    .await
+                    .unwrap();
                 assert_eq!(hits.len(), 1);
                 assert_eq!(hits[0].key, "note");
             })

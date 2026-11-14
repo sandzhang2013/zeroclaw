@@ -5,9 +5,19 @@ import type {
   SessionMessagesResponse,
   WsMessage,
 } from '@/types/api';
-import { WebSocketClient, getOrCreateSessionId, resolveTaskSessionId } from '@/lib/ws';
+import {
+  WS_CLOSE_ACCESS_LOST,
+  WS_CLOSE_CONVERSATION_CLOSED,
+  WS_CLOSE_CONVERSATION_LIMIT,
+  WS_CLOSE_SESSION_ENDED,
+  WebSocketClient,
+  getOrCreateSessionId,
+  resolveTaskSessionId,
+} from '@/lib/ws';
 import { persistSessionId } from '@/lib/sessionId';
 import { getActiveSessionId, newSessionId, setActiveSessionId } from '@/lib/chatSessions';
+import { getOidcSession } from '@/lib/auth';
+import { navAccessFor } from '@/lib/navAccess';
 import { generateUUID } from '@/lib/uuid';
 import { t } from '@/lib/i18n';
 import { WS_RECONNECT_GIVE_UP_MS, isNormalWsClose, wsDropBanner } from '@/lib/wsCloseBanner';
@@ -31,6 +41,7 @@ import type { ToolCallInfo } from '@/components/ToolCallCard';
 import { resolveToolResultIndex } from '@/lib/toolCardMatch';
 import { parseToolArtifact } from '@/lib/artifactKind';
 import {
+  errorEndsTurn,
   indexBeforeLatestSteer,
   initialTurnStreamState,
   interruptedContent,
@@ -104,7 +115,21 @@ export interface AgentContextValue {
   agentAlias: string;
   messages: ChatMessage[];
   sendMessage: (content: string, autonomy?: 'readonly' | 'supervised' | 'full') => void;
+  /** Ready to send; a per-socket conversation first waits for `session_start`. */
   connected: boolean;
+  /** The gateway refused this conversation at the account's conversation limit;
+   * the socket stays closed until `retryConnection`. */
+  conversationLimited: boolean;
+  retryConnection: () => void;
+  /** Each socket is a conversation of its own (see `conversationPerSocket`):
+   * no history to load, no conversation list, nothing to resume. */
+  conversationPerSocket: boolean;
+  /** No conversation is open: the next message starts one on a new socket. */
+  startsConversationOnSend: boolean;
+  /** A message whose socket closed before its conversation started, so it
+   * never left the page: the composer takes it back (`takeUnsentMessage`). */
+  unsentMessage: string | null;
+  takeUnsentMessage: () => void;
   error: string | null;
   typing: boolean;
   streamingContent: string;
@@ -195,6 +220,29 @@ function friendlyAgentError(message?: string): string {
   return raw;
 }
 
+/**
+ * Whether this browser may keep and show its own copy of transcripts. An
+ * account without the operator dashboard chats through the core, which keeps
+ * its conversations only while its sign-in lasts and shows them to it alone:
+ * a local copy would outlive them, and another account on this browser could
+ * read it. The server is that account's only history.
+ */
+function keepsLocalTranscripts(): boolean {
+  return navAccessFor(getOidcSession()).operatorPages && !conversationPerSocket();
+}
+
+/**
+ * Whether each chat socket is one conversation. A signed-in session whose chat
+ * goes through the core (every account without the operator dashboard) gets a
+ * new, empty conversation from each socket, and it ends when the socket
+ * closes: the core keeps nothing this page can load, list or reopen.
+ */
+function conversationPerSocket(): boolean {
+  const session = getOidcSession();
+  return session !== null
+    && (session.features.core_sessions === true || !navAccessFor(session).operatorPages);
+}
+
 export interface AgentProviderProps {
   /** Configured agent alias this provider is bound to. The WebSocket
    * connection, session ID, and chat history are all scoped to this alias. */
@@ -242,7 +290,11 @@ export interface SessionSocket {
 }
 
 export interface AgentSessionRuntime {
-  createSocket(options: { agentAlias: string; sessionId: string }): SessionSocket;
+  createSocket(options: {
+    agentAlias: string;
+    sessionId: string;
+    autoReconnect?: boolean;
+  }): SessionSocket;
   getMessages(sessionId: string): Promise<SessionMessagesResponse>;
   delete(sessionId: string): Promise<{ deleted: boolean }>;
   rename(sessionId: string, name: string): Promise<{ session_id: string; name: string }>;
@@ -289,6 +341,7 @@ export function AgentProvider({
     return getActiveSessionId(agentAlias);
   });
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
+    if (!keepsLocalTranscripts()) return [];
     const persisted = loadCachedTranscript(sessionId);
     return persisted.length > 0 ? persistedToUiMessages(persisted) : [];
   });
@@ -303,6 +356,21 @@ export function AgentProvider({
   // to withhold the controls that would do that.
   const [sessionPersistence, setSessionPersistence] = useState<boolean | null>(null);
   const [connected, setConnected] = useState(false);
+  const [conversationLimited, setConversationLimited] = useState(false);
+  // Fixed for the provider's life: a re-auth as another account reloads.
+  const [perSocket] = useState(conversationPerSocket);
+  // With one conversation per socket, none is open until a message starts
+  // one, and each start opens a new socket (this counter re-runs the socket
+  // effect). Until then the socket effect opens nothing.
+  const [startsConversationOnSend, setStartsConversationOnSend] = useState(perSocket);
+  const [socketGeneration, setSocketGeneration] = useState(0);
+  // The gateway's id for the open conversation (from `session_start`): what
+  // the stop button aborts. The page's own `sessionId` names nothing there.
+  const conversationIdRef = useRef<string | null>(null);
+  // A message that starts a conversation, shown at once and sent once the
+  // conversation exists, so a refusal at the limit can't lose it.
+  const pendingSendRef = useRef<string | null>(null);
+  const [unsentMessage, setUnsentMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [typing, setTyping] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
@@ -323,6 +391,20 @@ export function AgentProvider({
   const [modelLabels, setModelLabels] = useState<Record<string, string>>({});
   const [modelLoading, setModelLoading] = useState(false);
   const [modelInfoVersion, setModelInfoVersion] = useState(0);
+  // Bumped to reload the transcript after a socket that closed mid-turn opens
+  // again: the turn may have finished on the server while no socket listened.
+  const [transcriptVersion, setTranscriptVersion] = useState(0);
+  const resyncOnOpenRef = useRef(false);
+  // The last definite answer on whether the gateway stores transcripts.
+  // `sessionPersistence` is null again while each reload is in flight, and a
+  // `session_start` arriving then still needs to know.
+  const serverKeepsTranscriptsRef = useRef<boolean | null>(null);
+  // `session_start` frames seen, so a transcript request can tell whether a
+  // socket opened its conversation while the request was out.
+  const sessionStartsRef = useRef(0);
+  // Conversation whose transcript failed to load; its next `session_start`
+  // loads it again.
+  const hydrationFailedRef = useRef<string | null>(null);
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
   // Context window tracking. `session_start` seeds the configured window so
   // the meter is visible before the first `done` frame; `done` supplies the
@@ -374,9 +456,11 @@ export function AgentProvider({
   const sessionPersistenceRef = useRef(sessionPersistence);
   const typingRef = useRef(typing);
   const sessionRuntimeRef = useRef(sessionRuntime);
+  const messagesRef = useRef(messages);
   activeSessionIdRef.current = sessionId;
   sessionPersistenceRef.current = sessionPersistence;
   typingRef.current = typing;
+  messagesRef.current = messages;
   sessionRuntimeRef.current = sessionRuntime;
 
   useEffect(() => {
@@ -399,6 +483,7 @@ export function AgentProvider({
   useEffect(() => {
     const sid = sessionId;
     const hydrationStartedAtMutationVersion = localMessageMutationVersionRef.current;
+    const sessionStartsAtRequest = sessionStartsRef.current;
     let cancelled = false;
     // This conversation's browser copy, read before the mirror effect can
     // overwrite it: the mirror stays idle until `hydratedSessionId` matches
@@ -410,16 +495,25 @@ export function AgentProvider({
       loadChatHistory(sid).filter((row) => !row.contentHash),
     );
 
+    // Nothing to load: the conversation lives only as long as its socket.
+    if (perSocket) {
+      setSessionPersistence(false);
+      setHydratedSessionId(sid);
+      return;
+    }
+
     // Session management is a capability, not an optimistic default. Every
     // hydration starts unknown and only an affirmative gateway response opens
     // the transition actions.
     setSessionPersistence(null);
     setHydratedSessionId(null);
+    hydrationFailedRef.current = null;
 
     (async () => {
       try {
         const res = await sessionRuntime.getMessages(sid);
         if (cancelled) return;
+        serverKeepsTranscriptsRef.current = res.session_persistence;
         setSessionPersistence(res.session_persistence);
         if (res.session_persistence) {
           if (localMessageMutationVersionRef.current === hydrationStartedAtMutationVersion) {
@@ -439,19 +533,26 @@ export function AgentProvider({
           }
         } else if (!res.session_persistence) {
           setMessages((prev) => {
-            if (prev.length > 0) return prev;
+            if (prev.length > 0 || !keepsLocalTranscripts()) return prev;
             const ls = loadCachedTranscript(sid);
             return ls.length ? persistedToUiMessages(ls) : prev;
           });
         }
       } catch {
         if (!cancelled) {
+          hydrationFailedRef.current = sid;
           setSessionPersistence(null);
           setMessages((prev) => {
-            if (prev.length > 0) return prev;
+            if (prev.length > 0 || !keepsLocalTranscripts()) return prev;
             const ls = loadCachedTranscript(sid);
             return ls.length ? persistedToUiMessages(ls) : prev;
           });
+          // A conversation the socket creates isn't on the server until the
+          // socket opens it. If that happened while this request was out, the
+          // refusal may predate it: ask again.
+          if (sessionStartsRef.current !== sessionStartsAtRequest) {
+            setTranscriptVersion((v) => v + 1);
+          }
         }
       } finally {
         if (!cancelled) setHydratedSessionId(sid);
@@ -461,12 +562,12 @@ export function AgentProvider({
     return () => {
       cancelled = true;
     };
-  }, [sessionId, sessionRuntime]);
+  }, [sessionId, sessionRuntime, transcriptVersion, perSocket]);
 
   // Server transcripts stay on the gateway. The browser keeps the thinking
   // stream when persistence is on, and a slim offline copy otherwise.
   useEffect(() => {
-    if (hydratedSessionId !== sessionId) return;
+    if (hydratedSessionId !== sessionId || !keepsLocalTranscripts()) return;
     saveChatHistory(
       sessionId,
       uiMessagesToPersisted(messages),
@@ -517,6 +618,53 @@ export function AgentProvider({
         if (next.maxTokens !== null || next.modelWindow !== null) {
           setContextLimits(next);
         }
+        if (perSocket) {
+          conversationIdRef.current = msg.session_id ?? null;
+          setConnected(true);
+          const pending = pendingSendRef.current;
+          if (pending !== null) {
+            try {
+              wsRef.current?.sendMessage(pending);
+            } catch {
+              // The socket started closing before this start was handled, so
+              // the message never went out. It stays pending: the close that
+              // follows gives it back to the composer, with its notice.
+              break;
+            }
+            pendingSendRef.current = null;
+            setTyping(true);
+            foldTurnStream({ type: 'turn_start' });
+          }
+          break;
+        }
+        sessionStartsRef.current += 1;
+        // The server holds nothing for this socket's conversation, yet the
+        // transcript shows messages: the server started it over (it was
+        // closed to make room for another, or a restart ended it). Those
+        // messages are no longer its context, so they must not look like it.
+        if (
+          serverKeepsTranscriptsRef.current === true
+          && msg.message_count === 0
+          && !typingRef.current
+          && messagesRef.current.some((m) => !m.ephemeral)
+        ) {
+          localMessageMutationVersionRef.current += 1;
+          setMessages([
+            {
+              id: generateUUID(),
+              role: 'agent',
+              content: t('agent.conversation_started_over'),
+              timestamp: new Date(),
+              ephemeral: true,
+              notice: true,
+            },
+          ]);
+          setContextInputTokens(null);
+        }
+        // A transcript that failed to load, typically because the
+        // conversation didn't exist until this socket opened it, loads now.
+        if (hydrationFailedRef.current === activeSessionIdRef.current) {
+          setTranscriptVersion((v) => v + 1);        }
         break;
       }
 
@@ -888,7 +1036,12 @@ export function AgentProvider({
           setSessionId(nextId);
           break;
         }
-        const friendlyMessage = friendlyAgentError(msg.message);
+        // The limit line says it, and its Retry sends the waiting message; a
+        // chat bubble would say it twice.
+        if (perSocket && msg.code === 'CONVERSATION_LIMIT') break;
+        const friendlyMessage = msg.code === 'TURN_RESULT_LOST'
+          ? t('agent.turn_result_lost')
+          : friendlyAgentError(msg.message);
         const partial = unsavedThinking();
         localMessageMutationVersionRef.current += 1;
         setMessages((prev) => [
@@ -908,6 +1061,8 @@ export function AgentProvider({
         } else if (msg.code === 'INVALID_JSON' || msg.code === 'UNKNOWN_MESSAGE_TYPE' || msg.code === 'EMPTY_CONTENT') {
           setError(`${t('agent.message_error')}: ${msg.message}`);
         }
+        // The refusal is shown above; the turn itself is still running.
+        if (!errorEndsTurn(msg.code)) break;
         setTyping(false);
         foldTurnStream({ type: 'error' });
         publishThinkingClock(idleThinkingClock);
@@ -916,7 +1071,7 @@ export function AgentProvider({
         setPendingApproval(null);
         break;
     }
-  }, [agentAlias, foldTurnStream, publishThinkingClock, userId]);
+  }, [agentAlias, foldTurnStream, publishThinkingClock, userId, perSocket]);
 
   // Wire up a WebSocketClient instance with version-guarded callbacks.
   const attachSocketCallbacks = useCallback((ws: SessionSocket) => {
@@ -928,8 +1083,14 @@ export function AgentProvider({
         clearTimeout(reconnectGiveUpRef.current);
         reconnectGiveUpRef.current = null;
       }
-      setConnected(true);
+      // The transport alone cannot send ahead of a queued first message.
+      setConnected(!perSocket);
+      setConversationLimited(false);
       setError(null);
+      if (resyncOnOpenRef.current) {
+        resyncOnOpenRef.current = false;
+        setTranscriptVersion((v) => v + 1);
+      }
 
       // If we just reconnected after a committed model switch, apply the
       // pending model now. A session socket can open while the config write is
@@ -968,6 +1129,18 @@ export function AgentProvider({
       if (version !== wsVersionRef.current) return;
       setConnected(false);
 
+      // A per-socket conversation ends with the socket. A workbench reload
+      // (1001) or a signed-out session (4401) also stops the turn and catches
+      // up on reopen. A network drop (1006) keeps the partial stream so the
+      // reconnect can continue it.
+      if (typingRef.current && (perSocket || ev.code !== 1006)) {
+        setTyping(false);
+        setStreamingContent('');
+        setStreamingThinking('');
+        foldTurnStream({ type: 'reset' });
+        if (!perSocket) resyncOnOpenRef.current = true;
+      }
+
       if (
         pendingModelSwitchRef.current
         && modelSwitchConfigCommittedRef.current
@@ -988,8 +1161,69 @@ export function AgentProvider({
         return;
       }
 
+      if (ev.code === WS_CLOSE_CONVERSATION_LIMIT) setConversationLimited(true);
+
+      if (perSocket) {
+        conversationIdRef.current = null;
+        // Refused at the limit, no conversation was created: the waiting
+        // message goes out after Retry.
+        if (ev.code === WS_CLOSE_CONVERSATION_LIMIT) return;
+        const unsent = pendingSendRef.current;
+        pendingSendRef.current = null;
+        setStartsConversationOnSend(true);
+        localMessageMutationVersionRef.current += 1;
+        if (unsent !== null) {
+          // Closed before its conversation started (a restart, the network):
+          // the message never left the page. It goes back to the composer
+          // instead of staying on screen as if it had been sent.
+          setMessages((prev) => {
+            for (let i = prev.length - 1; i >= 0; i -= 1) {
+              const m = prev[i]!;
+              if (m.local && m.role === 'user' && m.content === unsent) {
+                return [...prev.slice(0, i), ...prev.slice(i + 1)];
+              }
+            }
+            return prev;
+          });
+          setUnsentMessage(unsent);
+          // A signed-in session's end is the auth layer's to explain.
+          if (ev.code !== WS_CLOSE_SESSION_ENDED && ev.code !== WS_CLOSE_ACCESS_LOST) {
+            setError(t('agent.send_error'));
+          }
+          return;
+        }
+        // Whatever closed it (a reload, the session ending, the network), the
+        // conversation is over. Its messages stay, marked; the next message
+        // starts a new one.
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          if (!prev.some((m) => !m.ephemeral) || (last?.notice && last.content === t('agent.conversation_ended'))) {
+            return prev;
+          }
+          return [
+            ...prev,
+            {
+              id: generateUUID(),
+              role: 'agent',
+              content: t('agent.conversation_ended'),
+              timestamp: new Date(),
+              ephemeral: true,
+              notice: true,
+            },
+          ];
+        });
+        return;
+      }
+
       if (isNormalWsClose(ev.code)) return;
-      setError(wsDropBanner(ev.code, 'reconnect', t));
+      if (
+        ev.code !== WS_CLOSE_SESSION_ENDED &&
+        ev.code !== WS_CLOSE_ACCESS_LOST &&
+        ev.code !== WS_CLOSE_CONVERSATION_LIMIT &&
+        ev.code !== WS_CLOSE_CONVERSATION_CLOSED
+      ) {
+        setError(wsDropBanner(ev.code, 'reconnect', t));
+      }
       if (reconnectGiveUpRef.current) {
         clearTimeout(reconnectGiveUpRef.current);
       }
@@ -1020,7 +1254,7 @@ export function AgentProvider({
       }
       handleWsMessage(msg);
     };
-  }, [handleWsMessage]);
+  }, [handleWsMessage, foldTurnStream, perSocket]);
 
   // WebSocket bound to the configured agent and the active conversation.
   // Re-keys (via the outer <AgentProvider key={alias}>) when the alias changes,
@@ -1030,7 +1264,9 @@ export function AgentProvider({
   // can unmount the first effect before handshake starts (Chrome otherwise
   // logs "WebSocket is closed before the connection is established").
   useEffect(() => {
-    const ws = sessionRuntime.createSocket({ agentAlias, sessionId });
+    // One conversation per socket: none opens until a message starts one.
+    if (perSocket && socketGeneration === 0) return;
+    const ws = sessionRuntime.createSocket({ agentAlias, sessionId, autoReconnect: !perSocket });
     // A navigation after the config write creates an equally valid replacement
     // to the one switchModel would build directly. Mark only sockets created
     // after commit; a socket merely opening after commit may still have been
@@ -1061,7 +1297,7 @@ export function AgentProvider({
         wsRef.current.disconnect();
       }
     };
-  }, [attachSocketCallbacks, agentAlias, sessionId, sessionRuntime]);
+  }, [attachSocketCallbacks, agentAlias, sessionId, sessionRuntime, perSocket, socketGeneration]);
 
   // Fetch current model and available models from config.
   useEffect(() => {
@@ -1079,10 +1315,16 @@ export function AgentProvider({
 
         let activeModel = status.model;
 
-        const allowOpsConfig = userRole === undefined || canOpenDashboard(userRole);
+        const allowOpsConfig =
+          (userRole === undefined || canOpenDashboard(userRole))
+          && navAccessFor(getOidcSession()).operatorPages;
         if (!allowOpsConfig) {
           setCurrentModel(activeModel);
-          setAvailableModels(activeModel ? [activeModel] : []);
+          // A signed-in account without the operator dashboard cannot switch
+          // models. The workbench still shows the agent's current model.
+          setAvailableModels(
+            navAccessFor(getOidcSession()).operatorPages && activeModel ? [activeModel] : [],
+          );
           setModelLabels({});
           return;
         }
@@ -1157,7 +1399,27 @@ export function AgentProvider({
   }, [modelInfoVersion, agentAlias, userRole]);
 
   const sendMessage = useCallback((content: string, autonomy?: 'readonly' | 'supervised' | 'full') => {
-    if (!wsRef.current?.connected) return;
+    if (perSocket && pendingSendRef.current !== null) return;
+    if (perSocket && !wsRef.current?.connected) {
+      // No conversation is open: this message starts one on a new socket.
+      pendingSendRef.current = content;
+      setError(null);
+      setConversationLimited(false);
+      setStartsConversationOnSend(false);
+      localMessageMutationVersionRef.current += 1;
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: generateUUID(),
+          role: 'user',
+          content,
+          timestamp: new Date(),
+          local: true,
+        },
+      ]);
+      setSocketGeneration((g) => g + 1);
+      return;
+    }    if (!wsRef.current?.connected) return;
     try {
       const noted = noteOutgoingSend(typingRef.current, turnStreamStateRef.current);
       wsRef.current.sendMessage(content, autonomy);
@@ -1185,7 +1447,7 @@ export function AgentProvider({
     } catch {
       setError(t('agent.send_error'));
     }
-  }, [publishThinkingClock]);
+  }, [publishThinkingClock, foldTurnStream, perSocket]);
 
   const switchModel = useCallback(async (model: string) => {
     if (modelLoading) return; // debounce
@@ -1237,10 +1499,10 @@ export function AgentProvider({
       // down the socket. This prevents the old model from continuing to execute
       // tools or persisting its response into the session after we switch.
       if (typingRef.current) {
-        const sessionToAbort = activeSessionIdRef.current;
+        const sessionToAbort = perSocket ? conversationIdRef.current : activeSessionIdRef.current;
         try {
           await Promise.race([
-            abortSession(sessionToAbort),
+            sessionToAbort ? abortSession(sessionToAbort) : Promise.resolve(),
             new Promise((_, reject) =>
               setTimeout(() => reject(new Error('abort-timeout')), 1_500),
             ),
@@ -1285,6 +1547,7 @@ export function AgentProvider({
       const ws = sessionRuntimeRef.current.createSocket({
         agentAlias,
         sessionId: activeSessionIdRef.current,
+        autoReconnect: !perSocket,
       });
       // Point wsRef at the NEW client before connect(), so a synchronous
       // connect() throw (e.g. an invalid WebSocket URL/protocol token) still
@@ -1311,7 +1574,7 @@ export function AgentProvider({
       setModelLoading(false);
       setError(err instanceof Error ? err.message : t('agent.failed_switch_model'));
     }
-  }, [attachSocketCallbacks, modelLoading, typing, agentAlias, foldTurnStream, publishThinkingClock]);
+  }, [attachSocketCallbacks, modelLoading, typing, agentAlias, foldTurnStream, publishThinkingClock, perSocket]);
 
   const deleteMessage = useCallback((id: string) => {
     localMessageMutationVersionRef.current += 1;
@@ -1341,6 +1604,28 @@ export function AgentProvider({
 
   const clearAllMessages = useCallback(() => {
     resetTranscriptState();
+
+    if (perSocket) {
+      // A new conversation: close this one (the gateway closes it with its
+      // socket) and wait for the message that starts the next. Nothing is
+      // deleted.
+      pendingSendRef.current = null;
+      conversationIdRef.current = null;
+      setConversationLimited(false);
+      setError(null);
+      const oldWs = wsRef.current;
+      if (oldWs) {
+        oldWs.onOpen = null;
+        oldWs.onClose = null;
+        oldWs.onError = null;
+        oldWs.onMessage = null;
+        oldWs.disconnect();
+      }
+      wsRef.current = null;
+      setConnected(false);
+      setStartsConversationOnSend(true);
+      return;
+    }
 
     const sid = activeSessionIdRef.current;
     // Socket identity at the moment of the clear. If it changes while the
@@ -1385,6 +1670,7 @@ export function AgentProvider({
         const ws = sessionRuntimeRef.current.createSocket({
           agentAlias,
           sessionId: activeSessionIdRef.current,
+          autoReconnect: !perSocket,
         });
         // Assign wsRef before connect() so a synchronous throw can't strand the
         // page on the old intentionally-closed socket (see switchModel).
@@ -1393,7 +1679,7 @@ export function AgentProvider({
         ws.connect();
       }
     })();
-  }, [agentAlias, attachSocketCallbacks, foldTurnStream]);
+  }, [agentAlias, attachSocketCallbacks, foldTurnStream, perSocket]);
 
   const addLocalMessage = useCallback((content: string) => {
     localMessageMutationVersionRef.current += 1;
@@ -1464,11 +1750,16 @@ export function AgentProvider({
 
   /** Start an additional conversation, leaving the current one intact. */
   const startNewSession = useCallback((): boolean => {
+    // One conversation per socket: a new one is the next socket.
+    if (perSocket) {
+      clearAllMessages();
+      return true;
+    }
     // Do not even mint an unreachable id until the shared transition gate is
     // open. goToSession rechecks the capability before mutating state.
     if (sessionPersistenceRef.current !== true) return false;
     return transitionToSession(sessionRuntimeRef.current.mintId());
-  }, [transitionToSession]);
+  }, [transitionToSession, perSocket, clearAllMessages]);
 
   /**
    * Drop a stored conversation. Deleting the one on screen leaves nothing to
@@ -1524,11 +1815,24 @@ export function AgentProvider({
     });
   }, []);
 
+  const takeUnsentMessage = useCallback(() => setUnsentMessage(null), []);
+
+  const retryConnection = useCallback(() => {
+    setConversationLimited(false);
+    wsRef.current?.connect();
+  }, []);
+
   const value: AgentContextValue = {
     agentAlias,
     messages,
     sendMessage,
     connected,
+    conversationLimited,
+    retryConnection,
+    conversationPerSocket: perSocket,
+    startsConversationOnSend,
+    unsentMessage,
+    takeUnsentMessage,
     error,
     typing,
     streamingContent,
@@ -1582,9 +1886,9 @@ export function AgentProvider({
       ]);
       setStreamingContent('');
       setStreamingThinking('');
-      setTyping(false);
-      try {
-        await abortSession(sessionId);
+      setTyping(false);      const target = perSocket ? conversationIdRef.current : sessionId;
+      if (!target) return;      try {
+        await abortSession(target);
       } catch {
         // Best-effort abort
       }

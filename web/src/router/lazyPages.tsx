@@ -1,27 +1,35 @@
-// Eager page modules. Vite + Chrome cache a failed `import()` for the whole
-// document lifetime, so a transient transform error (HMR mid-edit) made
-// Config / Agents / SOPs stay broken until a hard refresh. Static imports
-// keep those routes on the main graph.
+import { lazy, type ComponentType } from 'react';
+import { loadPageOrReload } from '../lib/chunkReload';
 
-export { default as Dashboard } from '../pages/Dashboard';
-export { default as AgentChat } from '../pages/AgentChat';
-export { default as WorkbenchPage } from '../pages/WorkbenchPage';
-export { default as AgentsList } from '../pages/AgentsList';
-export { default as AgentWorkspaceExplorer } from '../pages/AgentWorkspaceExplorer';
-export { default as Tools } from '../pages/Tools';
-export { default as McpToolsPage } from '../pages/McpToolsPage';
-export { default as Cron } from '../pages/Cron';
-export { default as Integrations } from '../pages/Integrations';
-export { default as Plugins } from '../pages/Plugins';
-export { default as Config } from '../pages/Config';
-export { default as Logs } from '../pages/Logs';
-export { FeedbackReviewPage } from '../components/FeedbackReviewPage';
-export { default as Doctor } from '../pages/Doctor';
-export { default as Pairing } from '../pages/Pairing';
-export { default as Canvas } from '../pages/Canvas';
-export { default as AcpConsole } from '../pages/AcpConsole';
-export { default as Quickstart } from '../pages/quickstart/Quickstart';
-export { default as Skills } from '../pages/Skills';
-export { SopsList, SopView, SopEditor } from '../pages/Sops';
-export { default as Runs } from '../pages/Runs';
-export { default as RunDetail } from '../pages/RunDetail';
+function lazyPage<T extends ComponentType<any>>(load: () => Promise<{ default: T }>) {
+  return lazy(() => loadPageOrReload(load));
+}
+
+export const Dashboard = lazyPage(() => import('../pages/Dashboard'));
+export const AgentChat = lazyPage(() => import('../pages/AgentChat'));
+export const WorkbenchPage = lazyPage(() => import('../pages/WorkbenchPage'));
+export const AgentsList = lazyPage(() => import('../pages/AgentsList'));
+export const AgentWorkspaceExplorer = lazyPage(() => import('../pages/AgentWorkspaceExplorer'));
+export const Tools = lazyPage(() => import('../pages/Tools'));
+export const McpToolsPage = lazyPage(() => import('../pages/McpToolsPage'));
+export const Cron = lazyPage(() => import('../pages/Cron'));
+export const Integrations = lazyPage(() => import('../pages/Integrations'));
+export const Plugins = lazyPage(() => import('../pages/Plugins'));
+export const Config = lazyPage(() => import('../pages/Config'));
+export const Logs = lazyPage(() => import('../pages/Logs'));
+export const FeedbackReviewPage = lazyPage(() =>
+  import('../components/FeedbackReviewPage').then((m) => ({ default: m.FeedbackReviewPage })),
+);
+export const Doctor = lazyPage(() => import('../pages/Doctor'));
+export const Pairing = lazyPage(() => import('../pages/Pairing'));
+export const Canvas = lazyPage(() => import('../pages/Canvas'));
+export const AcpConsole = lazyPage(() => import('../pages/AcpConsole'));
+export const Quickstart = lazyPage(() => import('../pages/quickstart/Quickstart'));
+export const Skills = lazyPage(() => import('../pages/Skills'));
+export const SopsList = lazyPage(() => import('../pages/Sops').then((m) => ({ default: m.SopsList })));
+export const SopView = lazyPage(() => import('../pages/Sops').then((m) => ({ default: m.SopView })));
+export const SopEditor = lazyPage(() =>
+  import('../pages/Sops').then((m) => ({ default: m.SopEditor })),
+);
+export const Runs = lazyPage(() => import('../pages/Runs'));
+export const RunDetail = lazyPage(() => import('../pages/RunDetail'));

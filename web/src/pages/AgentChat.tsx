@@ -1,4 +1,4 @@
-import { memo, useState, useEffect, useRef, useCallback } from 'react';
+import { memo, useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Link, Navigate, useParams } from 'react-router-dom';
 import { ArrowUp, Square, User, AlertCircle, Copy, Check, X, Trash2, Minimize2, Maximize2, ChevronDown, Wrench, PanelRightClose, PanelRightOpen, Plus, Mic, Loader2, Pencil, FolderOpen, ImagePlus } from 'lucide-react';
 import ReactMarkdown, { type Components } from 'react-markdown';
@@ -6,10 +6,11 @@ import remarkGfm from 'remark-gfm';
 import { AgentProvider, useAgent, type ChatMessage } from '@/contexts/AgentContext';
 import { labelForProviderRef, resolveProviderRefArg } from '@/contexts/modelPicker.logic';
 import SessionPicker from '@/components/SessionPicker';
+import { useNavAccess } from '@/hooks/useNavAccess';
 import { useDraft } from '@/hooks/useDraft';
 import { getLocale, t } from '@/lib/i18n';
 import {
-  COMMANDS,
+  commandsFor,
   helpText,
   isSlashCommand,
   matchCommands,
@@ -254,7 +255,18 @@ export function AgentChatInner({
     contextModelWindow,
     contextInputTokens,
     sessionId,
+    conversationLimited,
+    retryConnection,
+    conversationPerSocket,
+    startsConversationOnSend,
+    unsentMessage,
+    takeUnsentMessage,
   } = useAgent();
+  // A signed-in account without the operator dashboard cannot switch the
+  // model, upload, or open the workspace. The workbench has no OIDC session,
+  // so this stays open there; the platform role gate is separate.
+  const operator = useNavAccess().operatorPages;
+  const commands = useMemo(() => commandsFor(operator), [operator]);
 
   // Keyed by conversation, not just alias: with the same agent open in two
   // panes an alias-only key would make both share one draft.
@@ -273,6 +285,11 @@ export function AgentChatInner({
     writeInput(value);
     saveDraftRef.current(value);
   }, [writeInput]);
+  useEffect(() => {
+    if (unsentMessage === null) return;
+    applyInput((typed) => (typed ? `${unsentMessage}\n${typed}` : unsentMessage));
+    takeUnsentMessage();
+  }, [unsentMessage, applyInput, takeUnsentMessage]);
   const quickPrompts = useQuickPrompts(userId);
   const isWorkbench = Boolean(onRenameSession || onToggleRightPanel || autonomyScope);
   const [outlineDraft, setOutlineDraft] = useState<string | null>(null);
@@ -383,7 +400,9 @@ export function AgentChatInner({
     const finished = wasTypingRef.current && !typing;
     wasTypingRef.current = typing;
     if (!finished || !connected) return;
-    requestAnimationFrame(() => inputRef.current?.focus());
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => inputRef.current?.focus());
+    }
   }, [typing, connected]);
 
   // Close model dropdown when clicking outside
@@ -427,6 +446,10 @@ export function AgentChatInner({
         return true;
 
       case 'upload':
+        if (!operator) {
+          addLocalMessage(t('auth.not_available'));
+          return true;
+        }
         // Same picker as the attach button — the input click is allowed here
         // because runCommand fires from the user's Enter keypress, keeping
         // the browser's user-activation requirement satisfied.
@@ -434,6 +457,10 @@ export function AgentChatInner({
         return true;
 
       case 'model': {
+        if (!operator) {
+          addLocalMessage(t('auth.not_available'));
+          return true;
+        }
         const name = args.trim();
         const currentLabel = currentModel
           ? labelForProviderRef(currentModel, modelLabels)
@@ -483,7 +510,7 @@ export function AgentChatInner({
         addLocalMessage(t('agent.cmd_unknown').replace('{cmd}', `/${command}`));
         return true;
     }
-  }, [addLocalMessage, clearAllMessages, startNewSession, currentModel, availableModels, modelLabels, switchModel, modelLoading]);
+  }, [addLocalMessage, clearAllMessages, startNewSession, currentModel, availableModels, modelLabels, switchModel, modelLoading, operator]);
 
   const handleSend = () => {
     const trimmed = input.trim();
@@ -502,7 +529,7 @@ export function AgentChatInner({
       return;
     }
 
-    if (!connected) return;
+    if (!connected && !startsConversationOnSend) return;
     if (!trimmed && ready.length === 0 && !installedSkill) return;
 
     const literal = trimmed.startsWith('//');
@@ -614,7 +641,7 @@ export function AgentChatInner({
       onInitialPromptConsumed?.();
       return;
     }
-    if (!connected) return;
+    if (!connected && !startsConversationOnSend) return;
     consumedInitialRef.current = true;
     void (async () => {
       const ready = files.length > 0 ? await addFiles(files) : [];
@@ -723,8 +750,8 @@ export function AgentChatInner({
   }, [applyInput]);
 
   const matchedCommands: CommandSpec[] = /^\/[^/\s]*$/.test(input)
-    ? matchCommands(input.slice(1))
-    : COMMANDS.slice();
+    ? matchCommands(input.slice(1), commands)
+    : [...commands];
 
   const handleEditOutline = useCallback((content: string) => {
     const text = content.trim();
@@ -816,7 +843,7 @@ export function AgentChatInner({
   };
 
   const composer = steerComposer({
-    connected,
+    connected: connected || startsConversationOnSend,
     hydrated,
     typing,
     draft: input,
@@ -954,7 +981,7 @@ export function AgentChatInner({
           </div>
         </div>
         <div className="flex items-center shrink-0 ml-2 gap-0.5">
-          {!isWorkbench && (
+          {!isWorkbench && operator && !conversationPerSocket && (
             <>
               <SessionPicker agentAlias={agentAlias} />
               <Link
@@ -1020,6 +1047,18 @@ export function AgentChatInner({
           {error}
         </div>
       )}
+      {conversationLimited && (
+        <div
+          data-conversation-limit=""
+          className="px-4 py-2 border-b border-pc-border bg-pc-surface text-pc-text-secondary flex items-center gap-2 text-sm animate-fade-in"
+        >
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          <span className="flex-1">{t('agent.conversation_limit')}</span>
+          <button type="button" onClick={retryConnection} className="text-sm font-medium text-pc-accent">
+            {t('common.retry')}
+          </button>
+        </div>
+      )}
       {/* Messages area. */}
       <div
         className={chatTranscriptClass(compact)}
@@ -1031,6 +1070,11 @@ export function AgentChatInner({
               <>
                 <p className="text-base font-semibold mb-1 text-pc-text">{isWorkbench ? t('workbench.brand') : t('agentchat.empty_title')}</p>
                 <p className="text-sm text-pc-text-muted">{t('agent.start_conversation')}</p>
+                {conversationPerSocket && (
+                  <p data-conversation-scope-note="" className="text-xs mt-2 text-pc-text-faint">
+                    {t('agent.conversation_ends_with_page')}
+                  </p>
+                )}
               </>
             ) : (
               <p className="text-sm text-pc-text-muted">{t('agent.session_loading')}</p>
@@ -1237,6 +1281,7 @@ export function AgentChatInner({
             <QuickPromptSendHint text={input} prompts={quickPrompts} />
             <div className="flex w-full min-w-0 items-center justify-between gap-2">
               <div className="flex min-w-0 items-center gap-0.5">
+                {operator && (
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
@@ -1247,11 +1292,13 @@ export function AgentChatInner({
                 >
                   <Plus className="h-4 w-4" />
                 </button>
+                )}
                 <InstalledSkillButton
                   agent={agentAlias}
                   disabled={!connected || !hydrated}
                   onPick={setInstalledSkill}
                 />
+                {operator && (
                 <button
                   type="button"
                   onClick={() => imageInputRef.current?.click()}
@@ -1264,6 +1311,7 @@ export function AgentChatInner({
                     ? <Loader2 className="h-4 w-4 animate-spin" />
                     : <ImagePlus className="h-4 w-4" />}
                 </button>
+                )}
                 <AutonomySelect
                   value={autonomy}
                   maxLevel={maxAutonomy}
@@ -1279,6 +1327,7 @@ export function AgentChatInner({
                   disabled={!connected || !hydrated}
                   onInsert={(body) => {
                     applyInput(body);
+                    if (typeof requestAnimationFrame !== 'function') return;
                     requestAnimationFrame(() => {
                       const el = inputRef.current;
                       if (!el) return;
@@ -1306,6 +1355,7 @@ export function AgentChatInner({
                       : t('agent.disconnected_status')}
                 />
                 <div className="flex items-center gap-1.5">
+                  {operator ? (
                   <div className="relative" ref={modelDropdownRef}>
                     <button
                       type="button"
@@ -1344,6 +1394,14 @@ export function AgentChatInner({
                       </div>
                     )}
                   </div>
+                  ) : (
+                    <span
+                      data-model-readonly=""
+                      className="flex items-center px-1.5 py-1 text-sm text-pc-text-secondary"
+                    >
+                      <span className="max-w-[12rem] truncate">{currentModel ?? t('agent.model_loading')}</span>
+                    </span>
+                  )}
                   <ContextMeter contextMaxTokens={contextMaxTokens} contextModelWindow={contextModelWindow} contextInputTokens={contextInputTokens} />
                 </div>
                 <button

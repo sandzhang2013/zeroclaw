@@ -186,25 +186,13 @@ export default function Config() {
     );
   };
 
-  // Navigate to the form for a specific alias. Calls selectSectionItem
-  // to instantiate the entry if needed, then navigates to the alias URL.
-  const goToAlias = async (
-    sectionKey: string,
-    typeKey: string,
-    alias: string,
-  ) => {
-    try {
-      await selectSectionItem(sectionKey, typeKey, alias);
-      navigate(
-        `/config/${encodeURIComponent(sectionKey)}/${encodeURIComponent(typeKey)}/${encodeURIComponent(alias)}`,
-      );
-    } catch (e) {
-      if (e instanceof ApiError) {
-        setError(`[${e.envelope.code}] ${e.envelope.message}`);
-      } else {
-        setError(e instanceof Error ? e.message : String(e));
-      }
-    }
+  // Navigate to the form for an existing alias. Opening an entry only reads
+  // it, so it sends no write: an account that can read config but not change
+  // it can still browse. Creating an entry goes through selectSectionItem.
+  const goToAlias = (sectionKey: string, typeKey: string, alias: string) => {
+    navigate(
+      `/config/${encodeURIComponent(sectionKey)}/${encodeURIComponent(typeKey)}/${encodeURIComponent(alias)}`,
+    );
   };
 
   if (loading) {
@@ -410,11 +398,10 @@ export default function Config() {
           sectionKey={activeSection.key}
           typeKey={typeParam}
           sectionHelp={configSectionHelp(activeSection.key, activeSection.help)}
-          onSelectAlias={async (alias) => {
+          onOpenAlias={(alias) => goToAlias(activeSection.key, typeParam, alias)}
+          onCreateAlias={async (alias) => {
             await selectSectionItem(activeSection.key, typeParam, alias);
-            navigate(
-              `/config/${encodeURIComponent(activeSection.key)}/${encodeURIComponent(typeParam)}/${encodeURIComponent(alias)}`,
-            );
+            goToAlias(activeSection.key, typeParam, alias);
           }}
           onBack={() =>
             navigate(`/config/${encodeURIComponent(activeSection.key)}`)
@@ -481,7 +468,12 @@ export default function Config() {
         <AliasListView
           sectionKey={activeSection.key}
           sectionHelp={configSectionHelp(activeSection.key, activeSection.help)}
-          onSelectAlias={async (alias) => {
+          onOpenAlias={(alias) =>
+            navigate(
+              `/config/${encodeURIComponent(activeSection.key)}/${encodeURIComponent(alias)}`,
+            )
+          }
+          onCreateAlias={async (alias) => {
             await selectSectionItem(activeSection.key, alias);
             navigate(
               `/config/${encodeURIComponent(activeSection.key)}/${encodeURIComponent(alias)}`,
@@ -526,7 +518,7 @@ export default function Config() {
           }
         }}
         onPickAlias={(typeKey, alias) =>
-          void goToAlias(activeSection.key, typeKey, alias)
+          goToAlias(activeSection.key, typeKey, alias)
         }
         sectionUrl={`/config/${encodeURIComponent(activeSection.key)}`}
         reloadKey={reloadKey}
@@ -788,7 +780,8 @@ function AliasListView({
   sectionKey,
   typeKey,
   sectionHelp,
-  onSelectAlias,
+  onOpenAlias,
+  onCreateAlias,
   onBack,
 }: {
   sectionKey: string;
@@ -799,7 +792,10 @@ function AliasListView({
    *  generic alias-name help so operators see what the section is
    *  before being asked to name an entry inside it. */
   sectionHelp?: string;
-  onSelectAlias: (alias: string) => Promise<void>;
+  /** Opens an existing entry. Sends no write, so read-only accounts can. */
+  onOpenAlias: (alias: string) => void;
+  /** Creates a new entry, then opens it. */
+  onCreateAlias: (alias: string) => Promise<void>;
   onBack: () => void;
 }) {
   const [aliases, setAliases] = useState<string[]>([]);
@@ -843,7 +839,7 @@ function AliasListView({
       return;
     }
     try {
-      await onSelectAlias(trimmed);
+      await onCreateAlias(trimmed);
     } catch (e) {
       setAliasError(
         e instanceof ApiError
@@ -898,17 +894,7 @@ function AliasListView({
               key={alias}
               alias={alias}
               mapPath={mapPath}
-              onSelect={() =>
-                onSelectAlias(alias).catch((e) => {
-                  setError(
-                    e instanceof ApiError
-                      ? `[${e.envelope.code}] ${e.envelope.message}`
-                      : e instanceof Error
-                        ? e.message
-                        : String(e),
-                  );
-                })
-              }
+              onSelect={() => onOpenAlias(alias)}
               onDeleted={() => {
                 setAliases((prev) => prev.filter((a) => a !== alias));
               }}

@@ -32,9 +32,10 @@ test('dashboard t() keys have Chinese text and keep placeholders', () => {
   const src = fs.readFileSync(path.join(here, 'i18n.ts'), 'utf8');
   const zhStart = src.indexOf('  zh: {');
   const enStart = src.indexOf('\n  en: {');
-  assert.ok(zhStart >= 0 && enStart > zhStart);
+  const enEnd = src.indexOf('\n  tr: {', enStart);
+  assert.ok(zhStart >= 0 && enStart > zhStart && enEnd > enStart);
   const zh = catalogKeys(src.slice(zhStart, enStart));
-  const en = catalogKeys(src.slice(enStart));
+  const en = catalogKeys(src.slice(enStart, enEnd));
 
   const used = new Set<string>();
   for (const file of sourceFiles(srcRoot)) {
