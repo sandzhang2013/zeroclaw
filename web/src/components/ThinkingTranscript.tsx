@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useState, useRef } from 'react';
 import { t } from '@/lib/i18n';
 import { collapseChatBlankRuns } from '@/lib/chatDisplay';
 import { elapsedThinkingSeconds, shouldFollowThinkingScroll } from '@/lib/thinkingScroll';
+import { thinkingTranscriptClass } from '@/lib/steerTurn.logic';
 
 function useThinkingSeconds(startedAt: number | undefined, frozen: number | undefined): number | undefined {
   const [now, setNow] = useState(() => Date.now());
@@ -101,7 +102,7 @@ export function ThinkingTranscript({
             scrollHeight: el.scrollHeight,
           });
         }}
-        className="text-xs mt-1 max-h-60 overflow-auto whitespace-pre-wrap break-words leading-relaxed [overflow-anchor:none] p-2 rounded-[var(--radius-sm)] text-pc-text-muted bg-pc-code"
+        className={`text-xs mt-1 whitespace-pre-wrap break-words leading-relaxed p-2 rounded-[var(--radius-sm)] text-pc-text-muted bg-pc-code ${thinkingTranscriptClass(live)}`}
       >
         {shownText}
       </pre>

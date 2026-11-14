@@ -134,3 +134,51 @@ export function reduceTurnFrame(
       return { state: initialTurnStreamState(), completion: null };
   }
 }
+
+/** A send while a turn is already running steers that turn. The live stream
+ *  stays. A send with nothing running starts a fresh turn and clears it. */
+export function outboundSendStream(state: TurnStreamState, turnRunning: boolean): TurnStreamState {
+  if (turnRunning) return state;
+  return reduceTurnFrame(state, { type: 'turn_start' }).state;
+}
+
+/** The follow-up is waiting, and this step already produced an answer or a
+ *  tool call. The next thinking belongs to a new answer. Thinking that is
+ *  still the current step stays where it is. */
+export function shouldOpenAnswerAfterSteer(state: TurnStreamState, followUpPending: boolean): boolean {
+  if (!followUpPending) return false;
+  return state.pendingContent.trim().length > 0 || state.hadToolCall;
+}
+
+/** Freeze an answer that already has visible text, so the next one can start
+ *  clean. Thinking with no answer text is not a bubble. `rawContent` is the
+ *  exact stream, used to remove this step from the turn's final combined reply. */
+export function sealLiveAnswer(state: TurnStreamState): {
+  content: string;
+  rawContent: string;
+  thinking?: string;
+} | null {
+  const rawContent = state.pendingContent;
+  const content = rawContent.trim();
+  if (!content) return null;
+  const thinking = (state.capturedThinking || state.pendingThinking).trim();
+  return { content, rawContent, thinking: thinking || undefined };
+}
+
+/** Drop an answer that was already sealed from the turn's combined final text. */
+export function replyAfterSealedAnswer(full: string, rawSealed: string): string {
+  const sealed = rawSealed.trim();
+  const body = full.trim();
+  if (!sealed) return body;
+  if (full.startsWith(rawSealed)) return full.slice(rawSealed.length).trim();
+  if (body.startsWith(sealed)) return body.slice(sealed.length).trim();
+  return body;
+}
+
+/** Put a sealed answer immediately above the latest follow-up. */
+export function indexBeforeLatestSteer<T extends { steersNextStep?: boolean }>(messages: readonly T[]): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.steersNextStep) return index;
+  }
+  return messages.length;
+}

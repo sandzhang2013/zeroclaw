@@ -31,12 +31,19 @@ import type { ToolCallInfo } from '@/components/ToolCallCard';
 import { resolveToolResultIndex } from '@/lib/toolCardMatch';
 import { parseToolArtifact } from '@/lib/artifactKind';
 import {
+  indexBeforeLatestSteer,
   initialTurnStreamState,
   interruptedContent,
   reduceTurnFrame,
   type TurnStreamFrame,
   type TurnStreamState,
 } from '@/contexts/turnStream.logic';
+import {
+  absorbSteerThinking,
+  clearFinishedSteerMarks,
+  noteOutgoingSend,
+  steeredFinalContent,
+} from '@/lib/steerTurn.logic';
 import { buildHistoryTrimmedNotice } from '@/contexts/historyTrimNotices.logic';
 import { uncommittedLocalTail } from '@/contexts/chatHydration.logic';
 import {
@@ -88,6 +95,8 @@ export interface ChatMessage {
   ephemeral?: boolean;
   /** User-visible lifecycle notice, rendered distinctly from agent output. */
   notice?: boolean;
+  /** Sent while a turn was already running. Shown only until that turn ends. */
+  steersNextStep?: boolean;
 }
 
 export interface AgentContextValue {
@@ -104,6 +113,8 @@ export interface AgentContextValue {
   streamingThinkingStartedAt: number | null;
   /** Frozen once the answer has visible text, or when the turn ends. */
   streamingThinkingSeconds?: number;
+  /** A follow-up has started its own answer below the question. */
+  followUpAnswer: boolean;
   currentModel: string | null;
   availableModels: string[];
   /** Configured model id keyed by provider ref (`deepseek.default` → `deepseek-v4-flash`). */
@@ -296,6 +307,9 @@ export function AgentProvider({
   const [typing, setTyping] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
   const [streamingThinking, setStreamingThinking] = useState('');
+  const [followUpAnswer, setFollowUpAnswer] = useState(false);
+  const followUpPendingRef = useRef(false);
+  const sealedRawRef = useRef('');
   const thinkingClockRef = useRef<ThinkingClock>(idleThinkingClock);
   const [thinkingClock, setThinkingClock] = useState<ThinkingClock>(idleThinkingClock);
   const publishThinkingClock = useCallback((next: ThinkingClock) => {
@@ -364,6 +378,11 @@ export function AgentProvider({
   sessionPersistenceRef.current = sessionPersistence;
   typingRef.current = typing;
   sessionRuntimeRef.current = sessionRuntime;
+
+  useEffect(() => {
+    if (typing) return;
+    setMessages((prev) => clearFinishedSteerMarks(prev));
+  }, [typing]);
 
   // Prime the model-provider catalog once so error formatting can resolve
   // display names from the backend registry rather than a local shadow list.
@@ -506,8 +525,43 @@ export function AgentProvider({
 
       case 'thinking': {
         setTyping(true);
-        const { state } = foldTurnStream({ type: 'thinking', content: msg.content });
-        setStreamingThinking(state.pendingThinking);
+        const absorbed = absorbSteerThinking({
+          stream: turnStreamStateRef.current,
+          followUpPending: followUpPendingRef.current,
+          sealedRaw: sealedRawRef.current,
+          thinking: msg.content,
+        });
+        if (absorbed.opened) {
+          const clock = advanceThinkingClock(thinkingClockRef.current, 'stop', Date.now());
+          publishThinkingClock(idleThinkingClock);
+          setStreamingContent('');
+          setFollowUpAnswer(true);
+          if (absorbed.sealed) {
+            const sealed = absorbed.sealed;
+            localMessageMutationVersionRef.current += 1;
+            setMessages((prev) => {
+              const row: ChatMessage = {
+                id: generateUUID(),
+                role: 'agent',
+                content: sealed.content,
+                ...(sealed.thinking
+                  ? {
+                      thinking: sealed.thinking,
+                      ...(clock.seconds != null ? { thinkingSeconds: clock.seconds } : {}),
+                    }
+                  : {}),
+                markdown: true,
+                timestamp: new Date(),
+              };
+              const index = indexBeforeLatestSteer(prev);
+              return [...prev.slice(0, index), row, ...prev.slice(index)];
+            });
+          }
+        }
+        turnStreamStateRef.current = absorbed.stream;
+        followUpPendingRef.current = absorbed.followUpPending;
+        sealedRawRef.current = absorbed.sealedRaw;
+        setStreamingThinking(absorbed.stream.pendingThinking);
         publishThinkingClock(advanceThinkingClock(thinkingClockRef.current, 'thinking', Date.now()));
         break;
       }
@@ -539,7 +593,14 @@ export function AgentProvider({
         });
         const thinkingClock = advanceThinkingClock(thinkingClockRef.current, 'stop', Date.now());
         publishThinkingClock(idleThinkingClock);
-        if (outcome?.kind === 'commit') {
+        const sealedRaw = sealedRawRef.current;
+        const completion = outcome?.kind === 'commit'
+          ? { ...outcome, content: steeredFinalContent(outcome.content, sealedRaw) }
+          : outcome;
+        followUpPendingRef.current = false;
+        sealedRawRef.current = '';
+        setFollowUpAnswer(false);
+        if (completion?.kind === 'commit' && (completion.content || completion.thinking)) {
           // `commit` includes reasoning-only turns: empty content but present
           // thinking, so the turn renders instead of vanishing silently.
           localMessageMutationVersionRef.current += 1;
@@ -548,16 +609,16 @@ export function AgentProvider({
             {
               id: generateUUID(),
               role: 'agent',
-              content: outcome.content,
-              thinking: outcome.thinking,
-              ...(outcome.thinking && thinkingClock.seconds != null
+              content: completion.content,
+              thinking: completion.thinking,
+              ...(completion.thinking && thinkingClock.seconds != null
                 ? { thinkingSeconds: thinkingClock.seconds }
                 : {}),
               markdown: true,
               timestamp: new Date(),
             },
           ]);
-        } else if (outcome?.kind === 'diagnostic') {
+        } else if (completion?.kind === 'diagnostic') {
           // Clean completion with nothing at all — surface a one-off notice so
           // the turn does not disappear. Mirrors zerocode's zc-turn-no-output
           // fallback (#8779). `skip` (empty + tool calls ran) renders nothing.
@@ -1098,10 +1159,17 @@ export function AgentProvider({
   const sendMessage = useCallback((content: string, autonomy?: 'readonly' | 'supervised' | 'full') => {
     if (!wsRef.current?.connected) return;
     try {
+      const noted = noteOutgoingSend(typingRef.current, turnStreamStateRef.current);
       wsRef.current.sendMessage(content, autonomy);
       setTyping(true);
-      foldTurnStream({ type: 'turn_start' });
-      publishThinkingClock(idleThinkingClock);
+      turnStreamStateRef.current = noted.stream;
+      if (noted.steering) followUpPendingRef.current = true;
+      else {
+        followUpPendingRef.current = false;
+        sealedRawRef.current = '';
+        setFollowUpAnswer(false);
+        publishThinkingClock(idleThinkingClock);
+      }
       localMessageMutationVersionRef.current += 1;
       setMessages((prev) => [
         ...prev,
@@ -1111,12 +1179,13 @@ export function AgentProvider({
           content,
           timestamp: new Date(),
           local: true,
+          steersNextStep: noted.steering || undefined,
         },
       ]);
     } catch {
       setError(t('agent.send_error'));
     }
-  }, [foldTurnStream, publishThinkingClock]);
+  }, [publishThinkingClock]);
 
   const switchModel = useCallback(async (model: string) => {
     if (modelLoading) return; // debounce
@@ -1466,6 +1535,7 @@ export function AgentProvider({
     streamingThinking,
     streamingThinkingStartedAt: thinkingClock.startedAt,
     streamingThinkingSeconds: thinkingClock.seconds,
+    followUpAnswer,
     currentModel,
     availableModels,
     modelLabels,
@@ -1493,6 +1563,9 @@ export function AgentProvider({
       const partial = unsavedThinking();
       const thinking = partial.thinking || streamingThinking.trim();
       turnStreamStateRef.current = initialTurnStreamState();
+      followUpPendingRef.current = false;
+      sealedRawRef.current = '';
+      setFollowUpAnswer(false);
       publishThinkingClock(idleThinkingClock);
       const content = interruptedContent(streamingContent, note);
       localMessageMutationVersionRef.current += 1;

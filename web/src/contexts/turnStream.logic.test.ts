@@ -5,7 +5,12 @@ import {
   classifyCompletion,
   initialTurnStreamState,
   interruptedContent,
+  indexBeforeLatestSteer,
+  outboundSendStream,
   reduceTurnFrame,
+  replyAfterSealedAnswer,
+  sealLiveAnswer,
+  shouldOpenAnswerAfterSteer,
   type CompletionOutcome,
   type TurnStreamFrame,
 } from './turnStream.logic.ts';
@@ -202,6 +207,73 @@ test('classifyCompletion falls back to frame content then pending stream', () =>
     ),
     { kind: 'commit', content: 'streamed', thinking: undefined },
   );
+});
+
+test('thinking after a follow-up opens a new answer once this step has text', () => {
+  const thinkingOnly = {
+    pendingContent: '',
+    pendingThinking: '还在想这一步',
+    capturedThinking: '',
+    hadToolCall: false,
+  };
+  assert.equal(shouldOpenAnswerAfterSteer(thinkingOnly, true), false);
+  assert.equal(shouldOpenAnswerAfterSteer({ ...thinkingOnly, pendingContent: '已经写出' }, true), true);
+  assert.equal(shouldOpenAnswerAfterSteer({ ...thinkingOnly, hadToolCall: true }, true), true);
+  assert.equal(shouldOpenAnswerAfterSteer({ ...thinkingOnly, pendingContent: '已经写出' }, false), false);
+});
+
+test('a sealed answer is removed from the turn final reply', () => {
+  const sealed = sealLiveAnswer({
+    pendingContent: '第一段',
+    pendingThinking: '先想',
+    capturedThinking: '',
+    hadToolCall: false,
+  });
+  assert.equal(sealed?.content, '第一段');
+  assert.equal(sealed?.thinking, '先想');
+  assert.equal(sealLiveAnswer({
+    pendingContent: '',
+    pendingThinking: '只有思考',
+    capturedThinking: '',
+    hadToolCall: true,
+  }), null);
+  assert.equal(replyAfterSealedAnswer('第一段第二段', sealed?.rawContent ?? ''), '第二段');
+  assert.equal(indexBeforeLatestSteer([
+    { steersNextStep: true },
+    { steersNextStep: true },
+  ]), 1);
+});
+
+test('follow-up before any answer text drops that thinking and keeps written text', () => {
+  const thinkingOnly = {
+    pendingContent: '',
+    pendingThinking: '先查天气',
+    capturedThinking: '',
+    hadToolCall: false,
+  };
+  assert.equal(shouldOpenAnswerAfterSteer(thinkingOnly, true), false);
+  assert.equal(sealLiveAnswer(thinkingOnly), null);
+
+  const afterTool = { ...thinkingOnly, hadToolCall: true };
+  assert.equal(shouldOpenAnswerAfterSteer(afterTool, true), true);
+  assert.equal(sealLiveAnswer(afterTool), null);
+
+  const written = { ...thinkingOnly, pendingContent: '要哪个？' };
+  const sealed = sealLiveAnswer(written);
+  assert.equal(sealed?.content, '要哪个？');
+  assert.equal(sealed?.thinking, '先查天气');
+  assert.equal(replyAfterSealedAnswer('要哪个？上海暂时查不到', sealed?.rawContent ?? ''), '上海暂时查不到');
+});
+
+test('a send during a running turn keeps the live stream', () => {
+  const live = {
+    pendingContent: '已经写出的句子',
+    pendingThinking: '还在想',
+    capturedThinking: '',
+    hadToolCall: true,
+  };
+  assert.deepEqual(outboundSendStream(live, true), live);
+  assert.deepEqual(outboundSendStream(live, false), initialTurnStreamState());
 });
 
 test('captured thinking takes precedence over pending thinking', () => {

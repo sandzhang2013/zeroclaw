@@ -18,6 +18,8 @@ export interface IllustratedMessage {
   notice?: boolean;
   ephemeral?: boolean;
   toolCall?: IllustratedToolCall;
+  /** Sent while the previous answer was still running. */
+  steersNextStep?: boolean;
 }
 
 export function isInlineChatImage(toolCall: IllustratedToolCall | undefined): boolean {
@@ -80,4 +82,21 @@ export function shouldAttachStreamingToGroup(group: IllustratedMessage[] | undef
   const last = group.at(-1);
   if (!last || last.role !== 'agent' || last.notice || last.ephemeral) return false;
   return !last.toolCall || isIllustratedToolCall(last.toolCall);
+}
+
+/** Where the live stream is drawn.
+ *
+ * A new question streams under itself. Only a follow-up sent while the
+ * previous answer is still on screen keeps that answer's stream in place
+ * until the next thinking opens its own reply. */
+export function streamingGroupIndex(groups: IllustratedMessage[][]): number {
+  const last = groups.at(-1);
+  const holdingEarlierAnswer = last?.some((row) => row.role === 'user' && row.steersNextStep) ?? false;
+  if (!holdingEarlierAnswer) {
+    return shouldAttachStreamingToGroup(last) ? groups.length - 1 : -1;
+  }
+  for (let index = groups.length - 2; index >= 0; index -= 1) {
+    if (shouldAttachStreamingToGroup(groups[index])) return index;
+  }
+  return -1;
 }

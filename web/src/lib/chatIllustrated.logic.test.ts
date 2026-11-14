@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   groupIllustratedBubbles,
   shouldAttachStreamingToGroup,
+  streamingGroupIndex,
   visibleChatMessages,
 } from './chatIllustrated.ts';
 
@@ -52,6 +53,25 @@ test('visibleChatMessages hides html reports and canvas from the transcript', ()
     { id: 'txt', role: 'agent' as const, content: '见右侧报告。' },
   ];
   assert.deepEqual(visibleChatMessages(rows, false).map((m) => m.id), ['u', 'img', 'txt']);
+});
+
+test('a new question streams below itself, not inside the previous answer', () => {
+  const groups = groupIllustratedBubbles([
+    { id: 'u', role: 'user' as const },
+    { id: 'txt', role: 'agent' as const, content: '要哪个？' },
+    { id: 'next', role: 'user' as const, content: '上海' },
+  ], false);
+  assert.equal(streamingGroupIndex(groups), -1);
+});
+
+test('streaming stays on the agent bubble while a mid-turn note has not opened a new answer', () => {
+  const groups = groupIllustratedBubbles([
+    { id: 'u', role: 'user' as const },
+    { id: 'txt', role: 'agent' as const, content: '正在写' },
+    { id: 'steer', role: 'user' as const, content: '改成表格', steersNextStep: true },
+  ], false);
+  assert.equal(streamingGroupIndex(groups), 1);
+  assert.equal(streamingGroupIndex([[{ id: 'u', role: 'user' }]]), -1);
 });
 
 test('shouldAttachStreamingToGroup follows an illustrated agent bubble', () => {

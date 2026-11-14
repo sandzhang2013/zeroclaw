@@ -52,7 +52,14 @@ import {
 } from '@/lib/chatUpload';
 import { splitChatHtmlBlocks } from '@/lib/chatHtmlPreview';
 import { artifactKind } from '@/lib/artifactKind';
-import { groupIllustratedBubbles, shouldAttachStreamingToGroup } from '@/lib/chatIllustrated';
+import { groupIllustratedBubbles } from '@/lib/chatIllustrated';
+import {
+  chatTranscriptClass,
+  composerDockClass,
+  liveAnswerGroupIndex,
+  steerCaptionVisible,
+  steerComposer,
+} from '@/lib/steerTurn.logic';
 import { extractMcpToolText, extractToolImages, stripImageMarkers } from '@/lib/chatImages';
 import { ChatImagePreview } from '@/components/ChatImagePreview';
 import { sanitizeSessionTitle, stripSessionTitleTimestamp } from '@/lib/workbenchSession';
@@ -229,6 +236,7 @@ export function AgentChatInner({
     streamingThinking,
     streamingThinkingStartedAt,
     streamingThinkingSeconds,
+    followUpAnswer,
     currentModel,
     availableModels,
     modelLabels,
@@ -807,6 +815,17 @@ export function AgentChatInner({
     }
   };
 
+  const composer = steerComposer({
+    connected,
+    hydrated,
+    typing,
+    draft: input,
+    uploading: attachments.some((file) => file.status === 'uploading'),
+    hasSendPayload: Boolean(installedSkill) || attachments.some((file) => file.status === 'ready'),
+    modelLoading,
+    modelUnavailable: availableModels.length === 0 && currentModel === null,
+  });
+
   return (
     /* translate="no" / notranslate (#7057): browser auto-translation (e.g.
        Chrome → Google Translate) rewrites text nodes into <font> wrappers.
@@ -1003,7 +1022,7 @@ export function AgentChatInner({
       )}
       {/* Messages area. */}
       <div
-        className={`flex-1 overflow-y-auto p-4 pb-8 [overflow-anchor:none] ${compact ? 'space-y-1.5' : 'space-y-2'}`}
+        className={chatTranscriptClass(compact)}
       >
         {messages.length === 0 && !initialPrompt && (
           <div className="flex flex-col items-center justify-center h-full text-center animate-fade-in text-pc-text-muted">
@@ -1021,8 +1040,7 @@ export function AgentChatInner({
 
         {(() => {
           const bubbles = groupIllustratedBubbles(messages, showToolActivity);
-          const last = bubbles.at(-1);
-          const streamInLast = Boolean(typing && shouldAttachStreamingToGroup(last));
+          const streamIndex = liveAnswerGroupIndex(typing, followUpAnswer, bubbles);
           const prose = messages.filter((row) => (
             row.role === 'agent' && !row.toolCall && !row.notice && !row.ephemeral && row.content.trim()
           ));
@@ -1035,7 +1053,7 @@ export function AgentChatInner({
                 const previousUserText = prev?.[0]?.role === 'user'
                   ? messageModelText(prev[0])
                   : '';
-                const streamingHere = streamInLast && idx === bubbles.length - 1;
+                const streamingHere = idx === streamIndex;
                 const anchor = [...items].reverse().find((row) => proseIndex.has(row.id));
                 const anchorIndex = anchor ? proseIndex.get(anchor.id) : undefined;
                 const feedbackKey = streamingHere || anchorIndex == null
@@ -1060,6 +1078,7 @@ export function AgentChatInner({
                   feedbackVerdict={feedback?.verdict}
                   onLike={likeTurn}
                   onDislike={setDislikeKey}
+                  showSteerHint={steerCaptionVisible(typing, items.some((row) => row.steersNextStep))}
                   streaming={streamingHere
                     ? {
                         content: streamingContent,
@@ -1071,7 +1090,7 @@ export function AgentChatInner({
                 />
                 );
               })}
-              {typing && !streamInLast && (
+              {typing && streamIndex < 0 && (
                 <div className="flex items-start gap-3 animate-fade-in">
                   <AgentAvatar className="h-8 w-8" />
                   {streamingContent || streamingThinking ? (
@@ -1109,7 +1128,7 @@ export function AgentChatInner({
       )}
 
       {/* Input area */}
-      <div className="px-4 pb-3 pt-1">
+      <div className={composerDockClass()}>
         {showCommandHint && matchedCommands.length > 0 && (
           <div className="relative max-w-4xl mx-auto">
             <div
@@ -1210,14 +1229,8 @@ export function AgentChatInner({
               }}
               onCompositionStart={() => { isComposingRef.current = true; }}
               onCompositionEnd={() => { isComposingRef.current = false; }}
-              placeholder={!connected
-                ? t('agent.connecting')
-                : !hydrated
-                  ? t('agent.session_loading')
-                  : typing
-                    ? t('agent.running')
-                    : t('agent.type_message')}
-              disabled={!connected || typing || !hydrated}
+              placeholder={t(composer.placeholderKey)}
+              disabled={composer.textareaDisabled}
               className="min-w-0 w-full bg-transparent text-sm resize-none text-pc-text placeholder:text-pc-text-muted outline-none focus:outline-none focus-visible:outline-none disabled:opacity-40"
               style={{ minHeight: '2.5rem', maxHeight: '10rem', paddingTop: '2px', paddingBottom: '8px' }}
             />
@@ -1254,7 +1267,7 @@ export function AgentChatInner({
                 <AutonomySelect
                   value={autonomy}
                   maxLevel={maxAutonomy}
-                  disabled={!connected || typing}
+                  disabled={composer.autonomyDisabled}
                   onChange={(level) => {
                     const next = clampWorkbenchAutonomy(level, maxAutonomy);
                     setAutonomy(next);
@@ -1297,7 +1310,7 @@ export function AgentChatInner({
                     <button
                       type="button"
                       onClick={() => setShowModelDropdown((v) => !v)}
-                      disabled={modelLoading || typing || (availableModels.length === 0 && currentModel === null)}
+                      disabled={composer.modelDisabled}
                       className="flex items-center gap-1 rounded-md px-1.5 py-1 text-sm text-pc-text-secondary hover:bg-[var(--pc-hover)] hover:text-pc-text disabled:opacity-50"
                     >
                       <span className="max-w-[12rem] truncate">
@@ -1342,7 +1355,7 @@ export function AgentChatInner({
                 >
                   <Mic className="h-4 w-4" />
                 </button>
-                {typing ? (
+                {composer.stopVisible && (
                   <button
                     type="button"
                     onClick={handleAbort}
@@ -1352,22 +1365,16 @@ export function AgentChatInner({
                   >
                     <Square className="h-3.5 w-3.5" fill="currentColor" />
                   </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={handleSend}
-                    disabled={
-                      !connected
-                      || !hydrated
-                      || attachments.some((a) => a.status === 'uploading')
-                      || (!input.trim() && !installedSkill && attachments.filter((a) => a.status === 'ready').length === 0)
-                    }
-                    className="flex-shrink-0 inline-flex size-8 items-center justify-center rounded-full bg-pc-text text-pc-base hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
-                    aria-label={t('agent.send')}
-                  >
-                    <ArrowUp className="h-4 w-4" />
-                  </button>
                 )}
+                <button
+                  type="button"
+                  onClick={handleSend}
+                  disabled={composer.sendDisabled}
+                  className="flex-shrink-0 inline-flex size-8 items-center justify-center rounded-full bg-pc-text text-pc-base hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
+                  aria-label={t('agent.send')}
+                >
+                  <ArrowUp className="h-4 w-4" />
+                </button>
               </div>
             </div>
           </div>
@@ -1408,6 +1415,7 @@ interface MessageItemProps {
   onLike?: (key: string, verdict?: TurnVerdict) => void;
   onDislike?: (key: string) => void;
   streaming?: { content: string; thinking: string; startedAt?: number; seconds?: number } | null;
+  showSteerHint?: boolean;
 }
 
 function ChatStreamBody({ text, className }: { text: string; className: string }) {
@@ -1516,6 +1524,7 @@ const MessageItem = memo(function MessageItem({
   onLike,
   onDislike,
   streaming,
+  showSteerHint,
 }: MessageItemProps) {
   const rows = items ?? [];
   const msg = rows[0];
@@ -1592,6 +1601,9 @@ const MessageItem = memo(function MessageItem({
                 <span className="bounce-dot w-1.5 h-1.5 rounded-full bg-pc-accent" />
                 <span className="bounce-dot w-1.5 h-1.5 rounded-full bg-pc-accent" />
               </div>
+            )}
+            {showSteerHint && (
+              <p className="mt-1 text-[11px] leading-4 text-pc-text-muted">{t('agent.steer_pending')}</p>
             )}
             {(() => {
               const showOutline = shouldShowOutlineEditButton({
