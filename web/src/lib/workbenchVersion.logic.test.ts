@@ -14,16 +14,20 @@ test("workbench version file is MAJOR.MINOR.PATCH", () => {
 });
 
 test("workbench version keeps a valid string and falls back otherwise", () => {
-  assert.equal(workbenchVersionLabel("0.6.704"), "0.6.704");
-  assert.equal(workbenchVersionLabel(" 0.6.704\n"), "0.6.704");
+  assert.equal(workbenchVersionLabel("0.8.705"), "0.8.705");
+  assert.equal(workbenchVersionLabel(" 0.8.705\n"), "0.8.705");
   assert.equal(workbenchVersionLabel(null), WORKBENCH_VERSION_FALLBACK);
   assert.equal(workbenchVersionLabel(undefined), WORKBENCH_VERSION_FALLBACK);
   assert.equal(workbenchVersionLabel(""), WORKBENCH_VERSION_FALLBACK);
-  assert.equal(workbenchVersionLabel("0.6"), WORKBENCH_VERSION_FALLBACK);
+  assert.equal(workbenchVersionLabel("0.8"), WORKBENCH_VERSION_FALLBACK);
 });
 
-test("workbench version patch increments by one", () => {
-  assert.equal(bumpWorkbenchVersion("0.6.704"), "0.6.705");
-  assert.equal(bumpWorkbenchVersion("0.6.9"), "0.6.10");
-  assert.equal(bumpWorkbenchVersion("nope"), null);
+test("workbench version follows the kernel patch band", () => {
+  assert.equal(bumpWorkbenchVersion("0.8.705", "0.8.7"), "0.8.706");
+  assert.equal(bumpWorkbenchVersion("0.6.705", "0.8.7"), "0.8.700");
+  assert.equal(bumpWorkbenchVersion("0.8.705", "0.8.8"), "0.8.800");
+  assert.equal(bumpWorkbenchVersion("0.8.800", "0.8.8"), "0.8.801");
+  assert.equal(bumpWorkbenchVersion("0.8.799", "0.8.7"), "0.8.800");
+  assert.equal(bumpWorkbenchVersion("nope", "0.8.7"), null);
+  assert.equal(bumpWorkbenchVersion("0.8.705", "0.8"), null);
 });

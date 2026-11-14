@@ -6,6 +6,7 @@ import { defineConfig, type Plugin, type ProxyOptions } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { parseMockUserCookie } from "./src/lib/platformUser.ts";
+import { WORKBENCH_VERSION_FALLBACK } from "./src/lib/workbenchVersion.ts";
 import {
   DEFAULT_WEB_PREFIX,
   normalizeWebPrefix,
@@ -173,7 +174,7 @@ function workbenchVersionPlugin(): Plugin {
     } catch {
       /* missing file falls through */
     }
-    return "0.6.2";
+    return WORKBENCH_VERSION_FALLBACK;
   };
   return {
     name: "workbench-version",

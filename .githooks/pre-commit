@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# One patch per commit, recorded in web/WORKBENCH_VERSION. Packaging reads that
-# file, so a shallow clone still shows the same badge. Merge and amend commits
-# keep the version the staged tree already has. ZEROCLAW_SKIP_VERSION_BUMP=1
-# skips the bump.
+# One step per commit, recorded in web/WORKBENCH_VERSION. The badge follows
+# Cargo.toml [workspace.package] version A.B.C: the band is A.B.(C*100) and
+# each commit adds one inside that band. A new kernel patch starts at C*100
+# (0.8.8 starts at 0.8.800). Packaging reads the file, so a shallow clone still
+# shows the same badge. Merge and amend commits keep the version the staged
+# tree already has. ZEROCLAW_SKIP_VERSION_BUMP=1 skips the bump.
 bump_workbench_version() {
   if [[ "${ZEROCLAW_SKIP_VERSION_BUMP:-}" == "1" ]]; then
     return 0
@@ -34,7 +36,9 @@ bump_workbench_version() {
   else
     base="${file_ver}"
   fi
-  next="$(bump_workbench_patch "${base}")"
+  local kernel
+  kernel="$(workspace_package_version)"
+  next="$(bump_workbench_patch "${base}" "${kernel}")"
   if [[ "${file_ver}" == "${next}" && "${index_ver}" == "${next}" ]]; then
     return 0
   fi
@@ -42,14 +46,37 @@ bump_workbench_version() {
   git add -- web/WORKBENCH_VERSION
 }
 
+workspace_package_version() {
+  awk '
+    $0 == "[workspace.package]" { in_pkg = 1; next }
+    in_pkg && /^\[/ { exit }
+    in_pkg && /^version = "/ {
+      if (match($0, /"[0-9]+\.[0-9]+\.[0-9]+"/)) {
+        print substr($0, RSTART + 1, RLENGTH - 2)
+        exit
+      }
+    }
+  ' Cargo.toml
+}
+
 bump_workbench_patch() {
-  local version="$1" major minor patch
+  local version="$1" kernel="$2" major minor patch kmaj kmin kpatch floor
   IFS=. read -r major minor patch <<<"${version}"
+  IFS=. read -r kmaj kmin kpatch <<<"${kernel}"
   if [[ ! "${major}" =~ ^[0-9]+$ || ! "${minor}" =~ ^[0-9]+$ || ! "${patch}" =~ ^[0-9]+$ ]]; then
     echo "workbench version: web/WORKBENCH_VERSION must be MAJOR.MINOR.PATCH, got '${version}'" >&2
     return 1
   fi
-  printf '%s.%s.%s\n' "${major}" "${minor}" "$((patch + 1))"
+  if [[ ! "${kmaj}" =~ ^[0-9]+$ || ! "${kmin}" =~ ^[0-9]+$ || ! "${kpatch}" =~ ^[0-9]+$ ]]; then
+    echo "workbench version: Cargo.toml [workspace.package] version must be MAJOR.MINOR.PATCH, got '${kernel}'" >&2
+    return 1
+  fi
+  floor="$((kpatch * 100))"
+  if [[ "${major}" == "${kmaj}" && "${minor}" == "${kmin}" && "${patch}" -ge "${floor}" && "${patch}" -lt "$((floor + 100))" ]]; then
+    printf '%s.%s.%s\n' "${kmaj}" "${kmin}" "$((patch + 1))"
+  else
+    printf '%s.%s.%s\n' "${kmaj}" "${kmin}" "${floor}"
+  fi
 }
 
 repo_root="$(git rev-parse --show-toplevel)"
