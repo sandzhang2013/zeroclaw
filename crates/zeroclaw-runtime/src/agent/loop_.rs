@@ -2535,9 +2535,54 @@ pub async fn run(
             }
 
             // After successful multi-step execution, attempt autonomous skill creation.
+            // A logged-in turn writes a personal skill. A turn with no user
+            // keeps the shared data-dir skill.
             if config.skills.skill_creation.enabled {
                 let tool_calls = crate::skills::creator::extract_tool_calls_from_history(&history);
-                if tool_calls.len() >= 2 {
+                if let Some(attrs) = zeroclaw_api::current_user_attrs().flatten() {
+                    match crate::skills::personal::create_from_turn(
+                        &config,
+                        &attrs.user_id,
+                        agent_alias,
+                        &msg,
+                        &tool_calls,
+                    ) {
+                        Ok(Some(slug)) => {
+                            ::zeroclaw_log::record!(
+                                INFO,
+                                ::zeroclaw_log::Event::new(
+                                    module_path!(),
+                                    ::zeroclaw_log::Action::Register
+                                )
+                                .with_category(::zeroclaw_log::EventCategory::Agent)
+                                .with_attrs(::serde_json::json!({"slug": slug})),
+                                "Auto-created personal skill from execution"
+                            );
+                        }
+                        Ok(None) => {
+                            ::zeroclaw_log::record!(
+                                DEBUG,
+                                ::zeroclaw_log::Event::new(
+                                    module_path!(),
+                                    ::zeroclaw_log::Action::Skip
+                                )
+                                .with_category(::zeroclaw_log::EventCategory::Agent),
+                                "Personal skill creation skipped"
+                            );
+                        }
+                        Err(e) => ::zeroclaw_log::record!(
+                            WARN,
+                            ::zeroclaw_log::Event::new(
+                                module_path!(),
+                                ::zeroclaw_log::Action::Fail
+                            )
+                            .with_category(::zeroclaw_log::EventCategory::Agent)
+                            .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
+                            "Personal skill creation failed"
+                        ),
+                    }
+                } else if tool_calls.len() >= 2 {
                     let creator = crate::skills::creator::SkillCreator::new(
                         config.data_dir.clone(),
                         config.skills.skill_creation.clone(),

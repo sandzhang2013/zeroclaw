@@ -3991,6 +3991,49 @@ impl Agent {
         )
     }
 
+    /// A logged-in multi-step turn can leave a personal skill. Failure here
+    /// does not fail the turn the user already finished.
+    fn distill_personal_skill(&self, task: &str) {
+        let Some(config) = self.full_config() else {
+            return;
+        };
+        if !config.skills.skill_creation.enabled {
+            return;
+        }
+        let Some(Some(attrs)) = zeroclaw_api::current_user_attrs() else {
+            return;
+        };
+        let records = crate::skills::creator::tool_records_from_conversation(self.history());
+        match crate::skills::personal::create_from_turn(
+            config,
+            &attrs.user_id,
+            &self.agent_alias,
+            task,
+            &records,
+        ) {
+            Ok(Some(id)) => {
+                ::zeroclaw_log::record!(
+                    INFO,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Register)
+                        .with_category(::zeroclaw_log::EventCategory::Agent)
+                        .with_attrs(::serde_json::json!({"skill": id})),
+                    "Auto-created personal skill from execution"
+                );
+            }
+            Ok(None) => {}
+            Err(error) => {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                        .with_category(::zeroclaw_log::EventCategory::Agent)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                        .with_attrs(::serde_json::json!({"error": format!("{error}")})),
+                    "Personal skill creation failed"
+                );
+            }
+        }
+    }
+
     pub async fn turn(&mut self, user_message: &str) -> Result<String> {
         if user_message.trim().is_empty() {
             ::zeroclaw_log::record!(
@@ -4423,6 +4466,7 @@ impl Agent {
         }
 
         let _ = self.trim_history(Some(&turn_id));
+        self.distill_personal_skill(user_message);
 
         Ok(response)
     }
@@ -5123,6 +5167,7 @@ impl Agent {
                     }
 
                     self.observer.record_event(&ObserverEvent::TurnComplete);
+                    self.distill_personal_skill(user_message);
                     let committed_response =
                         self.append_receipts_block(committed_response, receipt_scope.as_ref());
                     let committed_response = Self::append_model_fallback_notice(

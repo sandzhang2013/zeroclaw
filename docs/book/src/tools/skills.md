@@ -293,7 +293,7 @@ max_skills = 500            # LRU cap: oldest auto-generated skill is evicted pa
 similarity_threshold = 0.85 # embedding-dedup cutoff; near-duplicate tasks are skipped
 ```
 
-By default each created skill is a deterministic `SKILL.toml` generated directly from the tool-call trace; no model call is involved.
+When the turn belongs to a logged-in user, the skill is that user's personal skill: `users/<user>/agents/<agent>/workspace/skills/psNNNN/SKILL.md`. It is not written to the plaza or the skill center. The `ps` number comes from the same counter as My Skills. Without a logged-in user, the skill stays a deterministic `SKILL.toml` under the data directory, generated directly from the tool-call trace. Neither path makes a model call unless reflection is enabled for a turn that has no logged-in user.
 
 ### Reflection (`SKILL.md` synthesis)
 

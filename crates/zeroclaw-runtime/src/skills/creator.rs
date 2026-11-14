@@ -29,6 +29,32 @@ pub struct ToolCallRecord {
     pub args: serde_json::Value,
 }
 
+/// Tool calls the agent actually ran, in order. Chat text is ignored.
+pub fn tool_records_from_conversation(
+    history: &[zeroclaw_providers::ConversationMessage],
+) -> Vec<ToolCallRecord> {
+    let mut records = Vec::new();
+    for message in history {
+        let zeroclaw_providers::ConversationMessage::AssistantToolCalls { tool_calls, .. } =
+            message
+        else {
+            continue;
+        };
+        for call in tool_calls {
+            if call.name.is_empty() {
+                continue;
+            }
+            let args = serde_json::from_str(&call.arguments)
+                .unwrap_or_else(|_| serde_json::Value::String(call.arguments.clone()));
+            records.push(ToolCallRecord {
+                name: call.name.clone(),
+                args,
+            });
+        }
+    }
+    records
+}
+
 /// Creates reusable skill definitions from successful multi-step executions.
 pub struct SkillCreator {
     workspace_dir: PathBuf,
@@ -525,7 +551,7 @@ fn extract_skill_description(manifest: &std::path::Path, content: &str) -> Optio
     }
 }
 
-fn scrub_secrets(s: &str) -> String {
+pub(crate) fn scrub_secrets(s: &str) -> String {
     match crate::security::LeakDetector::new().scan(s) {
         crate::security::LeakResult::Clean => s.to_string(),
         crate::security::LeakResult::Detected { redacted, .. } => redacted,
@@ -534,7 +560,7 @@ fn scrub_secrets(s: &str) -> String {
 
 /// Truncate `s` to at most `max` characters (not bytes), appending a marker
 /// when content was dropped. Char-boundary safe for multi-byte UTF-8.
-fn truncate_chars(s: &str, max: usize) -> String {
+pub(crate) fn truncate_chars(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         return s.to_string();
     }

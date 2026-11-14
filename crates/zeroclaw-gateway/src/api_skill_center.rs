@@ -153,6 +153,16 @@ fn allocate_skill_id(
     config: &zeroclaw_config::schema::Config,
     scope: SkillIdScope,
 ) -> Result<String, Response> {
+    if matches!(scope, SkillIdScope::Personal) {
+        return zeroclaw_runtime::skills::personal::allocate_personal_skill_id(config).map_err(
+            |err| {
+                json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("failed to allocate skill id: {err}"),
+                )
+            },
+        );
+    }
     let path = skill_seq_path(config, scope);
     if let Some(parent) = path.parent() {
         if let Err(err) = std::fs::create_dir_all(parent) {
