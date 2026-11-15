@@ -296,8 +296,17 @@ mod tests {
             let turns = bundles
                 .format("zc-chat-history-trimmed-turns", &args)
                 .unwrap();
-            assert!(turns.contains("older turns dropped"), "{locale}: {turns}");
-            assert!(turns.contains("turn kept"), "{locale}: {turns}");
+            if locale == "zh-CN" {
+                assert!(turns.contains("去掉较早的 2 轮"), "{locale}: {turns}");
+                assert!(turns.contains("保留 1 轮"), "{locale}: {turns}");
+                assert!(
+                    !turns.contains("条消息"),
+                    "{locale} must use the turn plural, not the legacy message units: {turns}"
+                );
+            } else {
+                assert!(turns.contains("older turns dropped"), "{locale}: {turns}");
+                assert!(turns.contains("turn kept"), "{locale}: {turns}");
+            }
             let old_key = "zc-chat-history-trimmed";
             assert_eq!(
                 bundles.format(old_key, &args),

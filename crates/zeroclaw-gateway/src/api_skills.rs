@@ -2702,7 +2702,7 @@ mod tests {
         let nine = vec![b'a'; 9 * 1024 * 1024];
         let payload = serde_json::json!({
             "agent": "web",
-            "name": "big-skill",
+            "name": "ps0001",
             "files": [
                 {"path": "SKILL.md", "data_base64": base64::engine::general_purpose::STANDARD.encode(skill_md)},
                 {"path": "data.bin", "data_base64": base64::engine::general_purpose::STANDARD.encode(&nine)},
@@ -2747,7 +2747,7 @@ mod tests {
             .read()
             .user_workspace_dir("alice", "web")
             .join("skills")
-            .join("big-skill")
+            .join("ps0001")
             .join("data.bin");
         assert_eq!(std::fs::metadata(&saved).unwrap().len(), nine.len() as u64);
 

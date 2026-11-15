@@ -6038,7 +6038,13 @@ mod tests {
         assert!(!woke);
         assert!(started.elapsed() >= Duration::from_millis(40));
         let polls = polls.borrow();
-        assert!(polls.len() >= 4);
+        // A loaded runner can overrun a 10ms sleep, so the idle wait is
+        // "more than one capped slice", not exactly timeout/slice.
+        assert!(
+            polls.len() >= 2,
+            "idle wait must keep slicing, got {polls:?}"
+        );
+        assert_eq!(polls[0], Duration::from_millis(10));
         assert!(
             polls
                 .iter()
