@@ -1383,3 +1383,183 @@ tool-git-operations-error-docker-runtime-write-unsupported = Git 写入命令在
 
 turn-context-window-exceeded-error = 本次请求超过所选模型的上下文容量。请减少请求内容或启用的工具，或选择上下文容量更大的模型。
 cron-agent-job-failed = 定时任务未能完成，请重试或联系管理员查看日志。
+
+cli-skills-install-well-known-requires-skill = --well-known 必须同时给出 --skill <名称>；不会把索引里公布的技能全部安装
+cli-skills-install-resolving-well-known = {"  "}正在从 {$source} 的已知技能索引解析所选技能「{$skill}」…
+cli-skills-install-well-known-failed = 未能从 {$source} 安装已知技能「{$skill}」
+cli-oidc-browser-start-failed = 无法开始登录
+channel-line-bind-persist-failed = 配对结果没能保存。请向机器人管理员索取新的配对码后再试。
+channel-telegram-unauthorized-bind = 🔐 这个机器人需要操作者批准。
+channel-telegram-unauthorized-allowlist = 🔐 这个机器人需要操作者批准。
+cli-config-lifecycle-dir-not-directory =
+    配置生命周期路径 {$path} 不是目录。ZeroClaw 会把它建成目录，说明它已被别的东西替换。请先确认它是什么，删掉后再试：
+    {$command}
+cli-config-lifecycle-dir-root-owner =
+    配置生命周期目录 {$path} 属于 root，通常是因为曾经用 sudo 运行过 ZeroClaw。请以 {$user} 运行，不要加 sudo。那一次运行写出的其他文件可能也属于 root。请先查看目录内容，交还所有权后再试：
+    {$command}
+    如果 chown 没有效果，说明数据目录所在的文件系统不保留 Unix 权限；请把 data_dir 指到本地文件系统。
+cli-config-lifecycle-dir-running-as-root = 配置生命周期目录 {$path} 属于 {$owner}，但 ZeroClaw 正在以 root 运行。请以 {$owner} 运行，不要加 sudo。
+cli-config-lifecycle-dir-foreign-owner =
+    配置生命周期目录 {$path} 属于 {$owner}，但 ZeroClaw 正在以 {$user} 运行。如果它应当属于 {$user}，请先查看内容，因为 chown -R 也会把别人硬链接进来的对象一起交出去（ZeroClaw 的 .lifecycle 里只有 config-lifecycle.lock，链接数为 1）。然后再接管并重试：
+    {$command}
+    否则请以 {$owner} 运行 ZeroClaw。如果 chown 没有效果，说明数据目录所在的文件系统不保留 Unix 权限；请把 data_dir 指到本地文件系统。
+cli-config-lifecycle-dir-writable =
+    配置生命周期目录 {$path} 对其用户组或其他用户可写（模式 {$mode}），他们可以替换里面的配置锁。ZeroClaw 新建时只允许所有者访问，也不会改已有目录的权限。请先查看内容，收紧权限后再试：
+    {$command}
+    如果 chmod 没有效果，说明数据目录所在的文件系统不保留 Unix 权限；请把 data_dir 指到本地文件系统。
+cli-config-data-dir-root-owner =
+    数据目录 {$path} 属于 root，ZeroClaw 无法在那里创建配置锁目录。如果是早先用 sudo 运行时建出来的，请交还所有权后再试：
+    {$command}
+    如果它有意属于 root，请以它的所有者运行 ZeroClaw，或把 data_dir 指到别处。
+cli-config-data-dir-running-as-root = 数据目录 {$path} 属于 {$owner}，但 ZeroClaw 正在以 root 运行。请以 {$owner} 运行，不要加 sudo。
+cli-config-data-dir-foreign-owner =
+    数据目录 {$path} 属于 {$owner}，因此以 {$user} 运行的 ZeroClaw 无法在那里创建配置锁目录。请以 {$owner} 运行，或把 data_dir 指到你自己的目录。如果这个目录确实是你的，请先查看内容，因为 chown -R 也会把别人硬链接进来的对象一起交出去，然后再接管并重试：
+    {$command}
+    如果 chown 没有效果，说明数据目录所在的文件系统不保留 Unix 权限；请把 data_dir 指到本地文件系统。
+cli-standalone-daemon-owned = 另一个 ZeroClaw 进程正占用 {$path} 的配置状态，不能运行 `zeroclaw {$command}`。请先停下占用进程，或改用它提供的守护进程接口，然后再试。没有开始任何智能体工作。
+cli-sop-logs-none = 没有找到 SOP 运行 {$run_id} 的持久日志。
+cli-sop-logs-header = SOP 运行 {$run_id} 的日志：
+cli-sop-logs-row = {$timestamp} {$severity} {$category}.{$action} {$message}
+cli-sop-logs-disabled = 尚未启用日志持久化。
+cli-sop-logs-incomplete = 有些保留下来的日志片段读不出来；这段历史可能不完整。
+cli-sop-run-copy-stale = 运行 {$run_id} 自本引擎上次读取后已在存储中变化（修订 {$seen_revision} -> {$stored_revision}，当前状态 {$status}，步骤 {$step}）；本引擎改用存储中的记录，没有应用这次转移
+cli-sop-run-copy-revision-unknown = 未知
+cli-sop-run-copy-changed = 运行 {$run_id} 自本引擎上次读取后已在存储中变化
+cli-sop-run-copy-reload-failed = 运行 {$run_id} 自本引擎上次读取后已在存储中变化，重新加载失败：{$error}
+cli-sop-renamed = 已将 SOP {$from} 重命名为 {$to}
+cli-sop-load-failed = ❌ {$name} — 加载失败：{$error}
+cli-sop-load-failed-summary = {$count} 个 SOP 加载失败。
+cli-quickstart-partial-personality-failure = 智能体 {$alias} 的配置已保存，但安装其人设文件失败。请修好报告中的路径或权限，再在这个已有智能体的工作区里创建或编辑相应的人设文件。不要对这个已保存的别名重新运行快速入门。
+cli-quickstart-error-publish-config = 发布快速入门配置失败：{$err}
+cli-quickstart-error-auth-validation = 授权配置在写入前被拒绝：{$err}
+cli-security-status-sandbox-description-firejail-args-rejected = 已选择 Firejail，但 firejail_args 被拒绝；命令已被阻止（{$reason}）
+cli-security-firejail-args-error-empty = firejail_args 被拒绝：有一条是空的
+cli-security-firejail-args-error-whitespace = firejail_args 被拒绝：{$arg} 的开头或结尾有空白
+cli-security-firejail-args-error-not-option = firejail_args 被拒绝：{$arg} 不是 Firejail 选项；每个选项写成一条 `--option` 或 `--option=value`
+cli-security-firejail-args-error-conflict = firejail_args 被拒绝：{$name} 与 ZeroClaw 的 Firejail 包装自己设置的选项冲突
+cli-status-web-ui-not-in-build = 🌐 Web 界面：        此构建未包含（仅命令行）
+cli-no-dashboard-in-build = 这个 ZeroClaw 构建没有仪表盘和网页网关（仅命令行）。若要使用，请安装标准构建：curl -fsSL https://raw.githubusercontent.com/zeroclaw-labs/zeroclaw/master/install.sh | sh
+cli-status-pricing-unavailable = {"  "}⚠ 有 {$count} 个模型无法计价（{$tokens} 个 token 未计费）：{$models}。已记录的花费偏低，这些模型的每日/每月上限无法执行。请在当前提供商配置里补上价格，或提供一条目录项。
+cli-config-patch-notice-flush-failed = 配置补丁已保存，但它的提示没能刷出
+cli-plugin-catalog-heading = 插件：
+cli-plugin-catalog-empty = 没有已安装或缓存注册表中的插件。
+cli-plugin-catalog-installed = {"  "}● {$name} v{$version} — 已安装 — {$description}
+cli-plugin-catalog-installed-listed = {"  "}● {$name} v{$version} — 已安装，且在列表中 — {$description}
+cli-plugin-catalog-installed-other-version = {"  "}● {$name} v{$installed_version} — 已安装；注册表为 v{$available_version} — {$description}
+cli-plugin-catalog-available = {"  "}○ {$name} v{$version} — 缓存注册表中可用 — {$description}
+cli-plugin-catalog-cache-failed = 警告：无法读取缓存的插件注册表：{$error}
+cli-config-section-degraded-executable = 警告：{$path} 中的配置段 `{$section}` 格式损坏，本次运行已重置为默认值。该段里的值没有生效。请用正在运行的可执行文件 `{$executable}` 执行 `config migrate` 查看解析错误，然后修复文件。
+model-switch-route-selector-not-allowed = 模型标识不能是路由选择器；请提供提供商本地的模型标识。
+cli-update-cli-only-needs-standard =
+    这是仅命令行构建，而发布物只有标准构建。标准构建会加上仪表盘和网页网关，它们随守护进程启动，默认在 {$address}，并要求配对。
+    要换成标准构建，请运行：zeroclaw update --standard
+    要继续只用命令行，请重新运行安装脚本：install.sh --cli-only
+cli-update-switching-to-standard = 正在把这个仅命令行构建换成标准构建，标准构建会加上仪表盘和网页网关。
+turn-single-tool-rounds-prompt = 每次回复最多调用一个工具。等它返回结果后，再决定下一次调用。
+turn-single-tool-rounds-unsupported = [当前提供商路由不支持单工具轮次。将继续使用批量工具调用。]
+turn-single-tool-rounds-violation = 在单工具策略下，提供商返回了多次工具调用。这次回复里的工具都没有执行。
+turn-provider-images-quarantined =
+    { $count_plural ->
+        [one] 有 1 张此前未在此提供商成功发送的图片，在提供商拒绝本次请求后被略去。
+       *[other] 有 { $count } 张此前未在此提供商成功发送的图片，在提供商拒绝本次请求后被略去。
+    } 把被略去的图片放进一条新消息即可再试。
+turn-execution-tree-budget-reached = *本轮已停止：执行树的迭代预算已用完。*
+cli-agent-error-protocol-guard-withheld = 我扣下了这条回复里形如工具协议的部分，重试后得到的仍是同一段文字。
+channel-runtime-safeguard-footer-server =
+    🛡️ 安全防护标记了这次请求——Anthropic 仍用 **{ $served }** 给出了回复（请求的是 `{ $requested }`）。
+channel-runtime-safeguard-footer-client =
+    🛡️ 安全防护标记了这次请求——已改用 **{ $served }**（请求的是 `{ $requested }`）。
+channel-runtime-safeguard-footer-client-server =
+    🛡️ 安全防护标记了这次请求——经回退链改用 **{ $served }**（请求的是 `{ $requested }`）。
+turn-context-hook-mutation-unsafe-error = 调用大模型前的钩子改动了已有消息，无法与必须做的上下文预算裁剪安全地合到一起。请让钩子只追加消息，或缩短当前这一轮。
+cli-agent-export-workspace-root-escape = 智能体工作区 {$path} 无法经由安装目录下 agents 树中的真实目录到达：{$at} 是符号链接，或已经离开那棵树，因此副本无法证明自己会带上什么
+cli-agent-export-skill-root-escape = 技能包 `{$alias}`（{$path}）无法经由安装目录下共享树中的真实目录到达：{$at} 是符号链接，或已经离开那棵树，因此副本无法证明自己会带上什么
+cli-agent-export-path-unresolvable = {$path} 在一个尚不存在的目录里经过了 `..`，导出写入之前无法核对它指向什么；请写成不含 `..` 的路径
+cli-agent-export-source-not-a-directory = {$path} 存在，但不是目录；导出拒绝发布一个悄悄缺少所写来源的包
+cli-agent-export-workspace-path-unresolvable = 配置的工作区路径 {$path} 不以普通目录名结尾，导出无法把要复制的内容绑到已核对的对象上；请把 `workspace.path` 设成解析后的目录再导出
+cli-agent-export-source-root-replaced = 打开 {$path} 时它被替换了；副本要么带着当时检查过的那棵树，要么什么都不带，请重新导出
+cli-agent-export-workspace-root-symlink = 智能体工作区 {$path} 是符号链接；包会把链接指向的内容当成智能体自己的树带走，请把 `workspace.path` 设成真实目录再导出
+cli-agent-export-skill-root-symlink = 技能包 `{$alias}` 解析到符号链接 {$path}；包目录必须是安装目录共享树里的真实目录
+cli-agent-export-dest-not-a-dir = 目标 {$path} 已存在，而且不是目录
+cli-agent-export-dest-symlink = 目标 {$path} 是符号链接；发布会替换它指向的对象，而不是你写出的这条路径，请直接写目录本身
+cli-agent-export-dest-appeared = 导出开始时目标 {$path} 还不存在，现在有了；从未允许替换它，因此什么都没写
+cli-agent-export-dest-changed = 目标 {$path} 已不是这次导出在复制前核对过的那个目录；没有替换任何内容，请先看清那里是什么再导出
+cli-agent-export-dest-is-source = 目标 {$path} 现在是这次导出读过的某棵树；发布会替换刚复制的来源，因此什么都没写
+cli-agent-export-dest-not-empty = 目标 {$path} 不是空的——加上 --force 才会替换其中的内容
+cli-agent-export-dest-no-parent = 目标 {$path} 没有父目录，无法在旁边暂存这个包
+cli-agent-export-dest-contains-workspace = 目标 {$path} 包含智能体工作区 {$workspace}——导出到这里会替换工作区本身
+cli-agent-export-dest-inside-workspace = 目标 {$path} 位于智能体工作区 {$workspace} 之内——请选一个工作区外面的路径
+cli-agent-export-dest-contains-skills = 目标 {$path} 包含技能包 `{$alias}`（{$source}）——导出到这里会替换包里要带走的技能
+cli-agent-export-dest-inside-skills = 目标 {$path} 位于技能包 `{$alias}`（{$source}）之内——请选一个包外面的路径
+cli-agent-export-restore-failed = 未能把包发布到 {$path}（{$error}），原来的包也没能移回去——它现在在 {$retired}
+cli-agent-export-written = 已将智能体 `{$alias}` 导出到 {$path}（{$files} 个工作区文件，{$kib} KiB）
+cli-agent-export-skills-carried = {"  "}从 {$bundles} 个技能包带走了 {$files} 个技能文件
+cli-agent-export-replaced-skipped = {"  "}导出过程中有 {$count} 项被替换并已跳过——包里带着当时检查过的对象
+cli-agent-export-hard-links-skipped = {"  "}跳过了 {$count} 个硬链接文件——同一文件在这台主机上的另一个名字，不属于这个工作区要带走的内容
+cli-agent-export-others-skipped = {"  "}跳过了 {$count} 个特殊文件——套接字、FIFO 和设备是主机状态，不是包能带走的内容
+cli-agent-export-symlinks-skipped = {"  "}跳过了 {$count} 个符号链接——包不会顺着链接往下走
+cli-agent-export-risk-header = ⚠️  {$count} 项能力授权，导入的操作者必须接受：
+cli-agent-export-risk-entry = {"  "}[{$kind}] {$path} — {$detail}
+cli-agent-export-secrets-header = 🔑 已抹去 {$count} 项凭据，导入时必须另行提供：
+cli-agent-export-secrets-entry = {"  "}{$path}
+cli-agent-export-dropped-header = ℹ️  {$count} 项无法带走，已留在原地：
+cli-agent-export-dropped-entry = {"  "}{$path}（{$reason}）— {$detail}
+cli-agent-export-scrub-scope = ⚠️  抹去的只是模式标成机密的字段。这不是凭据检测：其他配置值会按原文带走，因此 MCP 服务 url 里的令牌，或它的 command、args 里的凭据，会被带走，并在清单的风险标记里再写一次。
+cli-agent-export-content-not-scrubbed = ⚠️  {$count} 个带走的文件是按原样复制的。抹去只覆盖 config.toml：工作区和技能内容不会扫描机密，因此 .env、笔记里的令牌或 git 远程地址里的凭据都会进到导出结果里。
+cli-agent-export-review-hint = 分享之前，请先看 config.toml、zeroclaw-agent.toml，以及包里带走的文件。
+cli-relay-claim-ok = 已声明为中继 {$relay} 上的节点 {$node_id}。已把 [relay] 写入配置；启动（或重启）守护进程后才会向中继登记。
+cli-relay-claim-wss-disabled = 注意：[wss] 处于关闭，中继在它开启之前会拒绝登记。上面的声明已保存并且仍然有效——开启 WSS 监听（见安全传输指南）后，下次启动就会生效。
+cli-relay-dashboard-no-gateway = [relay.dashboard] 已开启，但这个构建没有网关来提供仪表盘。请使用带 `gateway` 特性的构建，或关闭 [relay.dashboard]。
+cli-relay-dashboard-bad-origin = [relay.dashboard] 的域名和端口必须组成仪表盘的 HTTPS 源
+cli-tunnel-tcp-service-published = {"  "}🔒 隧道 {$service}（TLS 透传）：{$endpoint}
+cli-agent-error-channel-unavailable = 这个智能体没有可供命令行会话使用的频道。
+tool-delegate-error-target-tools-initialization = 无法为智能体「{$agent_name}」安全地准备工具。
+cli-agent-error-provider-refusal = 模型的安全系统拒绝了这次请求。请换一种说法，或在提供商上配置 fallback_models 以自动切换模型。
+cli-doctor-security-audit-disabled-drops-certificate-record = security.audit.enabled=false：证书的签发和续期不会留下审计记录。命令执行无论哪种设置都不会记入审计，因为没有任何生产路径记录工具命令。若要保留证书踪迹，请保持这一段开启；若要记录实际运行了什么，请使用观察 ZeroClaw 进程的外部监督或日志包装，或使用操作系统级的进程记账。
+sop-rpc-principal-ceiling-required = 在无头步骤能够保留调用方的主体限制之前，执行流程需要管理员。
+channel-telegram-model-picker-provider-title =
+    当前：{ $provider } / { $model }
+    选择提供商：
+channel-telegram-model-picker-model-title = 从 { $provider } 选择模型：
+channel-telegram-model-picker-previous = ◀ 上一页
+channel-telegram-model-picker-next = 下一页 ▶
+channel-telegram-model-picker-back = ◀ 返回
+channel-telegram-model-picker-cancel = 取消
+channel-telegram-model-picker-cancelled = 已取消
+channel-telegram-model-picker-queued = 正在切换模型…
+channel-telegram-model-picker-rejected = 这个模型选择器已经失效。
+channel-telegram-model-picker-unavailable = 暂时无法切换模型。请再试一次。
+peer-delivery-control-plane-unavailable = 进程内对等投递需要可用的持久任务存储：{$error}
+peer-delivery-registration-failed = 对等投递被拒绝：{$error}
+peer-delivery-accepted = 已接受，将在进程内投递给对等智能体「{$recipient}」（task_id={$task_id}）
+rpc-auth-required-token = 需要认证：请在 initialize 中提供 auth_token，或从已映射的本地 uid 连接
+rpc-auth-credential-rejected = 凭据被拒绝
+rpc-auth-credential-expired = 凭据已过期：请用新令牌重新 initialize
+rpc-auth-assurance-required = 未达到认证保证（需要 MFA/ACR）
+rpc-auth-unknown-provider = 未知的 auth_provider 选择
+rpc-auth-not-entitled = 已通过认证，但没有任何权限档授予这个身份
+rpc-auth-alias-not-entitled = 该主体无权使用所请求的智能体
+rpc-auth-misconfigured = 这个守护进程的认证配置有误（失败即关闭）
+rpc-auth-local-roster-required = 已配置本地用户名册：请从已映射的 uid 连接，或在 initialize 中提供 auth_token
+rpc-auth-remote-token-required = 远程连接必须在 initialize 中提供 auth_token
+rpc-auth-inproc-token-required = 进程内连接必须在 initialize 中提供 auth_token
+rpc-auth-first-call-initialize = 第一次调用必须是 initialize
+rpc-auth-revalidation-due = 凭据需要重新验证：请重新 initialize
+rpc-auth-pairing-revoked = 配对令牌已撤销：请重新配对并重新 initialize
+delegate-owned-background-unavailable = 在任务结果能够执行主体所有权之前，主体所有的会话不能使用后台委托和任务管理。请改用同步委托。
+rpc-config-set-many-empty = config/set-many 的 `sets` 里至少要有一项
+rpc-config-set-many-limit = config/set-many 的 `sets` 最多接受 { $limit } 项；实际收到 { $count } 项
+rpc-config-set-many-entry-rejected = config/set-many 的第 { $index } 项（`{ $prop }`）被拒绝；什么都没有保存：{ $reason }
+rpc-cron-agent-principal-required = 智能体定时任务不携带主体限制；只有管理员可以修改或触发它们。
+cron-rpc-requested-agent-forbidden = 该主体无权使用所请求的智能体。
+skill-http-request-timeout = HTTP 请求超时
+sop-store-busy = SOP 存储正忙或不可用；请重试这次请求。
+sop-store-nonblocking-unavailable = SOP 存储无法立即提供访问；这次请求已被拒绝。
+sop-rpc-definition-unavailable = 流程定义已经不可用。
+cli-sop-run-unavailable = 此会话中没有可用的 SOP 运行。
+cli-sop-step-owner-principal-mismatch = SOP 步骤被拒绝：这次运行属于另一个主体，与本轮能力所代表的主体不同。
+cli-sop-step-owner-memory-unavailable = SOP 步骤失败：这次运行的所有者记忆不可用（{ $error }）。
+turn-repeated-success-advisory = 同一次工具调用反复返回相同的成功结果。请再想一想，另一次调用是否还有帮助。需要轮询时可以继续。
+turn-repeated-failure-recovery = 同一次工具调用反复以相同结果失败。请换一种做法，或说明卡在哪里。本轮在停止前还可以做一次相同的重试。
+turn-repeated-failure-exhausted = 补救重试仍是同一个结果，本轮已停止。已完成的工具结果都保留着。你可以在新的一轮里再试。
+turn-repeated-failure-retry-skipped = 这一批补救调用里，多出来的相同调用已跳过。补救重试只有一次。

@@ -959,6 +959,20 @@ pub async fn handle_save_personal_skill(
     };
     let config = state.config.read().clone();
     let dir = personal_skills_dir(&config, &attrs.user_id, &agent).join(&name);
+    // A new personal skill takes its id from POST /api/skill-ids?scope=personal.
+    // A title slug such as `monitoring-data-preflight` is not an id. Rewriting
+    // a directory that already has SKILL.md keeps that directory's name.
+    if !dir.join("SKILL.md").is_file()
+        && !zeroclaw_runtime::skills::personal::is_allocated_personal_skill_id(&name)
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "skill id must be allocated with POST /api/skill-ids?scope=personal"
+            })),
+        )
+            .into_response();
+    }
     let reimport = !body.files.is_empty()
         && dir.join("SKILL.md").is_file()
         && !crate::api_skill_center::is_plaza_copy(&dir);
@@ -1955,6 +1969,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn save_personal_skill_rejects_a_title_slug() {
+        use crate::api::test_state;
+        use axum::http::HeaderValue;
+        use zeroclaw_config::schema::AliasedAgentConfig;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut config = zeroclaw_config::schema::Config {
+            data_dir: tmp.path().join("data"),
+            config_path: tmp.path().join("config.toml"),
+            ..zeroclaw_config::schema::Config::default()
+        };
+        config.gateway.trusted_proxy = true;
+        config.gateway.trusted_proxy_secret = Some("s3cret".into());
+        config
+            .agents
+            .insert("web".into(), AliasedAgentConfig::default());
+        let state = test_state(config);
+        let mut headers = HeaderMap::new();
+        headers.insert("x-auth-secret", HeaderValue::from_static("s3cret"));
+        headers.insert("x-user-id", HeaderValue::from_static("alice"));
+        headers.insert(
+            "x-user-role",
+            HeaderValue::from_bytes("普通用户".as_bytes()).unwrap(),
+        );
+        let response = handle_save_personal_skill(
+            State(state),
+            headers,
+            Json(PersonalSkillBody {
+                agent: "web".into(),
+                name: "monitoring-data-preflight".into(),
+                frontmatter: SkillFrontmatter {
+                    name: "监测数据取数前置核查".into(),
+                    description: "先证明能取到数".into(),
+                    ..Default::default()
+                },
+                body: "# 核查\n".into(),
+                files: Vec::new(),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
     async fn save_personal_skill_writes_caller_workspace() {
         use crate::api::test_state;
         use axum::http::HeaderValue;
@@ -1986,9 +2044,9 @@ mod tests {
             headers,
             Json(PersonalSkillBody {
                 agent: "web".into(),
-                name: "flu-weekly".into(),
+                name: "ps0001".into(),
                 frontmatter: SkillFrontmatter {
-                    name: "flu-weekly".into(),
+                    name: "ps0001".into(),
                     description: "weekly flu".into(),
                     ..Default::default()
                 },
@@ -2011,9 +2069,9 @@ mod tests {
             headers.clone(),
             Json(PersonalSkillBody {
                 agent: "web".into(),
-                name: "flu-weekly".into(),
+                name: "ps0001".into(),
                 frontmatter: SkillFrontmatter {
-                    name: "flu-weekly".into(),
+                    name: "ps0001".into(),
                     description: "weekly flu".into(),
                     ..Default::default()
                 },
@@ -2028,7 +2086,7 @@ mod tests {
             .read()
             .user_workspace_dir("alice", "web")
             .join("skills")
-            .join("flu-weekly")
+            .join("ps0001")
             .join("SKILL.md");
         assert!(expected.exists(), "{}", expected.display());
         let org = state
@@ -2036,7 +2094,7 @@ mod tests {
             .read()
             .agent_workspace_dir("web")
             .join("skills");
-        assert!(!org.join("flu-weekly").join("SKILL.md").exists());
+        assert!(!org.join("ps0001").join("SKILL.md").exists());
 
         let listed = handle_list_personal_skills(
             State(state.clone()),
@@ -2052,13 +2110,13 @@ mod tests {
             .unwrap();
         let listed_json: serde_json::Value = serde_json::from_slice(&listed_body).unwrap();
         assert_eq!(listed_json["skills"].as_array().unwrap().len(), 1);
-        assert_eq!(listed_json["skills"][0]["name"], "flu-weekly");
+        assert_eq!(listed_json["skills"][0]["name"], "ps0001");
         assert_eq!(listed_json["skills"][0]["enabled"], true);
 
         let disabled = handle_set_personal_skill_enabled(
             State(state.clone()),
             headers.clone(),
-            Path("flu-weekly".into()),
+            Path("ps0001".into()),
             Json(PersonalSkillEnabledBody {
                 agent: "web".into(),
                 enabled: false,
@@ -2100,7 +2158,7 @@ mod tests {
         let read = handle_read_personal_skill(
             State(state.clone()),
             headers.clone(),
-            Path("flu-weekly".into()),
+            Path("ps0001".into()),
             Query(PersonalSkillQuery {
                 agent: "web".into(),
             }),
@@ -2111,7 +2169,7 @@ mod tests {
         let deleted = handle_delete_personal_skill(
             State(state.clone()),
             headers,
-            Path("flu-weekly".into()),
+            Path("ps0001".into()),
             Query(PersonalSkillQuery {
                 agent: "web".into(),
             }),
@@ -2154,9 +2212,9 @@ mod tests {
             ops.clone(),
             Json(PersonalSkillBody {
                 agent: "web".into(),
-                name: "syndrome-ili-alert".into(),
+                name: "ps0004".into(),
                 frontmatter: SkillFrontmatter {
-                    name: "syndrome-ili-alert".into(),
+                    name: "ps0004".into(),
                     description: "ILI alert".into(),
                     ..Default::default()
                 },
@@ -2180,7 +2238,7 @@ mod tests {
             .filter_map(|s| s["name"].as_str())
             .collect();
         assert!(
-            names.contains(&"syndrome-ili-alert"),
+            names.contains(&"ps0004"),
             "personal plaza install must show on agent skills: {json}"
         );
 
@@ -2202,7 +2260,7 @@ mod tests {
             .iter()
             .filter_map(|s| s["name"].as_str())
             .collect();
-        assert!(!bob_names.contains(&"syndrome-ili-alert"));
+        assert!(!bob_names.contains(&"ps0004"));
 
         let pairing = handle_agent_skills(State(state), HeaderMap::new(), Path("web".into())).await;
         let pairing_body = axum::body::to_bytes(pairing.into_body(), usize::MAX)
@@ -2215,7 +2273,7 @@ mod tests {
             .iter()
             .filter_map(|s| s["name"].as_str())
             .collect();
-        assert!(!pairing_names.contains(&"syndrome-ili-alert"));
+        assert!(!pairing_names.contains(&"ps0004"));
     }
 
     #[tokio::test]
@@ -2535,7 +2593,7 @@ mod tests {
             );
             headers
         };
-        let skill_md = "---\nname: epi-survey-report\ndescription: 生成流调报告。\n---\n\n# 正文\n";
+        let skill_md = "---\nname: ps0003\ndescription: 生成流调报告。\n---\n\n# 正文\n";
         let script = "print(1)\n";
         let encode = |text: &str| base64::engine::general_purpose::STANDARD.encode(text);
 
@@ -2544,7 +2602,7 @@ mod tests {
             headers(),
             Json(PersonalSkillBody {
                 agent: "web".into(),
-                name: "epi-survey-report".into(),
+                name: "ps0003".into(),
                 frontmatter: SkillFrontmatter::default(),
                 body: String::new(),
                 files: vec![PersonalSkillPackageFile {
@@ -2559,7 +2617,7 @@ mod tests {
 
         let skill_dir = tmp
             .path()
-            .join("users/alice/agents/web/workspace/skills/epi-survey-report");
+            .join("users/alice/agents/web/workspace/skills/ps0003");
         std::fs::create_dir_all(&skill_dir).unwrap();
         std::fs::write(skill_dir.join(".disabled"), "").unwrap();
         std::fs::write(skill_dir.join("old.py"), "stale").unwrap();
@@ -2569,7 +2627,7 @@ mod tests {
             headers(),
             Json(PersonalSkillBody {
                 agent: "web".into(),
-                name: "epi-survey-report".into(),
+                name: "ps0003".into(),
                 frontmatter: SkillFrontmatter::default(),
                 body: String::new(),
                 files: vec![

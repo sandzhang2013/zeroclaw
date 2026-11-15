@@ -32,9 +32,11 @@ class FakeWebSocket {
 }
 
 const fakeWindow = Object.assign(new EventTarget(), {
-  location: { protocol: "https:", host: "zc.example", hostname: "zc.example", port: "", pathname: "/", search: "" },
+  location: { protocol: "https:", host: "zc.example", hostname: "zc.example", port: "", pathname: "/", search: "", href: "https://zc.example/" },
   setTimeout: (fn: () => void, ms: number) => setTimeout(fn, ms),
   clearTimeout: (id: ReturnType<typeof setTimeout>) => clearTimeout(id),
+  setInterval: (...args: Parameters<typeof setInterval>) => setInterval(...args),
+  clearInterval: (...args: Parameters<typeof clearInterval>) => clearInterval(...args),
 });
 // The chat's outside-click and Escape handlers listen on the document.
 Object.assign(globalThis, { window: fakeWindow, document: new EventTarget(), WebSocket: FakeWebSocket, React });
@@ -57,6 +59,8 @@ globalThis.fetch = async (input) => {
 };
 
 const { setOidcSession } = await import("../lib/auth.ts");
+const { setLocale } = await import("../lib/i18n.ts");
+setLocale("en");
 const { default: AgentsList } = await import("./AgentsList.tsx");
 const { default: AgentChat } = await import("./AgentChat.tsx");
 const { default: ChatWorkspace } = await import("./ChatWorkspace.tsx");

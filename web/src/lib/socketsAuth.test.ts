@@ -46,7 +46,13 @@ class FakeWebSocket {
 
 const storage = new MemoryStorage();
 const fakeWindow = Object.assign(new EventTarget(), {
-  location: { protocol: "https:", host: "zc.example", pathname: "/", search: "" },
+  location: {
+    protocol: "https:",
+    host: "zc.example",
+    pathname: "/",
+    search: "",
+    href: "https://zc.example/",
+  },
 });
 Object.assign(globalThis, {
   window: fakeWindow,

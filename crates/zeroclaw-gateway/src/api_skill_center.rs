@@ -3015,7 +3015,7 @@ mod tests {
         let alice = headers("alice", "普通用户");
         let bob = headers("bob", "普通用户");
         let admin = headers("ops", ROLE_OPS);
-        let plaza = skill_plaza_dir(state.config.read().deref()).join("sk-taken");
+        let plaza = skill_plaza_dir(state.config.read().deref()).join("ps0009");
         std::fs::create_dir_all(&plaza).unwrap();
         std::fs::write(
             plaza.join("SKILL.md"),
@@ -3046,28 +3046,28 @@ mod tests {
             }
         };
 
-        let plaza_hit = save(alice.clone(), "sk-taken").await;
+        let plaza_hit = save(alice.clone(), "ps0009").await;
         assert_eq!(plaza_hit.status(), StatusCode::CONFLICT);
-        let created = save(alice.clone(), "sk-mine").await;
+        let created = save(alice.clone(), "ps0002").await;
         assert_eq!(created.status(), StatusCode::CREATED);
-        let again = save(alice.clone(), "sk-mine").await;
+        let again = save(alice.clone(), "ps0002").await;
         assert_eq!(again.status(), StatusCode::CONFLICT);
         assert!(
             std::fs::read_to_string(
                 personal_skills_dir(state.config.read().deref(), "alice", "deepseek")
-                    .join("sk-mine")
+                    .join("ps0002")
                     .join("SKILL.md")
             )
             .unwrap()
             .contains("# 正文")
         );
-        let other = save(bob, "sk-mine").await;
+        let other = save(bob, "ps0002").await;
         assert_eq!(other.status(), StatusCode::CONFLICT);
         let center = handle_create_skill_center(
             State(state.clone()),
             admin,
             Json(SkillCenterWriteBody {
-                name: "sk-mine".into(),
+                name: "ps0002".into(),
                 title: "标题".into(),
                 description: "说明".into(),
                 body: "# 中心".into(),
@@ -3082,7 +3082,7 @@ mod tests {
             alice,
             Json(PersonalSkillBody {
                 agent: "deepseek".into(),
-                name: "sk-mine".into(),
+                name: "ps0002".into(),
                 frontmatter: SkillFrontmatter::default(),
                 body: String::new(),
                 files: vec![PersonalSkillPackageFile {

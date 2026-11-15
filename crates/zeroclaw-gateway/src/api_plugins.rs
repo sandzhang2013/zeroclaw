@@ -15,6 +15,7 @@ use axum::{
 use serde::Serialize;
 
 use super::AppState;
+use crate::trusted_proxy::{BffOpsDecision, bff_ops_decision};
 
 /// Host-admitted metadata for an installed package.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -97,20 +98,36 @@ pub struct PluginsResponse {
 /// registry state, or the plugin directory.
 pub async fn list_plugins(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if state.pairing.require_pairing() {
-        let token = headers
-            .get(header::AUTHORIZATION)
-            .and_then(|value| value.to_str().ok())
-            .and_then(|authorization| authorization.strip_prefix("Bearer "))
-            .unwrap_or_default();
-        if token.is_empty() {
-            use crate::dashboard_session::{OperatorSession, operator_session};
-            match operator_session(None, &state) {
-                OperatorSession::Admitted(_) => {}
-                OperatorSession::Denied(denied) => return denied,
-                OperatorSession::Absent => return StatusCode::UNAUTHORIZED.into_response(),
+        // Workbench ops present X-Auth-Secret and X-User-* . The same
+        // decision as the config routes: 管理员 is admitted, any other
+        // presented BFF identity is refused, and a request with no
+        // secret keeps the bearer and dashboard-session checks below.
+        let decision = {
+            let config = state.config.read();
+            bff_ops_decision(&config, &headers)
+        };
+        match decision {
+            BffOpsDecision::Admit => {}
+            BffOpsDecision::Deny(err) => return err.into_response(),
+            BffOpsDecision::Absent => {
+                let token = headers
+                    .get(header::AUTHORIZATION)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|authorization| authorization.strip_prefix("Bearer "))
+                    .unwrap_or_default();
+                if token.is_empty() {
+                    use crate::dashboard_session::{OperatorSession, operator_session};
+                    match operator_session(None, &state) {
+                        OperatorSession::Admitted(_) => {}
+                        OperatorSession::Denied(denied) => return denied,
+                        OperatorSession::Absent => {
+                            return StatusCode::UNAUTHORIZED.into_response();
+                        }
+                    }
+                } else if !state.pairing.is_authenticated(token) {
+                    return StatusCode::UNAUTHORIZED.into_response();
+                }
             }
-        } else if !state.pairing.is_authenticated(token) {
-            return StatusCode::UNAUTHORIZED.into_response();
         }
     }
 
@@ -337,6 +354,76 @@ fn serialized_wire_names<T: Serialize>(values: &[T]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use http_body_util::BodyExt as _;
+    use zeroclaw_config::pairing::PairingGuard;
+    use zeroclaw_config::schema::Config;
+
+    fn paired_bff_state() -> AppState {
+        let mut config = Config::default();
+        config.gateway.require_pairing = true;
+        config.gateway.paired_tokens = vec!["zc_paired".into()];
+        config.gateway.trusted_proxy = true;
+        config.gateway.trusted_proxy_secret = Some("s3cret".into());
+        let mut state = crate::api::tests::test_state(config.clone());
+        state.pairing = std::sync::Arc::new(PairingGuard::new(
+            true,
+            &config.gateway.paired_tokens,
+            zeroclaw_config::pairing::PairingCodePolicy::default(),
+        ));
+        state
+    }
+
+    fn identity(pairs: &[(&str, &str)]) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        for (name, value) in pairs {
+            headers.insert(
+                axum::http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                axum::http::HeaderValue::from_bytes(value.as_bytes()).unwrap(),
+            );
+        }
+        headers
+    }
+
+    async fn catalog_status(headers: HeaderMap) -> (StatusCode, serde_json::Value) {
+        let response = list_plugins(State(paired_bff_state()), headers).await;
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+        (status, json)
+    }
+
+    #[tokio::test]
+    async fn trusted_proxy_ops_can_read_the_plugin_catalog() {
+        let (status, body) = catalog_status(identity(&[
+            ("x-auth-secret", "s3cret"),
+            ("x-user-id", "ops"),
+            ("x-user-role", zeroclaw_api::ROLE_OPS),
+        ]))
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body["plugins"].is_array(), "{body}");
+    }
+
+    #[tokio::test]
+    async fn trusted_proxy_normal_user_cannot_read_the_plugin_catalog() {
+        let (status, body) = catalog_status(identity(&[
+            ("x-auth-secret", "s3cret"),
+            ("x-user-id", "alice"),
+            ("x-user-role", zeroclaw_api::ROLE_NORMAL),
+        ]))
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    }
+
+    #[tokio::test]
+    async fn plugin_catalog_without_bff_secret_keeps_pairing() {
+        let (status, _) = catalog_status(HeaderMap::new()).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        let (status, body) =
+            catalog_status(identity(&[("authorization", "Bearer zc_paired")])).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
 
     #[test]
     fn response_reports_compile_time_wasm_availability() {

@@ -11,7 +11,10 @@
 //! before, while a bearer presented with the `X-ZeroClaw-Auth-Provider`
 //! header naming an `oidc.<alias>` provider is verified by that provider
 //! and resolved to a scoped principal whose Config grants gate the
-//! request. Provider selection is explicit, mirroring the RPC handshake's
+//! request. With pairing required, a trusted-proxy ops identity
+//! (`X-Auth-Secret` plus `X-User-Role: 管理员`) is that same unrestricted
+//! operator; a roster user who presents the secret is refused, and a
+//! request with no BFF secret keeps the bearer path. Provider selection is explicit, mirroring the RPC handshake's
 //! `auth_provider` field: the named provider's denial is authoritative,
 //! and there is no fallback between providers.
 //!
@@ -77,6 +80,7 @@ use zeroclaw_runtime::security::auth_provider::Credential;
 
 use crate::ConfigWriteGuard;
 use crate::dashboard_session::{DashboardCaller, SessionAuth, SessionRejection};
+use crate::trusted_proxy::{BffOpsDecision, bff_ops_decision};
 
 /// Header naming the auth provider to verify the bearer with, mirroring
 /// the RPC handshake's `auth_provider` field (e.g. `oidc.corp`). Absent
@@ -743,6 +747,33 @@ pub async fn config_route_auth(
         return next.run(request).await;
     }
 
+    // Workbench ops. The BFF sends X-Auth-Secret and X-User-* , not a
+    // paired bearer and not a dashboard session (sign-in stays off).
+    // The decision is the one `require_ops_auth` already makes: 管理员
+    // is the unrestricted operator, anyone else who presented the secret
+    // is refused, and a request with no secret keeps the bearer path.
+    // Pairing disabled stays the open posture below and is not narrowed.
+    if auth.pairing().require_pairing() {
+        let decision = {
+            let config = route.config.read();
+            bff_ops_decision(&config, request.headers())
+        };
+        match decision {
+            BffOpsDecision::Absent => {}
+            BffOpsDecision::Admit => {
+                request.extensions_mut().insert(RequestAuth {
+                    // Shared operator, the same unrestricted shape the
+                    // open posture inserts. There is no scoped principal.
+                    principal: None,
+                    authority: Arc::clone(&auth),
+                    session: None,
+                });
+                return next.run(request).await;
+            }
+            BffOpsDecision::Deny(err) => return err.into_response(),
+        }
+    }
+
     // A provider header that is present but blank or not text is a
     // malformed selection, not an absent one: it never falls through to
     // the native provider or the open posture.
@@ -1036,6 +1067,154 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK, "shared operator may mutate");
+    }
+
+    fn bff_config() -> Config {
+        let mut config = paired_config();
+        config.gateway.trusted_proxy = true;
+        config.gateway.trusted_proxy_secret = Some("s3cret".into());
+        config
+    }
+
+    const BFF_SECRET_DENIAL: &str = "Unauthorized — provide X-Auth-Secret from the platform BFF";
+
+    #[tokio::test]
+    async fn trusted_proxy_ops_reaches_the_config_routes() {
+        let router = router_for(bff_config());
+        let headers = [
+            ("x-auth-secret", "s3cret"),
+            ("x-user-id", "ops"),
+            ("x-user-role", zeroclaw_api::ROLE_OPS),
+        ];
+        let (status, _, body) = send_from(
+            &router,
+            None,
+            &headers,
+            "GET",
+            "/api/config/map-keys?path=agents",
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body["keys"].is_array(), "{body}");
+        let (status, _, body) = send_from(
+            &router,
+            None,
+            &headers,
+            "POST",
+            "/api/quickstart/fields",
+            None,
+            None,
+            Some(serde_json::json!({"section": "channel", "type_key": "telegram"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "ops may mutate: {body}");
+    }
+
+    #[tokio::test]
+    async fn trusted_proxy_normal_user_is_forbidden_on_config_routes() {
+        let router = router_for(bff_config());
+        let (status, _, body) = send_from(
+            &router,
+            None,
+            &[
+                ("x-auth-secret", "s3cret"),
+                ("x-user-id", "alice"),
+                ("x-user-role", zeroclaw_api::ROLE_NORMAL),
+            ],
+            "GET",
+            "/api/config/map-keys?path=agents",
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    }
+
+    #[tokio::test]
+    async fn trusted_proxy_bad_secret_stays_off_the_config_routes() {
+        let router = router_for(bff_config());
+        let (status, _, body) = send_from(
+            &router,
+            None,
+            &[
+                ("x-auth-secret", "nope"),
+                ("x-user-id", "ops"),
+                ("x-user-role", zeroclaw_api::ROLE_OPS),
+                ("authorization", "Bearer zc_paired"),
+            ],
+            "GET",
+            "/api/config/map-keys?path=agents",
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+        assert_eq!(body["error"], BFF_SECRET_DENIAL);
+    }
+
+    #[tokio::test]
+    async fn trusted_proxy_without_bff_secret_keeps_pairing() {
+        let router = router_for(bff_config());
+        let (status, _, body) = send_from(
+            &router,
+            None,
+            &[
+                ("x-user-id", "ops"),
+                ("x-user-role", zeroclaw_api::ROLE_OPS),
+            ],
+            "GET",
+            "/api/config/map-keys?path=agents",
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+        assert_eq!(body["error"], LEGACY_DENIAL);
+
+        let (status, _, body) = send_from(
+            &router,
+            None,
+            &[
+                ("x-auth-secret", " "),
+                ("x-user-id", "ops"),
+                ("x-user-role", zeroclaw_api::ROLE_OPS),
+            ],
+            "GET",
+            "/api/config/map-keys?path=agents",
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "a blank secret is not a BFF secret: {body}"
+        );
+        assert_eq!(body["error"], LEGACY_DENIAL);
+
+        let (status, _, body) = send_from(
+            &router,
+            None,
+            &[],
+            "GET",
+            "/api/quickstart/state",
+            Some("zc_paired"),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "paired bearer still opens the route: {body}"
+        );
     }
 
     #[tokio::test]

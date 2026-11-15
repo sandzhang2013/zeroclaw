@@ -12,6 +12,8 @@ use zeroclaw_api::principal::{
 use zeroclaw_api::{ROLE_OPS, UserAttrs, UserIdError, normalize_user_id};
 use zeroclaw_config::pairing::constant_time_eq;
 
+use zeroclaw_config::schema::Config;
+
 use super::AppState;
 use super::api::require_auth;
 
@@ -44,12 +46,51 @@ pub fn trusted_proxy_enabled(state: &AppState) -> bool {
     state.config.read().gateway.trusted_proxy
 }
 
+/// What a trusted-proxy request means for an ops surface.
+pub enum BffOpsDecision {
+    /// Trusted proxy is off, or the request carries no BFF secret.
+    /// The caller keeps its own credential path (pairing, a dashboard
+    /// session). A blank secret is this case, so it cannot recurse.
+    Absent,
+    /// Secret and identity check out, and the role is [`ROLE_OPS`].
+    Admit,
+    /// A BFF secret was presented and rejected: wrong secret, missing
+    /// identity, or a role other than [`ROLE_OPS`].
+    Deny(AuthError),
+}
+
+/// Ops admission for a trusted-proxy request, from the published config.
+///
+/// Shared by [`require_ops_auth`] and the config route layer so both
+/// surfaces make the same decision. A roster user is refused here; the
+/// caller must not fall through to pairing after [`BffOpsDecision::Deny`].
+pub fn bff_ops_decision(cfg: &Config, headers: &HeaderMap) -> BffOpsDecision {
+    if !cfg.gateway.trusted_proxy || !has_bff_secret(headers) {
+        return BffOpsDecision::Absent;
+    }
+    match verify_bff_identity(cfg, headers) {
+        Ok((_, attrs)) if attrs.role.as_deref() == Some(ROLE_OPS) => BffOpsDecision::Admit,
+        Ok(_) => BffOpsDecision::Deny(json_err(
+            StatusCode::FORBIDDEN,
+            "Forbidden — ops surface requires X-User-Role: 管理员",
+        )),
+        Err(err) => BffOpsDecision::Deny(err),
+    }
+}
+
 /// Verify BFF secret + identity headers. Ignores query/body identity.
 pub fn require_trusted_proxy(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<(Principal, UserAttrs), AuthError> {
     let cfg = state.config.read();
+    verify_bff_identity(&cfg, headers)
+}
+
+fn verify_bff_identity(
+    cfg: &Config,
+    headers: &HeaderMap,
+) -> Result<(Principal, UserAttrs), AuthError> {
     if !cfg.gateway.trusted_proxy {
         return Err(json_err(
             StatusCode::UNAUTHORIZED,
@@ -177,17 +218,15 @@ pub fn has_bff_secret(headers: &HeaderMap) -> bool {
 
 /// Config / logs / org-skill writes. Pairing still works; BFF admin role also works.
 pub fn require_ops_auth(state: &AppState, headers: &HeaderMap) -> Result<(), AuthError> {
-    if trusted_proxy_enabled(state) && has_bff_secret(headers) {
-        let (_, attrs) = require_trusted_proxy(state, headers)?;
-        if attrs.role.as_deref() == Some(ROLE_OPS) {
-            return Ok(());
-        }
-        return Err(json_err(
-            StatusCode::FORBIDDEN,
-            "Forbidden — ops surface requires X-User-Role: 管理员",
-        ));
+    let decision = {
+        let cfg = state.config.read();
+        bff_ops_decision(&cfg, headers)
+    };
+    match decision {
+        BffOpsDecision::Admit => Ok(()),
+        BffOpsDecision::Deny(err) => Err(err),
+        BffOpsDecision::Absent => require_auth(state, headers),
     }
-    require_auth(state, headers)
 }
 
 /// Frozen BFF identity after ops/user auth succeeded. `None` on the pairing path.

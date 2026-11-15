@@ -27,7 +27,7 @@ import {
   type FolderNavState,
 } from '@/lib/workbenchFolderNav';
 import { workbenchVersionLabel } from '@/lib/workbenchVersion';
-import { workbenchVersion } from 'virtual:workbench-version';
+import { workbenchVersion } from '@/lib/workbenchVersion.virtual';
 import type { TurnVerdict } from '@/lib/turnFeedback';
 
 export interface SessionIndicator {

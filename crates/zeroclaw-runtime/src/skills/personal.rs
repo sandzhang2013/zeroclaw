@@ -112,6 +112,139 @@ fn format_personal_id(n: u64) -> String {
     format!("ps{n:04}")
 }
 
+/// `ps0001` onward. A new personal skill directory has to be one of these.
+#[must_use]
+pub fn is_allocated_personal_skill_id(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("ps") else {
+        return false;
+    };
+    rest.len() >= 4 && rest.chars().all(|c| c.is_ascii_digit())
+}
+
+fn skill_name_key(name: &str) -> Option<&str> {
+    if name.is_empty()
+        || name == "."
+        || name == ".."
+        || name.contains('/')
+        || name.contains('\\')
+        || name.contains('\0')
+    {
+        None
+    } else {
+        Some(name)
+    }
+}
+
+fn remembered_skill_id(skills_root: &Path, requested_name: &str) -> Option<String> {
+    let key = format!("{}\0{requested_name}", skills_root.display());
+    skill_id_memory()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&key)
+        .cloned()
+}
+
+fn remember_skill_id(skills_root: &Path, requested_name: &str, id: &str) {
+    let key = format!("{}\0{requested_name}", skills_root.display());
+    skill_id_memory()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(key, id.to_string());
+}
+
+fn skill_id_memory() -> &'static std::sync::Mutex<std::collections::HashMap<String, String>> {
+    static MEMORY: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, String>>,
+    > = std::sync::OnceLock::new();
+    MEMORY.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Directory for one file inside a personal `skills/` tree.
+///
+/// A directory that already has `SKILL.md` keeps its name. A new skill takes
+/// the next `ps` id. Repeating the same requested name in this process reuses
+/// that id, so a title slug does not mint a second number.
+pub fn personal_skill_directory(
+    config: &Config,
+    skills_root: &Path,
+    requested_name: &str,
+) -> std::io::Result<PathBuf> {
+    let Some(requested_name) = skill_name_key(requested_name) else {
+        return Ok(skills_root.join(requested_name));
+    };
+    if skills_root.join(requested_name).join("SKILL.md").is_file() {
+        return Ok(skills_root.join(requested_name));
+    }
+    fresh_personal_skill_directory(config, skills_root, requested_name)
+}
+
+fn fresh_personal_skill_directory(
+    config: &Config,
+    skills_root: &Path,
+    requested_name: &str,
+) -> std::io::Result<PathBuf> {
+    if let Some(id) = remembered_skill_id(skills_root, requested_name) {
+        return Ok(skills_root.join(id));
+    }
+    let id = allocate_personal_skill_id(config)?;
+    remember_skill_id(skills_root, requested_name, &id);
+    let dest = skills_root.join(&id);
+    let src = skills_root.join(requested_name);
+    if src.is_dir() && src != dest {
+        if dest.exists() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "personal skill id directory already exists",
+            ));
+        }
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::rename(&src, &dest)?;
+    }
+    Ok(dest)
+}
+
+/// Move a skill directory that just gained `SKILL.md` onto the next `ps` id.
+/// `source` may sit in the personal skills tree or in a session directory.
+/// Returns `(previous directory name, allocated id)`.
+pub fn claim_fresh_personal_skill(
+    config: &Config,
+    skills_root: &Path,
+    source: &Path,
+) -> std::io::Result<(String, String)> {
+    let name = source
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| skill_name_key(name).is_some())
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "skill directory name is not a single path segment",
+            )
+        })?;
+    let name = name.to_string();
+    let dest = fresh_personal_skill_directory(config, skills_root, &name)?;
+    if source.exists() && source != dest {
+        if dest.exists() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "personal skill id directory already exists",
+            ));
+        }
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::rename(source, &dest)?;
+    }
+    let id = dest
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(&name)
+        .to_string();
+    Ok((name, id))
+}
+
 fn personal_skill_markdown(id: &str, task: &str, tool_calls: &[ToolCallRecord]) -> String {
     let title = one_line(task, 80);
     let title = if title.is_empty() {
@@ -381,6 +514,103 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(id, "ps0002");
+    }
+
+    #[test]
+    fn creation_stays_off_unless_skill_creation_is_enabled() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut config = Config::default();
+        config.config_path = tmp.path().join("config.toml");
+        assert!(!config.skills.skill_creation.enabled);
+        let created =
+            create_from_turn(&config, "alice", "hbcdc", "汇总本周流感", &two_calls()).unwrap();
+        assert!(created.is_none());
+        assert!(
+            !config
+                .user_workspace_dir("alice", "hbcdc")
+                .join("skills")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn a_turn_without_a_platform_user_does_not_write_a_skill() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = enabled_config(tmp.path(), 500);
+        let created =
+            create_from_turn(&config, "  ", "hbcdc", "汇总本周流感", &two_calls()).unwrap();
+        assert!(created.is_none());
+        assert!(
+            !config
+                .user_workspace_dir("alice", "hbcdc")
+                .join("skills")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn a_new_title_slug_takes_one_personal_id_and_reuses_it() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = enabled_config(tmp.path(), 500);
+        let root = config.user_workspace_dir("alice", "hbcdc").join("skills");
+        std::fs::create_dir_all(&root).unwrap();
+        let first = personal_skill_directory(&config, &root, "hfmd-cluster-surveillance").unwrap();
+        let second = personal_skill_directory(&config, &root, "hfmd-cluster-surveillance").unwrap();
+        assert_eq!(first, root.join("ps0001"));
+        assert_eq!(second, first);
+        assert!(!root.join("hfmd-cluster-surveillance").exists());
+        assert_eq!(
+            std::fs::read_to_string(
+                config
+                    .install_root_dir()
+                    .join("shared")
+                    .join("personal-skill-seq")
+            )
+            .unwrap(),
+            "1"
+        );
+    }
+
+    #[test]
+    fn an_existing_skill_directory_keeps_its_name() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = enabled_config(tmp.path(), 500);
+        let root = config.user_workspace_dir("alice", "hbcdc").join("skills");
+        let notes = root.join("notes");
+        std::fs::create_dir_all(&notes).unwrap();
+        std::fs::write(
+            notes.join("SKILL.md"),
+            "---\nname: 笔记\ndescription: 手写技能\n---\n\n# 笔记\n",
+        )
+        .unwrap();
+        let dir = personal_skill_directory(&config, &root, "notes").unwrap();
+        assert_eq!(dir, notes);
+        assert!(
+            !config
+                .install_root_dir()
+                .join("shared")
+                .join("personal-skill-seq")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn a_just_written_slug_directory_is_renamed_to_the_personal_id() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = enabled_config(tmp.path(), 500);
+        let root = config.user_workspace_dir("alice", "hbcdc").join("skills");
+        let slug = root.join("hfmd-cluster-surveillance");
+        std::fs::create_dir_all(&slug).unwrap();
+        std::fs::write(
+            slug.join("SKILL.md"),
+            "---\nname: 手足口\ndescription: 研判\n---\n\n# 研判\n",
+        )
+        .unwrap();
+        let (previous, id) = claim_fresh_personal_skill(&config, &root, &slug).unwrap();
+        assert_eq!(previous, "hfmd-cluster-surveillance");
+        assert_eq!(id, "ps0001");
+        assert!(!slug.exists());
+        assert!(root.join("ps0001").join("SKILL.md").is_file());
     }
 
     #[test]

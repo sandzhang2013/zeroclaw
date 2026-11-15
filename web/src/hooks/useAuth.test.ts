@@ -33,6 +33,7 @@ const fakeWindow = Object.assign(new EventTarget(), {
     port: "",
     pathname: "/agent/main",
     search: "",
+    href: "https://zc.example/agent/main",
     reload: () => {
       reloads += 1;
     },

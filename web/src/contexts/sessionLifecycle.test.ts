@@ -27,7 +27,7 @@ class MemoryStorage implements Storage {
 
 const storage = new MemoryStorage();
 const fakeWindow = {
-  location: { protocol: 'http:', host: 'localhost' },
+  location: { protocol: 'http:', host: 'localhost', href: 'http://localhost/' },
   dispatchEvent: () => true,
   addEventListener: () => {},
   removeEventListener: () => {},

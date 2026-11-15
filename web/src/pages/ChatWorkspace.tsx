@@ -488,6 +488,9 @@ export default function ChatWorkspace({
   }, [initialAlias, userId]);
 
   useEffect(() => {
+    // The dashboard chat for a non-operator stays on `/agent/:alias`.
+    // Only the workbench rewrites the address to its own route.
+    if (/\/agent\/[^/]+$/.test(location.pathname)) return;
     const target = `/workbench/${encodeURIComponent(activeAlias)}`;
     if (location.pathname !== target) {
       navigate({ pathname: target, search: location.search }, { replace: true });

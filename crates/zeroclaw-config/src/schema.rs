@@ -12143,7 +12143,37 @@ fn set_runtime_proxy_cached_client(cache_key: String, generation: u64, client: r
     }
 }
 
+static ISOLATE_RUNTIME_PROXY_TESTS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+std::thread_local! {
+    static ALLOW_CUSTOM_RUNTIME_PROXY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn proxy_config_is_inert(config: &ProxyConfig) -> bool {
+    !config.enabled
+        && config.http_proxy.is_none()
+        && config.https_proxy.is_none()
+        && config.all_proxy.is_none()
+}
+
+/// Test binaries call this before cases run. A custom proxy then stays visible
+/// only on the thread that published it, so parallel cases keep their own servers.
+pub fn enable_runtime_proxy_test_isolation() {
+    ISOLATE_RUNTIME_PROXY_TESTS.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn runtime_proxy_tests_are_isolated() -> bool {
+    ISOLATE_RUNTIME_PROXY_TESTS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub fn set_runtime_proxy_config(config: ProxyConfig) {
+    // Tests share one process. A custom proxy must be visible only to the
+    // thread that published it; every other thread waits until it is cleared.
+    let inert = proxy_config_is_inert(&config);
+    if runtime_proxy_tests_are_isolated() && !inert {
+        ALLOW_CUSTOM_RUNTIME_PROXY.with(|allow| allow.set(true));
+    }
     match runtime_proxy_state().write() {
         Ok(mut guard) => {
             *guard = config;
@@ -12157,9 +12187,28 @@ pub fn set_runtime_proxy_config(config: ProxyConfig) {
     }
 
     clear_runtime_proxy_client_cache();
+    if runtime_proxy_tests_are_isolated() && inert {
+        ALLOW_CUSTOM_RUNTIME_PROXY.with(|allow| allow.set(false));
+    }
 }
 
 fn runtime_proxy_config_snapshot() -> (u64, ProxyConfig) {
+    if runtime_proxy_tests_are_isolated() && !ALLOW_CUSTOM_RUNTIME_PROXY.with(|allow| allow.get()) {
+        let started = std::time::Instant::now();
+        loop {
+            let snapshot = read_runtime_proxy_config_snapshot();
+            if proxy_config_is_inert(&snapshot.1)
+                || started.elapsed() >= std::time::Duration::from_secs(2)
+            {
+                return snapshot;
+            }
+            std::thread::yield_now();
+        }
+    }
+    read_runtime_proxy_config_snapshot()
+}
+
+fn read_runtime_proxy_config_snapshot() -> (u64, ProxyConfig) {
     match runtime_proxy_state().read() {
         Ok(guard) => (runtime_proxy_config_generation(), guard.clone()),
         Err(poisoned) => {

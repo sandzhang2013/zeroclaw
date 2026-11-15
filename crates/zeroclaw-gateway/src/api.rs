@@ -4008,6 +4008,66 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn opening_a_user_id_only_row_backfills_the_roster_principal() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = trusted_proxy_config(&tmp);
+        let backend = Arc::new(
+            zeroclaw_infra::session_sqlite::SqliteSessionBackend::new(tmp.path()).unwrap(),
+        );
+        backend
+            .append(
+                "gw_chenmin-s",
+                &zeroclaw_providers::ChatMessage::user("old"),
+            )
+            .unwrap();
+        backend
+            .set_session_user_id("gw_chenmin-s", "chenmin")
+            .unwrap();
+        let state = test_state_with_session_backend(config, backend.clone());
+
+        let response = handle_api_session_messages(
+            State(state),
+            bff_headers("chenmin", "普通用户"),
+            Path("chenmin-s".to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let meta = backend.get_session_metadata("gw_chenmin-s").unwrap();
+        assert_eq!(meta.user_id.as_deref(), Some("chenmin"));
+        assert_eq!(meta.principal_id.as_deref(), Some("user:chenmin"));
+    }
+
+    #[tokio::test]
+    async fn ops_opening_another_users_session_does_not_change_the_owner() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = trusted_proxy_config(&tmp);
+        let backend = Arc::new(
+            zeroclaw_infra::session_sqlite::SqliteSessionBackend::new(tmp.path()).unwrap(),
+        );
+        backend
+            .append("gw_bob-s", &zeroclaw_providers::ChatMessage::user("yo"))
+            .unwrap();
+        backend.set_session_user_id("gw_bob-s", "bob").unwrap();
+        backend
+            .set_session_principal("gw_bob-s", "user:bob")
+            .unwrap();
+        let state = test_state_with_session_backend(config, backend.clone());
+
+        let response = handle_api_session_messages(
+            State(state),
+            bff_headers("ops", zeroclaw_api::ROLE_OPS),
+            Path("bob-s".to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let meta = backend.get_session_metadata("gw_bob-s").unwrap();
+        assert_eq!(meta.user_id.as_deref(), Some("bob"));
+        assert_eq!(meta.principal_id.as_deref(), Some("user:bob"));
+    }
+
+    #[tokio::test]
     async fn simulates_advanced_user_and_wuhan_city_user() {
         use crate::api_skills::{PersonalSkillBody, handle_save_personal_skill};
         use zeroclaw_config::schema::AliasedAgentConfig;
@@ -4056,9 +4116,9 @@ pub(crate) mod tests {
 
         let flu_skill = || PersonalSkillBody {
             agent: "web".into(),
-            name: "flu-weekly".into(),
+            name: "ps0001".into(),
             frontmatter: SkillFrontmatter {
-                name: "flu-weekly".into(),
+                name: "每周流感".into(),
                 description: "weekly flu".into(),
                 ..Default::default()
             },
@@ -4075,12 +4135,12 @@ pub(crate) mod tests {
         let cfg = state.config.read();
         assert!(
             !cfg.user_workspace_dir("adv-1", "web")
-                .join("skills/flu-weekly/SKILL.md")
+                .join("skills/ps0001/SKILL.md")
                 .exists()
         );
         assert!(
             cfg.user_workspace_dir("wh-1", "web")
-                .join("skills/flu-weekly/SKILL.md")
+                .join("skills/ps0001/SKILL.md")
                 .exists()
         );
         assert_ne!(

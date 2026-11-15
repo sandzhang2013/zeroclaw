@@ -1820,6 +1820,9 @@ mod tool_round_policy_tests {
         policy: Option<ToolRoundPolicy>,
         tool_shape: u8,
     ) -> serde_json::Value {
+        // Other tests publish a process-wide proxy. Hold the same lock they use
+        // so this local server is contacted directly.
+        let _proxy_guard = crate::RuntimeProxyTestGuard::acquire().await;
         let captured = Arc::new(Mutex::new(None));
         let capture = Arc::clone(&captured);
         let path = match wire {

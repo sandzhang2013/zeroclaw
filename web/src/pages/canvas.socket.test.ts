@@ -39,7 +39,7 @@ class FakeWebSocket {
   }
 }
 
-const location = { protocol: "https:", host: "zc.example", hostname: "zc.example", port: "", pathname: "/canvas", search: "" };
+const location = { protocol: "https:", host: "zc.example", hostname: "zc.example", port: "", pathname: "/canvas", search: "", href: "https://zc.example/canvas" };
 const fakeWindow = Object.assign(new EventTarget(), {
   location,
   setTimeout: (fn: () => void, ms: number) => setTimeout(fn, ms),

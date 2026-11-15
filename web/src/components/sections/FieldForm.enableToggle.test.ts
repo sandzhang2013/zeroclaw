@@ -117,6 +117,10 @@ for (const concurrentSave of [false, true]) {
         jsx: { runtime: "automatic" },
         alias: { "@": new URL("../../", import.meta.url).pathname },
       });
+      const { setLocale } = await jiti.import<typeof import("../../lib/i18n.ts")>(
+        "../../lib/i18n.ts",
+      );
+      setLocale("en");
       const { default: FieldForm } =
         await jiti.import<typeof import("./FieldForm.tsx")>("./FieldForm.tsx");
       const { ConfigDraftProvider } = await jiti.import<

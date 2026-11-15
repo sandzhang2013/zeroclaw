@@ -164,9 +164,8 @@ function copyIframeBridge(): Plugin {
 }
 
 function workbenchVersionPlugin(): Plugin {
-  const virtualId = "virtual:workbench-version";
-  const resolvedId = `\0${virtualId}`;
   const versionFile = path.resolve(__dirname, "WORKBENCH_VERSION");
+  const moduleFile = path.resolve(__dirname, "src/lib/workbenchVersion.virtual.ts");
   const readVersion = (): string => {
     try {
       const text = readFileSync(versionFile, "utf8").trim();
@@ -178,11 +177,8 @@ function workbenchVersionPlugin(): Plugin {
   };
   return {
     name: "workbench-version",
-    resolveId(source) {
-      if (source === virtualId) return resolvedId;
-    },
-    load(source) {
-      if (source !== resolvedId) return;
+    transform(_code, id) {
+      if (id.split("?")[0] !== moduleFile) return;
       return `export const workbenchVersion = ${JSON.stringify(readVersion())};\n`;
     },
     configureServer(server) {
@@ -191,7 +187,7 @@ function workbenchVersionPlugin(): Plugin {
         current?.close();
         try {
           current = watch(versionFile, () => {
-            const mod = server.moduleGraph.getModuleById(resolvedId);
+            const mod = server.moduleGraph.getModuleById(moduleFile);
             if (mod) server.moduleGraph.invalidateModule(mod);
             server.ws.send({ type: "full-reload" });
           });
@@ -200,7 +196,12 @@ function workbenchVersionPlugin(): Plugin {
         }
       };
       arm();
-      server.httpServer?.on("close", () => current?.close());
+      const stop = () => {
+        current?.close();
+        current = undefined;
+      };
+      server.httpServer?.on("close", stop);
+      return stop;
     },
   };
 }

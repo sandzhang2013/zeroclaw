@@ -21,6 +21,7 @@ pub mod deliver_file;
 pub mod file_read;
 pub mod model_switch;
 pub mod param_options;
+mod personal_skill_path;
 pub mod read_skill;
 mod runtime_command_error;
 pub mod schedule;
@@ -2408,14 +2409,19 @@ fn all_tools_with_runtime_on_thread(
     register_tool!(
         "shell",
         Arc::new(RateLimitedTool::new(
-            shell_tool
-                .with_timeout_secs(if security.shell_timeout_secs > 0 {
-                    security.shell_timeout_secs
-                } else {
-                    root_config.shell_tool.timeout_secs
-                })
-                .with_shared_tui_env(tui_env)
-                .with_persistent_writes(persistent_writes),
+            personal_skill_path::PersonalSkillShell::new(
+                shell_tool
+                    .with_timeout_secs(if security.shell_timeout_secs > 0 {
+                        security.shell_timeout_secs
+                    } else {
+                        root_config.shell_tool.timeout_secs
+                    })
+                    .with_shared_tui_env(tui_env)
+                    .with_persistent_writes(persistent_writes),
+                Arc::clone(&root_config_shared),
+                security.clone(),
+                agent_alias.to_string(),
+            ),
             security.clone(),
         ))
     );
@@ -2440,7 +2446,12 @@ fn all_tools_with_runtime_on_thread(
         "file_write",
         Arc::new(RateLimitedTool::new(
             PathGuardedTool::new(
-                FileWriteTool::new_with_persistence(security.clone(), persistent_writes),
+                personal_skill_path::PersonalSkillPath::file_write(
+                    FileWriteTool::new_with_persistence(security.clone(), persistent_writes),
+                    Arc::clone(&root_config_shared),
+                    security.clone(),
+                    agent_alias.to_string(),
+                ),
                 security.clone(),
             ),
             security.clone(),
@@ -2450,7 +2461,12 @@ fn all_tools_with_runtime_on_thread(
         "file_edit",
         Arc::new(RateLimitedTool::new(
             PathGuardedTool::new(
-                FileEditTool::new_with_persistence(security.clone(), persistent_writes),
+                personal_skill_path::PersonalSkillPath::file_edit(
+                    FileEditTool::new_with_persistence(security.clone(), persistent_writes),
+                    Arc::clone(&root_config_shared),
+                    security.clone(),
+                    agent_alias.to_string(),
+                ),
                 security.clone(),
             ),
             security.clone(),

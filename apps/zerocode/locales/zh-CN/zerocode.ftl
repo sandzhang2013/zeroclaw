@@ -713,3 +713,151 @@ zc-config-section-tunnel-help = 可选择通过 Cloudflare 或 ngrok 暴露网�
 zc-config-section-onboard-state-help = 快速入门生命周期状态及其按分区记录的旧版完成记录。
 
 zc-chat-tool-question = 问题
+
+zc-config-filter-sections = 筛选配置段
+zc-config-refused = 这个账户读不到守护进程的配置：{ $reason }
+zc-config-filter-list = 筛选列表
+zc-config-filter-options = 筛选选项
+zc-config-filter-no-matches = 没有匹配
+zc-daemon-wait-notice = zerocode：正在等待 { $path } 上的守护进程（最多 { $seconds } 秒）…
+zc-error-daemon-not-ready-timeout = 守护进程在 { $seconds } 秒内没有就绪（套接字：{ $path }）；如果套接字路径太长，请把 ZEROCLAW_SOCKET 设短一些，或使用更短的 --config-dir
+zc-config-draft-pending = 有未提交的修改
+zc-config-draft-unchanged = 没有未提交的修改
+zc-config-discard-title = 丢弃未提交的修改？
+zc-config-discard-explanation = 这个动作会替换你的草稿。留下可以继续编辑，丢弃则会放弃未提交的修改并继续。
+zc-config-action-stay = 留下
+zc-config-action-discard = 丢弃
+zc-config-external-editor-title = 打开外部编辑器？
+zc-config-external-editor-explanation = 外部编辑器成功退出后，改过的内容会被导入并保存。现在取消则继续使用内联编辑器。
+zc-config-action-launch-editor = 打开编辑器
+zc-logs-refused = 这个账户读不到守护进程的日志：{ $reason }
+zc-logs-run-filter-label = 运行
+zc-logs-run-filter-clear = R：清除
+zc-logs-status-partial = [部分]
+zc-chat-history-trimmed-turns = 较早的对话记录已截断：{ $reason }（去掉较早的 { $dropped } { $dropped-kind ->
+    [one] 轮
+   *[other] 轮
+}，保留 { $kept } { $kept-kind ->
+    [one] 轮
+   *[other] 轮
+}）。
+zc-chat-history-trimmed-tokens = 较早的对话记录已从大约 { $before } 个 token 截到 { $after } 个：{ $reason }；去掉 { $dropped } 条消息，保留 { $kept } 轮。
+zc-chat-history-trimmed-tokens-turns = 较早的对话记录已从大约 { $before } 个 token 截到 { $after } 个：{ $reason }；去掉较早的 { $dropped } { $dropped-kind ->
+    [one] 轮
+   *[other] 轮
+}，保留 { $kept } { $kept-kind ->
+    [one] 轮
+   *[other] 轮
+}。
+zc-chat-history-trimmed-floor = 对话记录无法截到配置的 token 预算以下：{ $reason }；最近一轮仍大约需要 { $after } 个 token（配置的预算：{ $budget }）。
+zc-chat-budget-warning-day = 费用提醒：每日上限 ${ $limit } 已用 ${ $spent }（{ $percent }%）。到达上限后本轮会停止。
+zc-chat-budget-warning-month = 费用提醒：每月上限 ${ $limit } 已用 ${ $spent }（{ $percent }%）。到达上限后本轮会停止。
+zc-chat-history-trimmed-token-budget-clause = （配置的 token 预算：{ $budget }）
+zc-chat-history-trimmed-token-source-provider = 提供商报告
+zc-chat-history-trimmed-token-source-estimate = 估算
+zc-chat-history-trimmed-token-source-calibrated = 提供商 + 估算
+zc-chat-history-trimmed-token-sources = （之前 { $before }；之后 { $after }）
+zc-chat-error-resume-history = 会话已重新接上，但读不出它的持久记录：{ $error }
+zc-chat-load-session-not-found = 没有已保存的会话匹配「{ $query }」。
+zc-chat-load-session-list-error = 列出已保存的会话失败：{ $error }
+zc-chat-load-session-already-active = 这个会话已经在当前窗格里打开。
+zc-chat-help-load-session = /load-session [名称|标识] — 恢复一个已保存的会话
+zc-chat-help-acp-memory = 历史会保存并可恢复；持久记忆彼此隔离
+zc-chat-session-list-resume-note = 会话历史会保存并可恢复 · 持久记忆彼此隔离
+zc-chat-agent-picker-acp-memory-note = 会话历史会保存并可恢复 · 持久记忆彼此隔离
+zc-chat-context-menu-add-to-chat = 加入对话
+zc-chat-tool-subagent = 子智能体
+zc-chat-tool-delegation = 委托
+zc-chat-tool-task = 任务
+zc-chat-tool-target = 目标
+zc-chat-tool-response = 回复
+zc-chat-tool-details = 详情
+zc-chat-tool-result-not-recorded = 没有记下结果
+zc-config-secret-map-add = [+ 添加一项]
+zc-config-secret-map-key-prompt = 新条目的名称（例如 API_TOKEN），然后按回车
+zc-config-secret-map-value-prompt = { $key } 的值（机密，输入时隐藏），然后按回车
+zc-config-secret-map-key-empty = 条目名称不能为空
+zc-config-secret-map-key-invalid = 条目名称不能包含空格、控制字符或 "="
+zc-config-secret-map-value-empty = 值不能为空——要删除一项，请选中它所在的行再删除
+zc-config-secret-map-delete-hint = 选中下面某一项所在的行即可删除；这一行只用来添加
+zc-config-help-rename-alias = 重命名提供商别名
+zc-config-help-review-rename = 核对重命名
+zc-config-help-confirm-rename = 确认重命名
+zc-config-status-alias-rename-unchanged = 别名没有变化
+zc-config-status-alias-renamed = 已将 { $from } 重命名为 { $to }
+zc-config-status-alias-rename-failed = 重命名失败：{ $err }
+zc-config-status-alias-rename-unknown = 重命名结果未知：{ $err }。别名已重新加载。再次重命名之前，请先核对它们现在的名称。
+zc-config-status-alias-rename-unknown-refresh-failed = 重命名结果未知：{ $err }。重新加载别名也失败了：{ $refresh_err }。再次重命名之前，请重新打开这一段，核对已保存的名称。
+zc-keybinding-config-tab-rename-alias = 重命名提供商别名
+zc-config-status-alias-rename-not-applied = 守护进程没有重命名这个别名。请改好名称后再试。
+zc-config-status-alias-renamed-refresh-failed = 已将 { $from } 重命名为 { $to }，但刷新别名失败：{ $err }。请重新打开这一段以重新加载。
+zc-config-status-alias-rename-warnings = 警告：{ $warnings }
+zc-config-breadcrumb-rename = 重命名
+zc-config-alias-rename-input-hint = 输入新的别名。下一步会请你确认。
+zc-config-alias-rename-input-title = 新的别名
+zc-config-alias-rename-confirm-hint = 确认这次重命名。守护进程会更新现有引用里的这个别名。
+zc-config-alias-rename-confirm-title = 确认提供商别名重命名
+zc-config-alias-rename-confirm-target = { $path }：{ $from } → { $to }
+zc-config-footer-action-add = 添加
+zc-config-footer-action-rename = 重命名
+zc-config-footer-action-review-rename = 核对重命名
+zc-config-application-title = 配置变更记录
+zc-config-application-view = 变更记录
+zc-config-application-saved = 已保存 { $label }。
+zc-config-application-details-hint = 按 { $key } 查看记录。
+zc-config-application-state-applied = 这项变更已经生效。
+zc-config-application-state-pending = 正在应用这项变更…
+zc-config-application-state-rejected = 一个正在运行的会话拒绝了这项变更。
+zc-config-application-state-reload = 请重新加载守护进程（{ $key }）以使这项变更生效。
+zc-config-application-state-reload-partial = 已打开的会话已经在用；请重新加载守护进程（{ $key }）以使各处都生效。
+zc-config-application-state-sessions-only = 已打开的会话已经在用；zerocode 无法确认守护进程也已经用上。
+zc-config-application-state-unknown = zerocode 无法确认这项变更是否已经生效。
+zc-config-application-observed = 这个守护进程上最近的配置变更，来自任何一个客户端。
+zc-config-application-observed-hint = 按 { $key } 查看最近配置变更的记录。
+zc-config-application-none-since-start = 守护进程启动后还没有配置变更。保存一项设置后，状态会显示在这里。
+zc-config-application-help = { $up }/{ $down } 滚动，{ $pageup }/{ $pagedown } 翻页，{ $back } 或 { $details } 关闭。
+zc-config-application-receipt = 已保存的修订：{ $revision }
+zc-config-application-published = 最新已发布的修订：{ $revision }
+zc-config-application-coverage = 只有最近的变更，不是完整的子系统清单。记录上限：{ $limit }。被挤掉的记录无法查看。
+zc-config-application-truncated = 账本已经淘汰过记录；覆盖不完整。
+zc-config-application-applied = 已即时生效
+zc-config-application-pending = 待处理
+zc-config-application-rejected = 已拒绝
+zc-config-application-reload = 需要重新加载
+zc-config-application-unavailable = 无法取得应用状态
+zc-config-application-daemon = 守护进程
+zc-config-application-session = 会话 { $id }，世代 { $generation }
+zc-config-application-target-unknown = 未知目标
+zc-config-application-daemon-unavailable = 守护进程：这个修订没有应用状态
+zc-config-application-awaiting = 等待确认
+zc-config-application-scope-unavailable = 无法取得变更范围
+zc-config-application-retired = 目标已退出
+zc-config-application-whole-config = 整份配置；无法列出具体改过的路径
+zc-config-setup-model-providers = 模型配置保存连接和模型设置。认证可以用 API 密钥、外部登录，或本地服务。
+zc-config-setup-tts-providers = 语音合成是可选的。添加一个别名即可使用语音输出。云端后端需要凭据；本地后端需要它的可执行文件或服务。
+zc-config-setup-routes = 路由是可选的。添加一个命名提示，即可为这个提示选定已配置的提供商和模型。
+zc-config-setup-empty = 这个列表里还没有配置别名。
+zc-config-setup-add = 选中 [+ 添加] 并按 { $keys } 来新建一项。
+zc-config-setup-create = 输入名称。{ $confirm } 会保存并打开字段。{ $cancel } 会取消且不保存。请填写标成 [缺失] 的必填字段，并查看它们的说明。离开这些字段时，已保存的条目会保留。
+zc-config-setup-required = 必填
+zc-config-setup-required-missing = 缺失
+zc-config-setup-no-filter-matches = 没有匹配。请清除筛选。
+zc-login-invalid-target = 需要一个不含凭据、查询参数或片段的 WSS 地址，或一个主机名（默认端口 9781）。
+zc-login-invalid-provider = OIDC 别名应为 1–64 个字母、数字、下划线或连字符，并以字母或数字开头。
+zc-login-tls-aborted = 登录已中止：没有接受未验证的 TLS。没有保存登录。
+zc-login-connect-timeout = 远程连接在 30 秒内没有完成。
+zc-login-untrusted = { $url } 的证书校验失败。请提供 --tls-ca-cert 来校验它，或在下面明确接受一次未验证的连接。
+zc-login-rejected = 守护进程没有接受这次 OIDC 登录；先前保存的登录没有被替换。
+zc-login-saved = 已登录到 { $url }。登录信息保存在 { $path }。运行 zerocode 即可连接；不需要再带认证令牌参数。
+zc-login-env-shadow = 已设置 ZEROCLAW_AUTH_TOKEN，它会覆盖这次保存的登录。取消该环境变量后才会使用保存的令牌。
+zc-login-expired = 已保存的 OIDC 登录需要续期。请重新登录以继续；替换用的凭据会自动保存。
+zc-login-conflicting-route = 登录的目标是一个位置参数形式的地址；不要同时使用 --connect 或 --relay。
+zc-login-device-bootstrap-failed = OIDC 设备引导失败
+zc-login-invalid-certificate-bootstrap-response = 证书引导的响应无效
+zc-login-pkce-randomness-unavailable = 系统无法为 PKCE 提供随机数
+zc-login-no-pairing-endpoint = OIDC 登录在登录完成后经由网关引导设备；不会使用 --enroll-host 和 --enroll-port。不需要配对码或 SAS。
+zc-login-stage-credentials = 无法暂存替换用的设备凭据；先前保存的登录没有被替换。
+zc-config-save-lock-timeout = 另一个进程正在保存 { $config }，并且在 { $seconds } 秒后仍持有 { $lock }。请等另一个 zerocode 保存完再试。
+zc-config-invalid-saved-login = 已保存的登录配置无效。zerocode 不会改用另一份登录的凭据。
+zc-config-migration-lock-skipped = 无法锁定 { $path } 来更新已保存的按键绑定（{ $error }）。已加载的配置保持不变，文件也没有改。下次能够锁定这个文件时，zerocode 会再试一次更新。
+zc-config-lock-not-regular = { $path } 不是普通文件，不能用作配置锁。

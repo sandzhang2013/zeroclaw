@@ -24,6 +24,8 @@ async function renderPanel({
     configurable: true,
     value: { __ZEROCLAW_BASE__: '' },
   });
+  const { setLocale } = await import('../lib/i18n.ts');
+  setLocale('en');
   const { ToolCatalogWarningPanel } = await import('./ToolCatalogWarningPanel.ts');
   const html = renderToStaticMarkup(
     createElement(ToolCatalogWarningPanel, {

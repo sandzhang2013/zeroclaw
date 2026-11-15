@@ -6,7 +6,10 @@ import remarkGfm from 'remark-gfm';
 import { AgentProvider, useAgent, type ChatMessage } from '@/contexts/AgentContext';
 import { labelForProviderRef, resolveProviderRefArg } from '@/contexts/modelPicker.logic';
 import SessionPicker from '@/components/SessionPicker';
-import { useNavAccess } from '@/hooks/useNavAccess';
+import { useAvailableAgents, useNavAccess } from '@/hooks/useNavAccess';
+import { NotAvailable } from '@/components/auth/NotAvailable';
+import { Button, Card } from '@/components/ui';
+import ChatWorkspace from '@/pages/ChatWorkspace';
 import { useDraft } from '@/hooks/useDraft';
 import { getLocale, t } from '@/lib/i18n';
 import {
@@ -165,16 +168,67 @@ function ContextMeter({
  */
 export default function AgentChat() {
   const { alias } = useParams<{ alias: string }>();
+  const access = useNavAccess();
   if (!alias) {
     return <Navigate to="/agents" replace />;
   }
   const agentAlias = decodeURIComponent(alias);
+  // Operators keep the durable dashboard chat. A signed-in account without
+  // the operator pages may open only the agents the gateway lists for them.
+  if (!access.operatorPages) {
+    return <ScopedChatWorkspace alias={agentAlias} />;
+  }
   return (
     <AgentProvider agentAlias={agentAlias}>
       <div className="flex h-full min-h-0 flex-1 flex-col">
         <AgentChatInner agentAlias={agentAlias} />
       </div>
     </AgentProvider>
+  );
+}
+
+function ScopedChatWorkspace({ alias }: { alias: string }) {
+  const { loading, agents, error, retry } = useAvailableAgents(true);
+  const allowed = useMemo(
+    () => new Set(agents.filter((agent) => agent.enabled).map((agent) => agent.alias)),
+    [agents],
+  );
+  if (loading) {
+    return (
+      <div className="min-h-[60vh] flex items-center justify-center">
+        <div className="h-8 w-8 border-2 rounded-full animate-spin border-pc-border border-t-pc-accent" />
+      </div>
+    );
+  }
+  if (error !== null) {
+    return <AvailabilityLoadError error={error} onRetry={retry} />;
+  }
+  if (!allowed.has(alias)) {
+    return <NotAvailable access="not-available" />;
+  }
+  return <ChatWorkspace initialAlias={alias} allowedAliases={allowed} />;
+}
+
+function AvailabilityLoadError({ error, onRetry }: { error: string; onRetry: () => void }) {
+  return (
+    <div className="p-6">
+      <Card padded={false} className="p-6 w-full max-w-lg" data-agents-load-error="">
+        <div className="flex items-center gap-2 mb-2">
+          <AlertCircle className="h-5 w-5 shrink-0 text-status-error" />
+          <h2 className="text-lg font-semibold" style={{ color: 'var(--pc-text-primary)' }}>
+            {t('agent.availability_load_failed')}
+          </h2>
+        </div>
+        {error && (
+          <p className="text-sm mb-4 break-words" style={{ color: 'var(--pc-text-muted)' }}>
+            {error}
+          </p>
+        )}
+        <Button size="sm" onClick={onRetry} data-agents-retry="">
+          {t('common.retry')}
+        </Button>
+      </Card>
+    </div>
   );
 }
 

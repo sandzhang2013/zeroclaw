@@ -24,6 +24,8 @@ Object.assign(globalThis, { window: fakeWindow, React });
 // The pairing dialog asks for a pairing code on mount; this gateway has none.
 globalThis.fetch = async () => new Response("", { status: 404 });
 
+const { setLocale } = await import("../../lib/i18n.ts");
+setLocale("en");
 const { PairingDialog, SignInScreen } = await import("./SignInScreen.tsx");
 
 const onPair = async () => {};

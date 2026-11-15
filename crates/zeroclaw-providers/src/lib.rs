@@ -89,6 +89,20 @@ pub fn rejected_attempt_usage_from_error(error: &anyhow::Error) -> Option<&trait
 mod request_payload;
 
 #[cfg(test)]
+#[used]
+#[cfg_attr(
+    target_os = "macos",
+    unsafe(link_section = "__DATA,__mod_init_func")
+)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".init_array"))]
+static ENABLE_PROXY_ISOLATION: extern "C" fn() = enable_proxy_isolation;
+
+#[cfg(test)]
+extern "C" fn enable_proxy_isolation() {
+    zeroclaw_config::schema::enable_runtime_proxy_test_isolation();
+}
+
+#[cfg(test)]
 pub(crate) static RUNTIME_PROXY_TEST_LOCK: tokio::sync::Mutex<()> =
     tokio::sync::Mutex::const_new(());
 
@@ -100,6 +114,7 @@ pub(crate) struct RuntimeProxyTestGuard {
 #[cfg(test)]
 impl RuntimeProxyTestGuard {
     pub(crate) async fn acquire() -> Self {
+        zeroclaw_config::schema::enable_runtime_proxy_test_isolation();
         let guard = RUNTIME_PROXY_TEST_LOCK.lock().await;
         zeroclaw_config::schema::set_runtime_proxy_config(
             zeroclaw_config::schema::ProxyConfig::default(),
