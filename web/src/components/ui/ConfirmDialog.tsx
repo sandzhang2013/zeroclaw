@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { Button } from '@/components/ui/Button';
 import { t } from '@/lib/i18n';
 
@@ -90,21 +91,21 @@ export function ConfirmDialog({
     return () => window.removeEventListener('keydown', handler);
   }, [open, onClose]);
 
-  if (!open) return null;
+  if (!open || typeof document === 'undefined') return null;
 
-  return (
+  return createPortal(
     <div
       role="dialog"
       aria-modal="true"
       aria-labelledby={titleId}
       aria-describedby={message != null ? descId : undefined}
-      className="fixed inset-0 z-50 flex items-center justify-center"
+      className="fixed inset-0 z-[80] flex items-center justify-center"
       onClick={onClose}
     >
-      <div className="absolute inset-0 bg-pc-base/70 backdrop-blur-sm" />
+      <div className="pointer-events-none absolute inset-0 bg-pc-base/70 backdrop-blur-sm" />
       <div
         ref={panelRef}
-        className="relative w-full max-w-sm mx-4 rounded-[var(--radius-xl)] border border-pc-border bg-pc-base shadow-[var(--pc-shadow-md)] animate-fade-in"
+        className="relative z-10 w-full max-w-sm mx-4 rounded-[var(--radius-xl)] border border-pc-border bg-pc-base shadow-[var(--pc-shadow-md)] animate-fade-in"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Body */}
@@ -132,7 +133,8 @@ export function ConfirmDialog({
           </Button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

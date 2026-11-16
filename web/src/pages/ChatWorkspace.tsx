@@ -246,7 +246,7 @@ export default function ChatWorkspace({
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [showSkills, setShowSkills] = useState(false);
   const [showSkillCenter, setShowSkillCenter] = useState(false);
-  const deletingRef = useRef(false);
+  const deletedGatewayIdsRef = useRef(new Set<string>());
   const showHome = !sessions.some((s) => s.id === activeSessionId);
 
   const activeSession = useMemo(
@@ -419,7 +419,8 @@ export default function ChatWorkspace({
     getSessions()
       .then(async (rows) => {
         if (cancelled) return;
-        const recovered = gatewaySessionsToRecover(rows, defaultId, userId);
+        const recovered = gatewaySessionsToRecover(rows, defaultId, userId)
+          .filter((row) => !deletedGatewayIdsRef.current.has(row.sessionId));
         const nameByGid = new Map<string, string>();
         for (const row of rows) {
           const name = sanitizeSessionTitle(row.name);
@@ -463,7 +464,7 @@ export default function ChatWorkspace({
         for (const session of snapshot) {
           if (!sessionNeedsTitle(session) || titles.has(session.id)) continue;
           const gid = gatewayIdOf(session);
-          if (!gid) continue;
+          if (!gid || deletedGatewayIdsRef.current.has(gid)) continue;
           const fromLocal = titleFromTranscript(loadChatHistory(gid), session.homeSkill?.label);
           if (fromLocal) {
             titles.set(session.id, fromLocal);
@@ -480,7 +481,10 @@ export default function ChatWorkspace({
         setSessions((prev) => applyKnownTitles(prev, titles));
         for (const session of snapshot) {
           const title = titles.get(session.id);
-          if (title) persistGatewayTitle(session, title, userId);
+          if (!title) continue;
+          const gid = gatewayIdOf(session);
+          if (gid && deletedGatewayIdsRef.current.has(gid)) continue;
+          persistGatewayTitle(session, title, userId);
         }
       })
       .catch(() => { /* keep the local snapshot */ });
@@ -557,36 +561,33 @@ export default function ChatWorkspace({
 
   const confirmDeleteSession = useCallback(() => {
     const sessionId = pendingDeleteId;
-    if (!sessionId || deletingRef.current) return;
+    if (!sessionId) return;
     const closed = sessions.find((s) => s.id === sessionId);
     setPendingDeleteId(null);
     if (!closed) return;
-    deletingRef.current = true;
     const defaultId = getOrCreateSessionId(closed.agentAlias, userId);
     const gid = closed.taskId === '__default__'
       ? defaultId
       : resolveTaskSessionId(closed.agentAlias, closed.taskId);
-
+    if (gid) deletedGatewayIdsRef.current.add(gid);
+    setSessions((prev) => {
+      const dropped = dropSessionFromList(prev, sessionId, activeSessionId);
+      setActiveSessionId(dropped.activeSessionId);
+      return dropped.sessions;
+    });
+    delete statusRef.current[sessionId];
+    delete onStatusCacheRef.current[sessionId];
+    syncIndicators();
+    if (closed.taskId !== '__default__') {
+      try { removeTaskSession(closed.agentAlias, closed.taskId); } catch { /* storage unavailable */ }
+    } else {
+      try { persistSessionId(closed.agentAlias, generateUUID(), userId); } catch { /* storage unavailable */ }
+    }
+    if (!gid) return;
     void (async () => {
-      if (gid) {
-        try { await deleteSession(gid); } catch { /* already gone or persistence off */ }
-        try { await deleteAgentWorkspacePath(closed.agentAlias, `sessions/${gid}`); } catch { /* no files */ }
-        clearChatHistory(gid);
-      }
-      if (closed.taskId !== '__default__') {
-        removeTaskSession(closed.agentAlias, closed.taskId);
-      } else {
-        persistSessionId(closed.agentAlias, generateUUID(), userId);
-      }
-      setSessions((prev) => {
-        const dropped = dropSessionFromList(prev, sessionId, activeSessionId);
-        setActiveSessionId(dropped.activeSessionId);
-        return dropped.sessions;
-      });
-      delete statusRef.current[sessionId];
-      delete onStatusCacheRef.current[sessionId];
-      syncIndicators();
-      deletingRef.current = false;
+      try { await deleteSession(gid); } catch { /* already gone or persistence off */ }
+      try { await deleteAgentWorkspacePath(closed.agentAlias, `sessions/${gid}`); } catch { /* no files */ }
+      clearChatHistory(gid);
     })();
   }, [pendingDeleteId, sessions, userId, activeSessionId, syncIndicators]);
 
