@@ -182,23 +182,31 @@ function workbenchVersionPlugin(): Plugin {
       return `export const workbenchVersion = ${JSON.stringify(readVersion())};\n`;
     },
     configureServer(server) {
+      const refresh = () => {
+        for (const mod of server.moduleGraph.idToModuleMap.values()) {
+          if (mod.id?.split("?")[0] === moduleFile) server.moduleGraph.invalidateModule(mod);
+        }
+        server.ws.send({ type: "full-reload" });
+      };
       let current: FSWatcher | undefined;
       const arm = () => {
         current?.close();
         try {
-          current = watch(versionFile, () => {
-            const mod = server.moduleGraph.getModuleById(moduleFile);
-            if (mod) server.moduleGraph.invalidateModule(mod);
-            server.ws.send({ type: "full-reload" });
-          });
+          current = watch(versionFile, refresh);
         } catch {
           current = undefined;
         }
       };
       arm();
+      server.watcher.add(versionFile);
+      const onWatcher = (changed: string) => {
+        if (path.resolve(changed) === versionFile) refresh();
+      };
+      server.watcher.on("change", onWatcher);
       const stop = () => {
         current?.close();
         current = undefined;
+        server.watcher.off("change", onWatcher);
       };
       server.httpServer?.on("close", stop);
       return stop;
