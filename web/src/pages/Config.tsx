@@ -27,7 +27,9 @@ import {
   patchConfig,
   renameMapKey,
   selectSectionItem,
+  testMcpServer,
   type DeletePlan,
+  type McpServerTestResult,
   type DriftEntry,
   type ListResponseEntry,
   type PickerItem,
@@ -241,7 +243,11 @@ export default function Config() {
       );
     }
 
-    if (!activeSection.has_picker) {
+    // No editor shape means this key is not a picker section. `plugins` is
+    // the case the sections API names: its fields come from
+    // GET /api/config/list?prefix=<key>, even when a nested map makes
+    // `has_picker` true.
+    if (!activeSection.has_picker || activeSection.shape == null) {
       return (
         <WireTabForm
           key={`${reloadKey}-${activeSection.key}`}
@@ -378,6 +384,9 @@ export default function Config() {
               </Link>
             )}
           </div>
+          {activeSection.key === "mcp.servers" && (
+            <McpServerTestButton name={typeParam} />
+          )}
           <WireTabForm
             key={`${reloadKey}-${fieldsPrefix}`}
             prefix={fieldsPrefix}
@@ -757,6 +766,73 @@ function ConfigAliasHelpBox() {
         <strong>{t("config.alias_help_no_rename")}</strong>{" "}
         {t("config.alias_help_rename_advice")}
       </p>
+    </div>
+  );
+}
+
+function McpServerTestButton({ name }: { name: string }) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<McpServerTestResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const run = async () => {
+    setBusy(true);
+    setResult(null);
+    setError(null);
+    try {
+      const next = await testMcpServer(name);
+      if (next.ok) setResult(next);
+      else setError(next.error || t("config.mcp.test"));
+    } catch (e) {
+      setError(
+        e instanceof ApiError
+          ? e.envelope.message
+          : e instanceof Error
+            ? e.message
+            : String(e),
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const tools = result?.tools ?? [];
+  const count = result?.tool_count ?? tools.length;
+  const okText = count === 0
+    ? t("config.mcp.test_ok_empty")
+    : t("config.mcp.test_ok").replace("{n}", String(count));
+  const toolText = tools.length === 0
+    ? ""
+    : `${t("config.mcp.test_tools").replace("{names}", tools.join("、"))}${
+        count > tools.length ? t("config.mcp.test_more").replace("{n}", String(count)) : ""
+      }`;
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center gap-3">
+        <Button variant="ghost" size="sm" onClick={() => void run()} disabled={busy}>
+          {busy ? t("config.mcp.testing") : t("config.mcp.test")}
+        </Button>
+        <p className="text-xs text-pc-text-muted">{t("config.mcp.test_hint")}</p>
+      </div>
+      {result?.ok && (
+        <div
+          className="rounded-[var(--radius-md)] border px-3 py-2 text-sm"
+          style={{
+            borderColor: "var(--color-status-success-alpha-20)",
+            background: "var(--color-status-success-alpha-08)",
+            color: "var(--color-status-success)",
+          }}
+        >
+          <div>{okText}</div>
+          {toolText && <div className="mt-1 text-pc-text-secondary">{toolText}</div>}
+        </div>
+      )}
+      {error && (
+        <div className="rounded-[var(--radius-md)] border border-status-error/25 bg-status-error/10 px-3 py-2 text-sm text-status-error">
+          {error}
+        </div>
+      )}
     </div>
   );
 }

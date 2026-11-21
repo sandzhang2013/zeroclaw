@@ -2497,6 +2497,23 @@ export async function renameMapKey(
   return result;
 }
 
+export interface McpServerTestResult {
+  ok: boolean;
+  name: string;
+  transport?: string;
+  tool_count?: number;
+  tools?: string[];
+  error?: string;
+}
+
+/** Handshake a saved MCP server and read its tool list. Does not call a tool. */
+export function testMcpServer(name: string): Promise<McpServerTestResult> {
+  return apiFetch<McpServerTestResult>(
+    `/api/config/mcp-servers/${encodeURIComponent(name)}/test`,
+    { method: "POST" },
+  );
+}
+
 /** A config reference site to an aliased entry, surfaced in the delete preview. */
 export interface DeletePlanRefSite {
   path: string;

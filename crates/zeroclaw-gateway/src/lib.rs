@@ -969,6 +969,10 @@ fn config_admin_router(route_auth: principal_gate::ConfigRouteAuth) -> Router<Ap
             post(api_config::handle_refresh_context_window),
         )
         .route(
+            "/api/config/mcp-servers/{name}/test",
+            post(api_config::handle_test_mcp_server),
+        )
+        .route(
             "/api/config/delete-plan",
             get(api_config::handle_delete_plan),
         )

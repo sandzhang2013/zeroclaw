@@ -2,7 +2,7 @@
 
 use axum::{
     Json,
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
@@ -2576,6 +2576,107 @@ pub async fn handle_refresh_context_window(
     .into_response()
 }
 
+const MCP_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(70);
+const MCP_PROBE_TOOL_LIMIT: usize = 24;
+
+/// Drop header and env values out of a probe error before it reaches the browser.
+fn redact_mcp_probe_error(message: &str, secrets: &[String]) -> String {
+    let mut text = message.to_string();
+    for secret in secrets {
+        let secret = secret.trim();
+        if secret.chars().count() < 8 {
+            continue;
+        }
+        text = text.replace(secret, "••••");
+    }
+    text.chars().take(400).collect()
+}
+
+fn mcp_probe_secrets(server: &zeroclaw_config::schema::McpServerConfig) -> Vec<String> {
+    server
+        .headers
+        .values()
+        .chain(server.env.values())
+        .filter(|value| !value.trim().is_empty())
+        .cloned()
+        .collect()
+}
+
+/// POST /api/config/mcp-servers/{name}/test
+///
+/// Handshake the saved server and read `tools/list`. Does not call a tool.
+/// Unsaved form edits are not part of this check.
+pub async fn handle_test_mcp_server(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Response {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return error_response(ConfigApiError::path_not_found("mcp.servers"));
+    }
+
+    let server = {
+        let snapshot = state.config.read();
+        snapshot
+            .mcp
+            .servers
+            .iter()
+            .find(|server| server.name == name)
+            .cloned()
+    };
+    let Some(server) = server else {
+        return error_response(ConfigApiError::path_not_found(&format!("mcp.servers.{name}")));
+    };
+
+    let secrets = mcp_probe_secrets(&server);
+    let transport = server.transport.wire_name();
+    let probed = tokio::time::timeout(
+        MCP_PROBE_TIMEOUT,
+        zeroclaw_tools::mcp_client::McpServer::connect(server),
+    )
+    .await;
+
+    let connected = match probed {
+        Err(_elapsed) => {
+            return Json(serde_json::json!({
+                "ok": false,
+                "name": name,
+                "transport": transport,
+                "error": format!("MCP server `{name}` timed out"),
+            }))
+            .into_response();
+        }
+        Ok(Err(err)) => {
+            return Json(serde_json::json!({
+                "ok": false,
+                "name": name,
+                "transport": transport,
+                "error": redact_mcp_probe_error(&format!("{err:#}"), &secrets),
+            }))
+            .into_response();
+        }
+        Ok(Ok(connected)) => connected,
+    };
+
+    let tools = connected.tools().await;
+    let tool_count = tools.len();
+    let listed: Vec<String> = tools
+        .iter()
+        .take(MCP_PROBE_TOOL_LIMIT)
+        .map(|tool| tool.name.clone())
+        .collect();
+    drop(connected);
+
+    Json(serde_json::json!({
+        "ok": true,
+        "name": name,
+        "transport": transport,
+        "tool_count": tool_count,
+        "tools": listed,
+    }))
+    .into_response()
+}
+
 pub async fn handle_patch(
     State(state): State<AppState>,
     principal: RequestPrincipal,
@@ -3669,6 +3770,51 @@ mod tests {
             .to_bytes();
         let json = serde_json::from_slice(&body).expect("valid json response");
         (status, json)
+    }
+
+    #[test]
+    fn redact_mcp_probe_error_removes_header_values() {
+        let text = redact_mcp_probe_error(
+            "connect failed: Bearer super-secret-token-value",
+            &["super-secret-token-value".into()],
+        );
+        assert!(!text.contains("super-secret-token-value"));
+        assert!(text.contains("••••"));
+    }
+
+    #[tokio::test]
+    async fn mcp_server_test_missing_name_is_not_found() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state(temp_config(&tmp));
+        let response =
+            handle_test_mcp_server(State(state), Path("missing".into())).await;
+        let (status, json) = response_json(response).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(json.get("message").is_some() || json.get("error").is_some());
+    }
+
+    #[tokio::test]
+    async fn mcp_server_test_bad_command_reports_failure_without_secrets() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = temp_config(&tmp);
+        let secret = "super-secret-token-value";
+        config.mcp.servers.push(zeroclaw_config::schema::McpServerConfig {
+            name: "broken".into(),
+            command: "zeroclaw-mcp-test-missing-bin".into(),
+            headers: std::collections::HashMap::from([(
+                "Authorization".into(),
+                format!("Bearer {secret}"),
+            )]),
+            ..Default::default()
+        });
+        let state = test_state(config);
+        let response = handle_test_mcp_server(State(state), Path("broken".into())).await;
+        let (status, json) = response_json(response).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["ok"], false);
+        let err = json["error"].as_str().expect("error text");
+        assert!(!err.is_empty());
+        assert!(!err.contains(secret));
     }
 
     // Every config in this module must come from `temp_config`: the success-path
