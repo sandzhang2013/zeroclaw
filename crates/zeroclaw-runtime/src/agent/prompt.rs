@@ -203,6 +203,7 @@ impl SystemPromptBuilder {
     pub fn with_defaults() -> Self {
         Self {
             sections: vec![
+                Box::new(ReasoningLanguageSection),
                 Box::new(InteractionSection),
                 Box::new(IdentitySection),
                 Box::new(ToolHonestySection),
@@ -248,6 +249,7 @@ impl SystemPromptBuilder {
     }
 }
 
+pub struct ReasoningLanguageSection;
 pub struct IdentitySection;
 pub struct InteractionSection;
 pub struct ToolHonestySection;
@@ -265,6 +267,32 @@ pub struct ShellSection;
 /// `SystemPromptBuilder::with_defaults`.
 pub struct DateTimeSection;
 pub struct ChannelMediaSection;
+
+/// Optional workspace file placed ahead of the English scaffold.
+///
+/// DeepSeek's reasoning channel follows the language of the opening
+/// instructions. A line inside `SOUL.md` is treated as reply style and does
+/// not move that channel. `REASONING.md` is absent for every other agent.
+const REASONING_LANGUAGE_FILE: &str = "REASONING.md";
+const REASONING_LANGUAGE_MAX_CHARS: usize = 2_000;
+
+impl PromptSection for ReasoningLanguageSection {
+    fn name(&self) -> &str {
+        "reasoning_language"
+    }
+
+    fn build(&self, ctx: &PromptContext<'_>) -> Result<String> {
+        let path = ctx.agent_workspace_dir.join(REASONING_LANGUAGE_FILE);
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            return Ok(String::new());
+        };
+        let (text, _) = crate::agent::system_prompt::truncate_bootstrap_content(
+            &raw,
+            REASONING_LANGUAGE_MAX_CHARS,
+        );
+        Ok(text.to_string())
+    }
+}
 
 impl PromptSection for InteractionSection {
     fn name(&self) -> &str {
@@ -913,6 +941,36 @@ mod tests {
         assert!(prompt.contains("## Tools"));
         assert!(prompt.contains("test_tool"));
         assert!(prompt.contains("instr"));
+    }
+
+    #[test]
+    fn reasoning_language_file_opens_the_prompt() {
+        let workspace = tempfile::TempDir::new().expect("tempdir");
+        let instruction = "思考过程必须使用简体中文。";
+        std::fs::write(workspace.path().join("REASONING.md"), instruction).expect("write");
+        let tools: Vec<Box<dyn Tool>> = vec![Box::new(TestTool)];
+        let ctx = PromptContext {
+            workspace_dir: workspace.path(),
+            agent_workspace_dir: workspace.path(),
+            model_name: "test-model",
+            tools: &tools,
+            skills: &[],
+            skills_prompt_mode: zeroclaw_config::schema::SkillsPromptInjectionMode::Full,
+            identity_config: None,
+            interaction: None,
+            dispatcher_instructions: "",
+            hidden_builtin_names: None,
+            sends_native_tool_specs: false,
+            security_summary: None,
+            autonomy_level: AutonomyLevel::Supervised,
+            inject_memory: false,
+            shell_profile: None,
+        };
+        let prompt = SystemPromptBuilder::with_defaults().build(&ctx).unwrap();
+        assert!(
+            prompt.starts_with(instruction),
+            "reasoning language must lead the system prompt"
+        );
     }
 
     #[test]
